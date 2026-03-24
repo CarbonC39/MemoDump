@@ -1,7 +1,5 @@
 *.exe
 *.exe~
 testdata/*
-*.ico
 desktop.ini
 memodump
-*.png

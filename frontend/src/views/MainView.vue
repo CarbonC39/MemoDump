@@ -245,6 +245,9 @@
       <div class="context-menu-item" @click="menuCopyContent">
         <span class="material-icons-outlined">content_copy</span> Copy Full Text
       </div>
+      <div class="context-menu-item" @click="menuDownloadNote">
+        <span class="material-icons-outlined">download</span> Download
+      </div>
       <div class="context-menu-item" @click="menuMoveNote">
         <span class="material-icons-outlined">drive_file_move</span> Move
       </div>
@@ -481,6 +484,27 @@ async function menuDeleteNote() {
     await loadAll()
     if (editingNote.value && editingNote.value.path === note.path) _forceNewNote()
   } catch (e) { alert('Delete failed') }
+}
+
+async function menuDownloadNote() {
+  const note = contextMenu.note
+  closeContextMenu()
+  if (!note) return
+  try {
+    const res = await apiClient.getNote(note.path)
+    const content = res.data.content || ''
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = note.name + '.md'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    alert('Download failed')
+  }
 }
 
 async function menuMoveNote() {
