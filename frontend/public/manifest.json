@@ -1,0 +1,23 @@
+{
+  "name": "MemoDump",
+  "short_name": "MemoDump",
+  "description": "Markdown Notes",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8FAFD",
+  "theme_color": "#6495ED",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/favicon.ico",
+      "sizes": "48x48",
+      "type": "image/x-icon"
+    }
+  ]
+}

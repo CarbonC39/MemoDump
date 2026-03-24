@@ -1,0 +1,1409 @@
+<template>
+  <div class="main-layout">
+    <!-- Mobile overlay -->
+    <div v-if="mobileSidebar" class="sidebar-overlay" @click="mobileSidebar = false"></div>
+
+    <!-- Fixed-width accordion sidebar -->
+    <aside class="sidebar" :class="{ 'mobile-open': mobileSidebar }">
+      <div class="sidebar-header">
+        <img src="/favicon.ico" width="22" height="22" alt="Logo" style="border-radius: 4px; margin-right: 8px;" />
+        <span class="brand">MemoDump</span>
+      </div>
+
+      <div class="sidebar-scroll">
+        <!-- New Note button -->
+        <button class="sidebar-action" @click="newNote">
+          <span class="material-icons-outlined">edit_note</span>
+          New Note
+        </button>
+
+        <div class="sidebar-nav">
+          <div class="nav-item" @click="openSearchPanel()">
+            <span class="material-icons-outlined">search</span>
+            <span class="nav-text">Search</span>
+          </div>
+          
+          <div class="nav-item" :class="{ active: !searchOpen && !currentFolder && !editingNote }" @click="handleAllClick()">
+            <span class="material-icons-outlined">sticky_note_2</span>
+            <span class="nav-text">All Notes</span>
+          </div>
+
+          <div class="nav-item" @click="toggleSection('storage')">
+            <span class="material-icons-outlined">folder_open</span>
+            <span class="nav-text">Storage</span>
+            <span class="material-icons-outlined chevron" :class="{ 'expanded': openSections.storage }">chevron_right</span>
+          </div>
+          
+          <div v-show="openSections.storage" class="nav-children">
+            <div style="display:flex;gap:4px;margin-bottom:6px">
+              <button class="new-folder-btn" @click="promptNewFolder('')" style="flex:1;margin-bottom:0" title="New Folder">
+                <span class="material-icons-outlined" style="font-size:16px">create_new_folder</span>
+              </button>
+              <button class="new-folder-btn" @click="createNewNoteIn('')" style="flex:1;margin-bottom:0" title="New Note Here">
+                <span class="material-icons-outlined" style="font-size:16px">note_add</span>
+              </button>
+            </div>
+            
+            <div v-if="folders.length === 0" class="empty-hint">Empty storage</div>
+
+            <FolderNode
+              v-for="f in folders"
+              :key="f.path"
+              :folder="f"
+              :active-folder="currentFolder"
+              @select="selectFolder"
+              @new-folder="promptNewFolder"
+              @rename="promptRenameFolder"
+              @delete-folder="doDeleteFolder"
+              @open-note="openNote"
+              @new-note="createNewNoteIn"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="sidebar-action logout" @click="doLogout">
+          <span class="material-icons-outlined">logout</span>
+          Sign Out
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main-content">
+      <!-- Header -->
+      <header class="main-header">
+        <div class="header-left">
+          <button class="btn btn-icon btn-ghost menu-toggle" @click="mobileSidebar = !mobileSidebar">
+            <span class="material-icons-outlined">menu</span>
+          </button>
+          <!-- Breadcrumb / title shown in header -->
+          <span v-if="editingNote" class="header-title-display" @click="focusTitleInput">
+            {{ editName || 'Untitled' }}
+          </span>
+          <span v-else-if="currentFolder" class="header-folder-display">
+            <span class="material-icons-outlined" style="font-size:16px;opacity:0.6">folder_open</span>
+            {{ currentFolder }}
+          </span>
+        </div>
+        <div class="header-right" v-if="editingNote">
+          <button class="btn btn-sm btn-ghost" @click="showMetaPanel = !showMetaPanel" title="Note info">
+            <span class="material-icons-outlined" style="font-size:16px">tune</span>
+          </button>
+          <button class="btn btn-sm btn-primary" @click="saveNote">
+            <span class="material-icons-outlined" style="font-size:16px">save</span>
+            <span class="btn-label">Save</span>
+          </button>
+          <button class="btn btn-sm btn-icon btn-danger-subtle" v-if="editingNote.path" @click="deleteCurrentNote" title="Delete note">
+            <span class="material-icons-outlined" style="font-size:16px">delete_outline</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Meta panel (collapsible, shown below header when editing) -->
+      <div v-if="editingNote && showMetaPanel" class="meta-panel">
+        <div class="meta-row">
+          <label class="meta-label">Title</label>
+          <input ref="titleInputRef" v-model="editName" class="input input-sm meta-input" placeholder="Title (optional)" />
+        </div>
+        <div class="meta-row">
+          <label class="meta-label">Tags</label>
+          <div class="tag-input-wrap">
+            <span class="tag" v-for="(t,i) in editTags" :key="i">
+              {{ t }}<span class="remove" @click="editTags.splice(i,1)">×</span>
+            </span>
+            <input v-model="tagInput" class="input input-sm tag-input" placeholder="Tag ↵" @keydown.enter.prevent="addTag" />
+          </div>
+        </div>
+        <div class="meta-row">
+          <label class="meta-label">Folder</label>
+          <select v-model="editFolder" class="input input-sm meta-input">
+            <option value="">Root</option>
+            <option v-for="f in flatFolders" :key="f" :value="f">{{ f }}</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="content-area" :class="{ 'is-editing': editingNote }">
+        <!-- Search results (right-side panel) -->
+        <div v-if="searchOpen" class="search-results-view">
+          <div class="search-results-header">
+            <h2>Search Notes</h2>
+            <button class="btn btn-icon btn-ghost" @click="searchOpen = false">
+              <span class="material-icons-outlined">close</span>
+            </button>
+          </div>
+          <div class="search-inputs-wrap">
+            <input v-model="searchQuery" class="input" placeholder="Search content..." @input="doSearch" />
+            <input v-model="searchTag" class="input" placeholder="Search tags..." @input="doSearch" />
+          </div>
+          <div v-if="!searchQuery && !searchTag" class="empty-state-big">
+            <span class="material-icons-outlined" style="font-size:48px;color:var(--border)">search</span>
+            <p>Type to search...</p>
+          </div>
+          <div v-else-if="searchResults.length === 0" class="empty-state-big">
+            <span class="material-icons-outlined" style="font-size:48px;color:var(--border)">search_off</span>
+            <p>No results found</p>
+          </div>
+          <div class="waterfall-grid">
+            <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(searchResults)" :key="ci">
+              <div v-for="note in col" :key="note.path" class="waterfall-card">
+                <div class="card-header" v-if="note.hasCustomName">
+                  <div class="card-name">{{ note.name }}</div>
+                  <button class="btn btn-icon btn-ghost btn-sm card-menu-btn" @click.stop="openContextMenuBtn($event, note)">
+                    <span class="material-icons-outlined">more_vert</span>
+                  </button>
+                </div>
+                <button v-else class="btn btn-icon btn-ghost btn-sm card-menu-btn" style="position: absolute; top: 12px; right: 14px; margin: 0; z-index: 2" @click.stop="openContextMenuBtn($event, note)">
+                  <span class="material-icons-outlined">more_vert</span>
+                </button>
+                <div class="card-preview" v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
+                  {{ expandedCards.has(note.path) && fullContentCache[note.path] ? fullContentCache[note.path] : note.plainPreview }}
+                </div>
+                <div class="card-expand-bar" v-if="overlongStates[note.path]" @click.stop="toggleExpand(note.path)">
+                  <span class="material-icons-outlined">
+                    {{ expandedCards.has(note.path) ? 'expand_less' : 'expand_more' }}
+                  </span>
+                </div>
+                <div class="card-footer" v-if="note.tags && note.tags.length">
+                  <div class="card-tags">
+                    <span class="tag" v-for="t in note.tags" :key="t">{{ t }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Editor -->
+        <div v-else-if="editingNote" class="editor-wrap">
+          <MilkdownEditor
+            :key="editorKey"
+            :initial-content="editingNote.content || ''"
+            @update="onEditorUpdate"
+          />
+        </div>
+
+        <!-- Waterfall notes view -->
+        <div v-else class="waterfall-view">
+          <div class="waterfall-header" v-if="currentFolder"><h2>{{ currentFolder }}</h2></div>
+          <div v-if="displayNotes.length === 0" class="empty-state-big">
+            <span class="material-icons-outlined" style="font-size:56px;color:var(--border)">description</span>
+            <p>No notes yet. Click <strong>New Note</strong> to create one.</p>
+          </div>
+          <div v-else class="waterfall-grid">
+            <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(displayNotes)" :key="ci">
+              <div v-for="note in col" :key="note.path" class="waterfall-card">
+                <div class="card-header" v-if="note.hasCustomName">
+                  <div class="card-name">{{ note.name }}</div>
+                  <button class="btn btn-icon btn-ghost btn-sm card-menu-btn" @click.stop="openContextMenuBtn($event, note)">
+                    <span class="material-icons-outlined">more_vert</span>
+                  </button>
+                </div>
+                <button v-else class="btn btn-icon btn-ghost btn-sm card-menu-btn" style="position: absolute; top: 12px; right: 14px; margin: 0; z-index: 2" @click.stop="openContextMenuBtn($event, note)">
+                  <span class="material-icons-outlined">more_vert</span>
+                </button>
+                <div class="card-preview" v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
+                  {{ expandedCards.has(note.path) && fullContentCache[note.path] ? fullContentCache[note.path] : note.plainPreview }}
+                </div>
+                <div class="card-expand-bar" v-if="overlongStates[note.path]" @click.stop="toggleExpand(note.path)">
+                  <span class="material-icons-outlined">
+                    {{ expandedCards.has(note.path) ? 'expand_less' : 'expand_more' }}
+                  </span>
+                </div>
+                <div class="card-footer" v-if="note.tags && note.tags.length">
+                  <div class="card-tags">
+                    <span class="tag" v-for="t in note.tags" :key="t">{{ t }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Prompt Modal -->
+    <div v-if="promptVisible" class="modal-overlay" @click.self="cancelPrompt">
+      <div class="prompt-modal">
+        <h3>{{ promptTitle }}</h3>
+        <input v-model="promptValue" class="input" :placeholder="promptTitle" @keydown.enter="submitPrompt" ref="promptInputRef" />
+        <div class="prompt-actions">
+          <button class="btn btn-ghost" @click="cancelPrompt">Cancel</button>
+          <button class="btn btn-primary" @click="submitPrompt">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Context Menu -->
+    <div v-if="contextMenu.visible" class="context-menu-overlay" @click="closeContextMenu" @contextmenu.prevent="closeContextMenu"></div>
+    <div v-if="contextMenu.visible" class="context-menu" :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }">
+      <div class="context-menu-item" @click="menuEditNote">
+        <span class="material-icons-outlined">edit</span> Edit
+      </div>
+      <div class="context-menu-item" @click="menuCopyContent">
+        <span class="material-icons-outlined">content_copy</span> Copy Full Text
+      </div>
+      <div class="context-menu-item" @click="menuMoveNote">
+        <span class="material-icons-outlined">drive_file_move</span> Move
+      </div>
+      <div class="context-menu-item text-danger" @click="menuDeleteNote">
+        <span class="material-icons-outlined">delete_outline</span> Delete
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted, onBeforeUnmount, reactive, nextTick } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import apiClient from '../api'
+import MilkdownEditor from '../components/MilkdownEditor.vue'
+import FolderNode from '../components/FolderNode.vue'
+
+const router = useRouter()
+const route = useRoute()
+
+// Sidebar state
+const mobileSidebar = ref(false)
+const openSections = reactive({ search: false, all: false, storage: false })
+const searchOpen = ref(false)
+
+// Meta panel toggle
+const showMetaPanel = ref(false)
+const titleInputRef = ref(null)
+
+function focusTitleInput() {
+  showMetaPanel.value = true
+  nextTick(() => { if (titleInputRef.value) titleInputRef.value.focus() })
+}
+
+// Data
+const allNotes = ref([])
+const folders = ref([])
+const searchResults = ref([])
+const searchQuery = ref('')
+const searchTag = ref('')
+const currentFolder = ref('')
+
+// Editor state
+const editingNote = ref(null)
+const editName = ref('')
+const editTags = ref([])
+const editFolder = ref('')
+const editContent = ref('')
+const tagInput = ref('')
+const editorKey = ref(0)
+// Dirty state: tracks whether the editor has unsaved changes
+const isDirty = ref(false)
+
+// Card Expansion State
+const expandedCards = ref(new Set())
+const fullContentCache = reactive({})
+
+// Context Menu State
+const contextMenu = reactive({
+  visible: false,
+  x: 0,
+  y: 0,
+  note: null
+})
+
+// Display notes
+const displayNotes = ref([])
+
+const flatFolders = computed(() => {
+  const result = []
+  function walk(list) {
+    for (const f of list) {
+      result.push(f.path)
+      if (f.children) walk(f.children)
+    }
+  }
+  walk(folders.value)
+  return result
+})
+
+// Strip markdown symbols for plain text preview
+function stripMarkdown(text) {
+  if (!text) return ''
+  return text
+    .replace(/^#{1,6}\s+/gm, '')              // headings
+    .replace(/<[^>]*>/g, '')                  // HTML tags
+    .replace(/```[\s\S]*?```/g, '')           // fenced code blocks
+    .replace(/!\[.*?\]\(.*?\)/g, '')          // images
+    .replace(/\[([^\]]+)\]\(.*?\)/g, '$1')    // links — keep link text, drop URL
+    .replace(/^\s*[-*+]\s+\[[ xX]\]\s*/gm, '') // task list items: - [ ] / - [x]
+    .replace(/[*_~`>]/g, '')                  // bold, italic, strikethrough, inline code, blockquote
+    .replace(/^\s*[-+*]\s+/gm, '')            // unordered list bullets
+    .replace(/^\s*\d+\.\s+/gm, '')            // ordered list
+    .replace(/^---+$/gm, '')                  // hr
+    .replace(/[ \t\r]+/g, ' ')                // collapse horizontal whitespace
+    .replace(/\n+/g, '\n')                    // collapse multiple blank lines
+    .trim()
+}
+
+function isTimestampName(name) {
+  return /^\d{4}-\d{2}-\d{2}_\d{6}/.test(name)
+}
+
+function enrichNotes(notes) {
+  return notes.map(n => ({
+    ...n,
+    hasCustomName: !isTimestampName(n.name),
+    plainPreview: stripMarkdown(n.preview),
+  }))
+}
+
+const overlongStates = reactive({})
+
+const vCheckOverflow = {
+  mounted(el, binding) {
+    const path = binding.value;
+    const check = () => {
+      // 6 lines at 1.6 line-height & 13px font-size = ~124.8px
+      const isOver = el.scrollHeight > 126;
+      if (overlongStates[path] !== isOver) {
+        overlongStates[path] = isOver;
+      }
+    };
+    check();
+    setTimeout(check, 50); // slight delay for layout
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(check);
+      ro.observe(el);
+      el._ro = ro;
+    }
+  },
+  updated(el, binding) {
+    const path = binding.value;
+    const isOver = el.scrollHeight > 126;
+    if (overlongStates[path] !== isOver) {
+      overlongStates[path] = isOver;
+    }
+  },
+  unmounted(el, binding) {
+    if (el._ro) el._ro.disconnect();
+    const path = binding.value;
+    delete overlongStates[path];
+  }
+}
+
+async function toggleExpand(path) {
+  const newSet = new Set(expandedCards.value)
+  if (newSet.has(path)) {
+    newSet.delete(path)
+  } else {
+    newSet.add(path)
+    // Fetch full content if not cached
+    if (!fullContentCache[path]) {
+      try {
+        const res = await apiClient.getNote(path)
+        fullContentCache[path] = stripMarkdown(res.data.content || '')
+      } catch (e) {
+        console.error('Failed to fetch full content', e)
+      }
+    }
+  }
+  expandedCards.value = newSet
+}
+
+// Distribute notes into N equal columns (round-robin) so each column is
+// an independent flex container — expansion of one card never reflowes
+// cards in other columns.
+function splitIntoColumns(notes) {
+  const n = columnCount.value
+  const cols = Array.from({ length: n }, () => [])
+  notes.forEach((note, i) => cols[i % n].push(note))
+  return cols
+}
+
+// Reactive column count driven by viewport width
+const columnCount = ref(3)
+function updateColumnCount() {
+  const w = window.innerWidth
+  columnCount.value = w <= 768 ? 1 : w <= 1100 ? 2 : 3
+}
+updateColumnCount()
+
+// Context Menu Handlers
+// Called from three-dot button — position near the button element
+function openContextMenuBtn(e, note) {
+  e.stopPropagation()
+  contextMenu.note = note
+  contextMenu.visible = true
+  // Use button bounding rect for reliable position on both desktop and mobile
+  const rect = e.currentTarget.getBoundingClientRect()
+  let x = rect.right
+  let y = rect.bottom + 4
+  // Keep menu within viewport
+  const menuW = 160, menuH = 175
+  if (x + menuW > window.innerWidth) x = rect.left - menuW
+  if (y + menuH > window.innerHeight) y = rect.top - menuH
+  if (x < 0) x = 4
+  if (y < 0) y = 4
+  contextMenu.x = x
+  contextMenu.y = y
+}
+
+function closeContextMenu() {
+  contextMenu.visible = false
+  contextMenu.note = null
+}
+
+function menuEditNote() {
+  if (contextMenu.note) openNote(contextMenu.note)
+  closeContextMenu()
+}
+
+async function menuCopyContent() {
+  const note = contextMenu.note
+  closeContextMenu()
+  if (!note) return
+  try {
+    const res = await apiClient.getNote(note.path)
+    const content = res.data.content || ''
+    await navigator.clipboard.writeText(content)
+  } catch (e) {
+    alert('Copy failed')
+  }
+}
+
+async function menuDeleteNote() {
+  const note = contextMenu.note
+  closeContextMenu()
+  if (!note) return
+  if (!confirm('Are you sure you want to delete this note?')) return
+  try {
+    await apiClient.deleteNote(note.path)
+    isDirty.value = false
+    await loadAll()
+    if (editingNote.value && editingNote.value.path === note.path) _forceNewNote()
+  } catch (e) { alert('Delete failed') }
+}
+
+async function menuMoveNote() {
+  const note = contextMenu.note
+  closeContextMenu()
+  if (!note) return
+  const path = await showPrompt('Move to folder path (leave empty for Root):', currentFolder.value)
+  if (path === null) return
+  try {
+    await apiClient.moveNote(note.path, path)
+    await loadAll()
+    if (editingNote.value && editingNote.value.path === note.path) {
+      const newPath = path ? path + '/' + note.path.split('/').pop() : note.path.split('/').pop()
+      openNote({ path: newPath })
+    }
+  } catch (e) { alert('Move failed') }
+}
+
+function toggleSection(section) {
+  openSections[section] = !openSections[section]
+}
+
+function handleAllClick() {
+  if (!confirmLeave()) return
+  editingNote.value = null
+  isDirty.value = false
+  searchOpen.value = false
+  currentFolder.value = ''
+  displayNotes.value = allNotes.value
+  updateUrl()
+}
+
+function openSearchPanel() {
+  if (!confirmLeave()) return
+  searchOpen.value = true
+  editingNote.value = null
+  isDirty.value = false
+  updateUrl()
+}
+
+function handleGlobalKeydown(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+    e.preventDefault()
+    if (editingNote.value) {
+      saveNote()
+    }
+  }
+  if (e.key === 'Escape') {
+    closeContextMenu()
+    if (showMetaPanel.value) showMetaPanel.value = false
+  }
+}
+
+// ======= URL STATE =======
+// Encode current view state into URL query params for shareable/bookmarkable links
+function updateUrl() {
+  const q = {}
+  if (editingNote.value?.path) q.note = editingNote.value.path
+  else if (currentFolder.value) q.folder = currentFolder.value
+  else if (searchOpen.value) q.search = '1'
+  router.replace({ query: q })
+}
+
+async function restoreFromUrl() {
+  const { note, folder } = route.query
+  if (note) {
+    try {
+      const res = await apiClient.getNote(note)
+      const data = res.data
+      _editorReady = false
+      editingNote.value = data
+      editName.value = isTimestampName(data.name) ? '' : (data.name || '')
+      editTags.value = [...(data.tags || [])]
+      editContent.value = data.content || ''
+      isDirty.value = false
+      const parts = data.path.split('/')
+      editFolder.value = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+      editorKey.value++
+      searchOpen.value = false
+      return
+    } catch (_) { /* fall through */ }
+  }
+  if (folder) {
+    currentFolder.value = folder
+    openSections.storage = true
+    try {
+      const res = await apiClient.listNotes(folder)
+      displayNotes.value = enrichNotes(res.data)
+    } catch (_) {
+      displayNotes.value = allNotes.value
+    }
+    return
+  }
+  // Default: show all notes, open new note bypassing confirmLeave (startup)
+  _forceNewNote()
+}
+
+onMounted(async () => {
+  window.addEventListener('resize', updateColumnCount)
+  window.addEventListener('keydown', handleGlobalKeydown)
+  await loadAll()
+  await restoreFromUrl()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateColumnCount)
+  window.removeEventListener('keydown', handleGlobalKeydown)
+})
+
+async function loadAll() {
+  try {
+    const [notesRes, foldersRes] = await Promise.all([
+      apiClient.listNotes(''),
+      apiClient.listFolders(),
+    ])
+    allNotes.value = enrichNotes(notesRes.data)
+    folders.value = foldersRes.data || []
+    if (currentFolder.value) {
+      const folderNotesRes = await apiClient.listNotes(currentFolder.value)
+      displayNotes.value = enrichNotes(folderNotesRes.data)
+    } else {
+      displayNotes.value = allNotes.value
+    }
+  } catch (e) {
+    if (e.response?.status === 401) router.push('/login')
+  }
+}
+
+// Flag: whether editor has finished its initial load (suppress first markdownUpdated)
+let _editorReady = false
+
+function confirmLeave() {
+  if (!isDirty.value) return true
+  return confirm('You have unsaved changes. Leave without saving?')
+}
+
+// Internal helper: create new note without confirmLeave check (used after delete/startup)
+function _forceNewNote() {
+  _editorReady = false
+  editingNote.value = { content: '', path: '' }
+  editName.value = ''
+  editTags.value = []
+  editFolder.value = currentFolder.value
+  editContent.value = ''
+  isDirty.value = false
+  editorKey.value++
+  searchOpen.value = false
+  mobileSidebar.value = false
+  showMetaPanel.value = false
+  updateUrl()
+}
+
+function newNote() {
+  if (!confirmLeave()) return
+  _forceNewNote()
+}
+
+function createNewNoteIn(folderPath) {
+  if (!confirmLeave()) return
+  _forceNewNote()
+  editFolder.value = folderPath
+  openSections.storage = true
+}
+
+async function openNote(note) {
+  if (!confirmLeave()) return
+  try {
+    const res = await apiClient.getNote(note.path)
+    const data = res.data
+    // Temporarily disable dirty tracking while the editor loads initial content
+    _editorReady = false
+    editingNote.value = data
+    editName.value = isTimestampName(data.name) ? '' : (data.name || '')
+    editTags.value = [...(data.tags || [])]
+    editContent.value = data.content || ''
+    isDirty.value = false
+    const parts = data.path.split('/')
+    editFolder.value = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+    editorKey.value++
+    searchOpen.value = false
+    mobileSidebar.value = false
+    showMetaPanel.value = false
+    updateUrl()
+  } catch (e) {
+    console.error('Failed to open note', e)
+  }
+}
+
+function onEditorUpdate(markdown) {
+  if (!_editorReady) {
+    // First event after (re)mount is the initial content load — skip it
+    _editorReady = true
+    editContent.value = markdown
+    return
+  }
+  editContent.value = markdown
+  isDirty.value = true
+}
+
+function addTag() {
+  const t = tagInput.value.trim()
+  if (t && !editTags.value.includes(t)) editTags.value.push(t)
+  tagInput.value = ''
+}
+
+async function saveNote() {
+  try {
+    let resultNode;
+    if (editingNote.value.path) {
+      const originalTitle = isTimestampName(editingNote.value.name) ? '' : (editingNote.value.name || '');
+      const payload = {
+        content: editContent.value,
+        tags: editTags.value,
+      };
+      if (editName.value !== originalTitle) {
+        payload.rename = editName.value;
+      }
+      let res = await apiClient.updateNote(editingNote.value.path, payload)
+      resultNode = res.data
+      const parts = resultNode.path.split('/')
+      const curDir = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+      if (editFolder.value !== curDir) {
+        res = await apiClient.moveNote(resultNode.path, editFolder.value)
+        resultNode = res.data
+      }
+    } else {
+      let res = await apiClient.createNote({
+        content: editContent.value,
+        name: editName.value || '',
+        folder: editFolder.value,
+        tags: editTags.value,
+      })
+      resultNode = res.data
+    }
+    await loadAll()
+    // Keep it open, just update metadata properly so further saves work
+    editingNote.value.path = resultNode.path
+    editName.value = isTimestampName(resultNode.name) ? '' : (resultNode.name || '')
+    const parts = resultNode.path.split('/')
+    editFolder.value = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+    isDirty.value = false
+    updateUrl()
+  } catch (e) {
+    alert('Save failed: ' + (e.response?.data?.error || e.message))
+  }
+}
+
+async function deleteCurrentNote() {
+  if (!confirm('Delete this note?')) return
+  try {
+    await apiClient.deleteNote(editingNote.value.path)
+    isDirty.value = false
+    await loadAll()
+    _forceNewNote()
+  } catch (e) {
+    alert('Delete failed')
+  }
+}
+
+async function doSearch() {
+  if (!searchQuery.value && !searchTag.value) {
+    searchResults.value = []
+    return
+  }
+  try {
+    const res = await apiClient.search(searchQuery.value, searchTag.value)
+    searchResults.value = enrichNotes(res.data)
+  } catch (e) {
+    searchResults.value = []
+  }
+}
+
+async function selectFolder(folderPath) {
+  if (!confirmLeave()) return
+  currentFolder.value = folderPath
+  editingNote.value = null
+  isDirty.value = false
+  searchOpen.value = false
+  mobileSidebar.value = false
+  try {
+    const res = await apiClient.listNotes(folderPath)
+    displayNotes.value = enrichNotes(res.data)
+  } catch (e) {
+    displayNotes.value = []
+  }
+  updateUrl()
+}
+
+const promptVisible = ref(false)
+const promptTitle = ref('')
+const promptValue = ref('')
+const promptInputRef = ref(null)
+let promptResolve = null
+
+function showPrompt(title, defaultValue = '') {
+  promptTitle.value = title
+  promptValue.value = defaultValue
+  promptVisible.value = true
+  return new Promise(resolve => {
+    promptResolve = resolve
+    nextTick(() => {
+      if (promptInputRef.value) promptInputRef.value.focus()
+    })
+  })
+}
+
+function submitPrompt() {
+  promptVisible.value = false
+  if (promptResolve) {
+    promptResolve(promptValue.value)
+    promptResolve = null
+  }
+}
+
+function cancelPrompt() {
+  promptVisible.value = false
+  if (promptResolve) {
+    promptResolve(null)
+    promptResolve = null
+  }
+}
+
+async function promptNewFolder(parentPath) {
+  const name = await showPrompt('Folder name:')
+  if (!name) return
+  const path = parentPath ? parentPath + '/' + name : name
+  try {
+    await apiClient.createFolder(path)
+    const res = await apiClient.listFolders()
+    folders.value = res.data || []
+  } catch (e) { alert('Failed') }
+}
+
+async function promptRenameFolder(folderPath) {
+  const currentName = folderPath.split('/').pop()
+  const name = await showPrompt('New name:', currentName)
+  if (!name || name === currentName) return
+  try {
+    await apiClient.renameFolder(folderPath, name)
+    const res = await apiClient.listFolders()
+    folders.value = res.data || []
+    
+    // update current folder if it was the one renamed
+    if (currentFolder.value === folderPath) {
+      const parentDir = folderPath.substring(0, folderPath.lastIndexOf('/'))
+      currentFolder.value = parentDir ? parentDir + '/' + name : name
+      const notesRes = await apiClient.listNotes(currentFolder.value)
+      displayNotes.value = enrichNotes(notesRes.data)
+      updateUrl()
+    }
+  } catch (e) { alert('Failed') }
+}
+
+async function doDeleteFolder(folderPath) {
+  if (!confirm('Delete folder and all contents?')) return
+  try {
+    await apiClient.deleteFolder(folderPath)
+    const res = await apiClient.listFolders()
+    folders.value = res.data || []
+    if (currentFolder.value === folderPath) {
+      currentFolder.value = ''
+      displayNotes.value = allNotes.value
+      updateUrl()
+    }
+  } catch (e) { alert('Failed') }
+}
+
+async function doLogout() {
+  await apiClient.logout()
+  router.push('/login')
+}
+</script>
+
+<style scoped>
+.main-layout {
+  display: flex;
+  height: 100%;
+  width: 100%;
+}
+
+/* ======= SIDEBAR ======= */
+.sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+.sidebar-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+/* New Note / Logout button */
+.sidebar-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 16px);
+  margin: 0 8px 4px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--primary-dark);
+  background: var(--primary-bg);
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+.sidebar-action:hover {
+  background: var(--border-light);
+}
+.sidebar-action:active {
+  transform: scale(0.98);
+}
+.sidebar-action .material-icons-outlined { font-size: 18px; color: var(--primary); }
+.sidebar-action.logout {
+  color: var(--text-secondary);
+  background: none;
+}
+.sidebar-action.logout:hover { 
+  background: var(--danger-light); 
+  color: var(--danger); 
+}
+.sidebar-action.logout .material-icons-outlined { color: inherit; }
+
+/* Fluid list styling */
+.sidebar-search {
+  padding: 8px 12px;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: calc(100% - 16px);
+  margin: 1px 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.nav-item:hover { background: var(--primary-bg); }
+.nav-item.active { background: var(--primary-bg); color: var(--primary-dark); }
+.nav-item .material-icons-outlined { font-size: 18px; color: var(--text-secondary); }
+.nav-item.active .material-icons-outlined { color: var(--primary); }
+
+.chevron {
+  font-size: 16px !important;
+  color: var(--text-muted) !important;
+  transition: transform 0.2s;
+  margin-left: auto;
+}
+.chevron.expanded { transform: rotate(90deg); }
+
+.nav-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav-children {
+  padding-left: 12px;
+  padding-right: 8px;
+  margin-top: 4px;
+}
+.empty-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 4px;
+}
+.new-folder-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+.new-folder-btn:hover { background: var(--border-light); }
+
+.tree-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+  transition: background 0.1s;
+}
+.tree-note:hover { background: var(--primary-bg); color: var(--primary-dark); }
+.tree-note .material-icons-outlined { font-size: 16px; color: var(--primary); opacity: 0.8; }
+.tree-note .note-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.sidebar-footer {
+  padding: 8px;
+  border-top: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+/* ======= MAIN CONTENT ======= */
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+.main-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 0 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  gap: 8px;
+  height: var(--header-height);
+  flex-shrink: 0;
+}
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.menu-toggle { display: none; }
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Title / folder shown inline in header */
+.header-title-display {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+.header-title-display:hover {
+  background: var(--border-light);
+}
+.header-folder-display {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Danger-subtle button (delete, not as alarming as red bg) */
+.btn-danger-subtle {
+  color: var(--text-muted);
+}
+.btn-danger-subtle:hover {
+  color: var(--danger);
+  background: var(--danger-light);
+}
+
+/* hide button label on narrow screens */
+.btn-label { display: inline; }
+
+/* ======= META PANEL ======= */
+.meta-panel {
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.meta-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 36px;
+}
+.meta-input { width: 140px; }
+.tag-input-wrap { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.tag-input { width: 90px; }
+
+/* ======= CONTENT AREA ======= */
+.content-area {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg);
+}
+.content-area.is-editing {
+  background: #FFFFFF;
+}
+.editor-wrap {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 16px 60px;
+  background: #FFFFFF;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Search results */
+.search-results-view {
+  padding: 20px 24px;
+}
+.search-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.search-results-header h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+.search-inputs-wrap {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+.search-inputs-wrap .input {
+  flex: 1;
+  min-width: 160px;
+}
+
+/* Waterfall */
+.waterfall-view {
+  padding: 20px 24px;
+}
+.waterfall-header h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+.empty-state-big {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  color: var(--text-muted);
+  gap: 12px;
+}
+.empty-state-big p { font-size: 14px; }
+.waterfall-grid {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.waterfall-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.waterfall-card {
+  position: relative;
+  background: #FFFFFF;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.03);
+  transition: box-shadow 0.2s ease, background 0.2s ease;
+}
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 6px;
+}
+.card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0px;
+  flex: 1;
+  word-break: break-all;
+}
+.card-menu-btn {
+  margin-left: 8px;
+  margin-top: -4px;
+  margin-right: -4px;
+  color: var(--text-muted);
+  /* Increase touch target on mobile */
+  min-width: 36px;
+  min-height: 36px;
+}
+.card-menu-btn:hover {
+  background: var(--border-light);
+  color: var(--text);
+}
+/* Card preview — no click action, just display */
+.card-preview {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  white-space: pre-line;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  line-clamp: 6;
+  overflow: hidden;
+  transition: max-height 0.25s ease, overflow 0.25s;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.card-preview.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+}
+.card-expand-bar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 4px 0;
+  margin-top: 4px;
+  margin-bottom: -8px;
+  cursor: pointer;
+  color: var(--primary);
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+.card-expand-bar:hover {
+  background: var(--bg);
+  color: var(--primary-dark);
+}
+.card-expand-bar .material-icons-outlined {
+  font-size: 20px;
+}
+.card-footer { margin-top: 8px; }
+.card-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* Context Menu */
+.context-menu-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 1000;
+}
+.context-menu {
+  position: fixed;
+  background: #fff;
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  border-radius: 8px;
+  padding: 4px 0;
+  min-width: 170px;
+  z-index: 1001;
+}
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 14px;
+  cursor: pointer;
+  color: var(--text);
+}
+.context-menu-item:hover {
+  background: var(--bg);
+}
+.context-menu-item.text-danger {
+  color: var(--danger);
+}
+
+
+/* Prompt Modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: rgba(0,0,0,0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.prompt-modal {
+  background: var(--bg-card);
+  padding: 24px;
+  border-radius: var(--radius-lg);
+  width: 340px;
+  max-width: 90%;
+  box-shadow: var(--shadow-md);
+}
+.prompt-modal h3 {
+  margin-bottom: 16px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+/* Mobile overlay */
+.sidebar-overlay { display: none; }
+
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    left: -260px;
+    top: 0;
+    bottom: 0;
+    z-index: 100;
+    width: 240px;
+    transition: left 0.2s ease;
+  }
+  .sidebar.mobile-open { left: 0; }
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+    background: rgba(0,0,0,0.25);
+  }
+  .menu-toggle { display: flex; }
+  /* single column on mobile */
+  .waterfall-grid { flex-direction: column; }
+  .waterfall-col { flex: none; width: 100%; }
+  /* Header stays single row on mobile */
+  .main-header {
+    padding: 0 8px;
+  }
+  /* Hide Save label text on mobile to save space */
+  .btn-label { display: none; }
+  /* Meta panel wraps nicely */
+  .meta-panel {
+    padding: 8px 12px;
+  }
+  .meta-input { width: 100%; }
+  .meta-row { width: 100%; }
+  /* More compact editor padding on mobile */
+  .editor-wrap { padding: 10px 14px; }
+  .waterfall-view { padding: 10px 12px; }
+  .search-results-view { padding: 14px 12px; }
+  /* Search inputs stack vertically on small screens */
+  .search-inputs-wrap { flex-direction: column; gap: 8px; }
+  .search-inputs-wrap .input { min-width: unset; }
+  /* Prevent iOS zoom on input focus by ensuring font-size >= 16px */
+  .input,
+  .tag-input,
+  .meta-input,
+  select {
+    font-size: 16px !important;
+  }
+  /* Larger touch targets for context menu items */
+  .context-menu-item {
+    padding: 14px 16px;
+  }
+  /* Context menu max width on narrow screens */
+  .context-menu {
+    min-width: 140px;
+    max-width: calc(100vw - 16px);
+  }
+  /* Wider cards on mobile since single column */
+  .waterfall-card {
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+}
+
+@media (min-width: 769px) and (max-width: 1100px) {
+  /* 2-col handled by JS columnCount, CSS just ensures gap stays */
+}
+</style>

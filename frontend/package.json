@@ -1,0 +1,26 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@milkdown/crepe": "^7.19.0",
+    "@milkdown/kit": "^7.19.0",
+    "@milkdown/plugin-listener": "^7.19.0",
+    "@milkdown/theme-nord": "^7.19.0",
+    "@prosemirror-adapter/vue": "^0.4.6",
+    "axios": "^1.13.6",
+    "js-yaml": "^4.1.1",
+    "vue": "^3.5.25",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.2",
+    "vite": "^7.3.1"
+  }
+}

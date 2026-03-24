@@ -1,0 +1,365 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/icon?family=Material+Icons+Outlined');
+
+:root {
+  --primary: #6495ED;
+  --primary-light: #89B4FA;
+  --primary-dark: #4A78D4;
+  --primary-bg: #EDF2FC;
+  --bg: #F8FAFD;
+  --bg-card: #FFFFFF;
+  --bg-sidebar: #F0F4FA;
+  --text: #1E293B;
+  --text-secondary: #64748B;
+  --text-muted: #94A3B8;
+  --border: #E2E8F0;
+  --border-light: #F1F5F9;
+  --danger: #EF4444;
+  --danger-light: #FEE2E2;
+  --success: #22C55E;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --radius: 8px;
+  --radius-lg: 12px;
+  --sidebar-width: 52px;
+  --sidebar-expanded: 240px;
+  --header-height: 48px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+input,
+button,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  outline: none;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+/* Material icons sizing */
+.material-icons-outlined {
+  font-size: 20px;
+  vertical-align: middle;
+  user-select: none;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* Milkdown Crepe Theme Overrides */
+.milkdown {
+  --crepe-color-background: var(--bg-card);
+  --crepe-color-on-background: var(--text);
+  --crepe-color-surface: var(--bg-card);
+  --crepe-color-surface-low: var(--bg-sidebar);
+  --crepe-color-on-surface: var(--text);
+  --crepe-color-on-surface-variant: var(--primary-dark);
+  --crepe-color-outline: var(--primary);
+  --crepe-color-primary: var(--primary);
+  --crepe-color-secondary: var(--primary-light);
+  --crepe-color-on-secondary: var(--text);
+  --crepe-color-inverse: var(--text);
+  --crepe-color-on-inverse: var(--bg-card);
+  --crepe-color-hover: var(--border-light);
+  --crepe-color-selected: var(--primary-bg);
+  --crepe-color-inline-area: var(--primary-bg);
+
+  --crepe-font-title: 'Inter', -apple-system, sans-serif;
+  --crepe-font-default: 'Inter', -apple-system, sans-serif;
+}
+
+/* Milkdown Editor Overrides */
+.milkdown .editor {
+  padding: 16px 0;
+  outline: none;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+.milkdown .editor ::selection {
+  background: #A5C5FC;
+}
+
+/* Headings — explicit display:block prevents rendering anomaly where
+   headings occasionally collapse or show as invisible/inline. */
+.milkdown .editor h1 {
+  display: block;
+  font-size: 1.8em;
+  font-weight: 700;
+  margin: 1em 0 0.5em;
+  line-height: 1.35;
+}
+
+.milkdown .editor h2 {
+  display: block;
+  font-size: 1.4em;
+  font-weight: 600;
+  margin: 0.8em 0 0.4em;
+  line-height: 1.35;
+}
+
+.milkdown .editor h3 {
+  display: block;
+  font-size: 1.2em;
+  font-weight: 600;
+  margin: 0.6em 0 0.3em;
+  line-height: 1.4;
+}
+
+.milkdown .editor h4,
+.milkdown .editor h5,
+.milkdown .editor h6 {
+  display: block;
+  font-size: 1em;
+  font-weight: 600;
+  margin: 0.5em 0 0.25em;
+  line-height: 1.5;
+}
+
+.milkdown .editor p {
+  margin: 0.4em 0;
+}
+
+/* Lists — consistent padding and spacing */
+.milkdown .editor ul,
+.milkdown .editor ol {
+  padding-left: 1.6em;
+  margin: 0.4em 0;
+}
+
+.milkdown .editor li {
+  padding-left: 0.15em;
+  margin-bottom: 0.1em;
+  line-height: 1.7;
+}
+
+.milkdown .editor li p {
+  margin: 0;
+}
+
+/* Task lists */
+.milkdown .editor li[data-type="taskItem"] {
+  list-style: none;
+}
+
+.milkdown .editor blockquote {
+  border-left: 3px solid var(--primary);
+  padding-left: 1em;
+  color: var(--text-secondary);
+  margin: 0.6em 0;
+}
+
+.milkdown .editor blockquote p {
+  margin: 0.15em 0;
+}
+
+.milkdown .editor code {
+  background: var(--primary-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.milkdown .editor pre {
+  background: #1E293B;
+  color: #E2E8F0;
+  padding: 16px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  margin: 0.6em 0;
+}
+
+.milkdown .editor pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.milkdown .editor hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1em 0;
+}
+
+.milkdown .editor img {
+  max-width: 100%;
+  border-radius: var(--radius);
+}
+
+.milkdown .editor table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.6em 0;
+}
+
+.milkdown .editor th,
+.milkdown .editor td {
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.6;
+}
+
+.milkdown .editor th {
+  background: var(--primary-bg);
+  font-weight: 600;
+}
+
+/* Prevent mobile zoom on Milkdown inline inputs (e.g. link dialog) */
+.milkdown input,
+.milkdown textarea,
+.milkdown select {
+  font-size: 16px !important;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--primary-dark);
+}
+
+.btn-ghost {
+  color: var(--text-secondary);
+}
+
+.btn-ghost:hover {
+  background: var(--border-light);
+}
+
+.btn-danger {
+  color: var(--danger);
+}
+
+.btn-danger:hover {
+  background: var(--danger-light);
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.btn-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: var(--radius);
+}
+
+/* Input */
+.input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  outline: none;
+  background: var(--bg-card);
+  transition: border-color 0.15s;
+}
+
+.input:focus {
+  border-color: var(--primary);
+}
+
+.input-sm {
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+/* Tag */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  background: var(--primary-bg);
+  color: var(--primary-dark);
+  border-radius: 100px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.tag .remove {
+  cursor: pointer;
+  opacity: 0.6;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.tag .remove:hover {
+  opacity: 1;
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  :root {
+    --sidebar-width: 48px;
+  }
+}
