@@ -224,6 +224,50 @@
       </div>
     </main>
 
+    <!-- Draft Restored Banner -->
+    <div v-if="showDraftRestoredBanner" class="draft-banner">
+      <span class="material-icons-outlined" style="font-size:18px;flex-shrink:0">restore</span>
+      <span>Session expired. Your unsaved content has been restored — please save again.</span>
+      <button class="draft-banner-close" @click="showDraftRestoredBanner = false">
+        <span class="material-icons-outlined">close</span>
+      </button>
+    </div>
+
+    <!-- Folder Picker Modal -->
+    <div v-if="folderPicker.visible" class="modal-overlay" @click.self="closeFolderPicker">
+      <div class="folder-picker-modal">
+        <h3>Move to Folder</h3>
+        <div class="folder-picker-list">
+          <div
+            class="folder-picker-item"
+            :class="{ active: folderPicker.selected === '' }"
+            @click="folderPicker.selected = ''"
+          >
+            <span class="material-icons-outlined">home</span>
+            Root
+          </div>
+          <div
+            v-for="f in flatFoldersForPicker"
+            :key="f.path"
+            class="folder-picker-item"
+            :class="{ active: folderPicker.selected === f.path }"
+            :style="{ paddingLeft: (12 + f.depth * 16) + 'px' }"
+            @click="folderPicker.selected = f.path"
+          >
+            <span class="material-icons-outlined">folder</span>
+            {{ f.name }}
+          </div>
+          <div v-if="flatFoldersForPicker.length === 0" class="folder-picker-empty">
+            No folders yet
+          </div>
+        </div>
+        <div class="prompt-actions">
+          <button class="btn btn-ghost" @click="closeFolderPicker">Cancel</button>
+          <button class="btn btn-primary" @click="confirmFolderPicker">Move Here</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Prompt Modal -->
     <div v-if="promptVisible" class="modal-overlay" @click.self="cancelPrompt">
       <div class="prompt-modal">
@@ -313,6 +357,13 @@ const contextMenu = reactive({
   note: null
 })
 
+// Folder Picker Modal State
+const folderPicker = reactive({ visible: false, selected: '' })
+let folderPickerResolve = null
+
+// Draft restored banner
+const showDraftRestoredBanner = ref(false)
+
 // Display notes
 const displayNotes = ref([])
 
@@ -325,6 +376,18 @@ const flatFolders = computed(() => {
     }
   }
   walk(folders.value)
+  return result
+})
+
+const flatFoldersForPicker = computed(() => {
+  const result = []
+  function walk(list, depth) {
+    for (const f of list) {
+      result.push({ path: f.path, name: f.name, depth })
+      if (f.children && f.children.length) walk(f.children, depth + 1)
+    }
+  }
+  walk(folders.value, 0)
   return result
 })
 
@@ -467,7 +530,21 @@ async function menuCopyContent() {
   try {
     const res = await apiClient.getNote(note.path)
     const content = res.data.content || ''
-    await navigator.clipboard.writeText(content)
+    // Try modern clipboard API first; fall back to execCommand for iOS PWA
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(content)
+        return
+      } catch (_) { /* fall through to execCommand */ }
+    }
+    const ta = document.createElement('textarea')
+    ta.value = content
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0'
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
   } catch (e) {
     alert('Copy failed')
   }
@@ -511,16 +588,34 @@ async function menuMoveNote() {
   const note = contextMenu.note
   closeContextMenu()
   if (!note) return
-  const path = await showPrompt('Move to folder path (leave empty for Root):', currentFolder.value)
-  if (path === null) return
+  const noteParts = note.path.split('/')
+  const curFolder = noteParts.length > 1 ? noteParts.slice(0, -1).join('/') : ''
+  const dest = await showFolderPicker(curFolder)
+  if (dest === null) return
   try {
-    await apiClient.moveNote(note.path, path)
+    await apiClient.moveNote(note.path, dest)
     await loadAll()
     if (editingNote.value && editingNote.value.path === note.path) {
-      const newPath = path ? path + '/' + note.path.split('/').pop() : note.path.split('/').pop()
+      const newPath = dest ? dest + '/' + note.path.split('/').pop() : note.path.split('/').pop()
       openNote({ path: newPath })
     }
   } catch (e) { alert('Move failed') }
+}
+
+function showFolderPicker(defaultFolder = '') {
+  folderPicker.selected = defaultFolder
+  folderPicker.visible = true
+  return new Promise(resolve => { folderPickerResolve = resolve })
+}
+
+function closeFolderPicker() {
+  folderPicker.visible = false
+  if (folderPickerResolve) { folderPickerResolve(null); folderPickerResolve = null }
+}
+
+function confirmFolderPicker() {
+  folderPicker.visible = false
+  if (folderPickerResolve) { folderPickerResolve(folderPicker.selected); folderPickerResolve = null }
 }
 
 function toggleSection(section) {
@@ -606,6 +701,26 @@ onMounted(async () => {
   window.addEventListener('resize', updateColumnCount)
   window.addEventListener('keydown', handleGlobalKeydown)
   await loadAll()
+
+  // Restore draft saved before session-expiry redirect
+  const rawDraft = localStorage.getItem('memodump_draft')
+  if (rawDraft) {
+    try {
+      const draft = JSON.parse(rawDraft)
+      localStorage.removeItem('memodump_draft')
+      _editorReady = false
+      editingNote.value = { content: draft.content || '', path: draft.path || '' }
+      editName.value = draft.name || ''
+      editTags.value = draft.tags || []
+      editContent.value = draft.content || ''
+      editFolder.value = draft.folder || ''
+      isDirty.value = true
+      editorKey.value++
+      showDraftRestoredBanner.value = true
+      return  // skip URL-based restore so draft takes priority
+    } catch (_) {}
+  }
+
   await restoreFromUrl()
 })
 
@@ -748,6 +863,20 @@ async function saveNote() {
     isDirty.value = false
     updateUrl()
   } catch (e) {
+    if (e.response?.status === 401) {
+      // Session expired — persist draft before the interceptor redirects to login
+      try {
+        localStorage.setItem('memodump_draft', JSON.stringify({
+          content: editContent.value,
+          name: editName.value,
+          tags: editTags.value,
+          folder: editFolder.value,
+          path: editingNote.value?.path || '',
+        }))
+      } catch (_) {}
+      // The api interceptor will redirect to /login automatically
+      return
+    }
     alert('Save failed: ' + (e.response?.data?.error || e.message))
   }
 }
@@ -1329,6 +1458,86 @@ async function doLogout() {
   color: var(--danger);
 }
 
+
+/* Draft Restored Banner */
+.draft-banner {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--primary-dark, #3a6bc4);
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  z-index: 2000;
+  max-width: calc(100vw - 32px);
+}
+.draft-banner-close {
+  background: none;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 4px;
+  display: flex;
+  align-items: center;
+  opacity: 0.8;
+}
+.draft-banner-close:hover { opacity: 1; }
+
+/* Folder Picker Modal */
+.folder-picker-modal {
+  background: var(--bg-card);
+  padding: 24px;
+  border-radius: var(--radius-lg);
+  width: 320px;
+  max-width: 92vw;
+  box-shadow: var(--shadow-md);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.folder-picker-modal h3 {
+  margin-bottom: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.folder-picker-list {
+  overflow-y: auto;
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 4px;
+}
+.folder-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text);
+  transition: background 0.1s;
+}
+.folder-picker-item:hover { background: var(--primary-bg); }
+.folder-picker-item.active {
+  background: var(--primary-bg);
+  color: var(--primary-dark);
+  font-weight: 500;
+}
+.folder-picker-item .material-icons-outlined { font-size: 16px; color: var(--primary); }
+.folder-picker-empty {
+  padding: 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
 
 /* Prompt Modal */
 .modal-overlay {

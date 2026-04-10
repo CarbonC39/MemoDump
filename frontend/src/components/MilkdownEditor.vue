@@ -181,14 +181,44 @@ onBeforeUnmount(() => {
   margin: 1em 0;
 }
 
-/* ===== Fix table cell alignment ===== */
+/* ===== Fix heading font sizes ===== */
+.crepe-editor :deep(.editor h1) { font-size: 2em;   font-weight: 700; line-height: 1.25; margin: 0.6em 0 0.3em; }
+.crepe-editor :deep(.editor h2) { font-size: 1.5em;  font-weight: 700; line-height: 1.3;  margin: 0.6em 0 0.3em; }
+.crepe-editor :deep(.editor h3) { font-size: 1.25em; font-weight: 600; line-height: 1.35; margin: 0.5em 0 0.25em; }
+.crepe-editor :deep(.editor h4) { font-size: 1.1em;  font-weight: 600; line-height: 1.4;  margin: 0.4em 0 0.2em; }
+.crepe-editor :deep(.editor h5) { font-size: 1em;    font-weight: 600; line-height: 1.4;  margin: 0.4em 0 0.2em; }
+.crepe-editor :deep(.editor h6) { font-size: 0.9em;  font-weight: 600; line-height: 1.4;  margin: 0.4em 0 0.2em; }
+
+/* ===== Fix table display ===== */
+/* Wrap table in scrollable container on small screens */
+.crepe-editor :deep(.editor .tableWrapper),
+.crepe-editor :deep(.editor .milkdown-table-wrapper) {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0.8em 0;
+}
 .crepe-editor :deep(.editor table) {
+  border-collapse: collapse;
   border-spacing: 0;
+  width: 100%;
+  font-size: 0.95em;
 }
 .crepe-editor :deep(.editor th),
 .crepe-editor :deep(.editor td) {
   vertical-align: top;
   line-height: 1.6;
+  border: 1px solid var(--border, #dde1e9);
+  padding: 6px 12px;
+  text-align: left;
+  min-width: 80px;
+}
+.crepe-editor :deep(.editor th) {
+  background: var(--bg-sidebar, #f5f6fa);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.crepe-editor :deep(.editor tr:nth-child(even) td) {
+  background: var(--bg, #fafbfc);
 }
 
 /* ===== Mobile: prevent zoom on editor focus ===== */

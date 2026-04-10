@@ -11,7 +11,8 @@ api.interceptors.response.use(
         if (err.response && err.response.status === 401) {
             // Don't redirect if we're already on the login page (e.g. wrong password)
             if (!window.location.pathname.startsWith('/login')) {
-                window.location.href = '/login'
+                const returnPath = window.location.pathname + window.location.search
+                window.location.href = '/login?redirect=' + encodeURIComponent(returnPath)
             }
         }
         return Promise.reject(err)

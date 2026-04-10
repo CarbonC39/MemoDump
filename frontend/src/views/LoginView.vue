@@ -27,10 +27,11 @@
 
 <script setup>
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import api from '../api'
 
 const router = useRouter()
+const route = useRoute()
 const user = ref('')
 const pass = ref('')
 const error = ref('')
@@ -45,7 +46,8 @@ async function doLogin() {
   error.value = ''
   try {
     await api.login(user.value, pass.value)
-    router.push('/')
+    const redirect = (route.query.redirect && typeof route.query.redirect === 'string') ? route.query.redirect : '/'
+    router.push(redirect)
   } catch (e) {
     error.value = e.response?.data?.error || 'Login failed'
   } finally {
