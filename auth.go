@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
@@ -15,15 +16,76 @@ type session struct {
 }
 
 var (
-	sessions   = make(map[string]*session)
-	sessionMu  sync.RWMutex
-	sessionTTL = 24 * time.Hour
+	sessions    = make(map[string]*session)
+	sessionMu   sync.RWMutex
+	sessionTTL  = 30 * 24 * time.Hour // 30 days
+	sessionFile string
 )
 
-func generateToken() string {
+func generateToken() (string, error) {
 	b := make([]byte, 32)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// loadSessions reads persisted sessions from disk, discarding already-expired ones.
+func loadSessions() {
+	if sessionFile == "" {
+		return
+	}
+	data, err := os.ReadFile(sessionFile)
+	if err != nil {
+		return
+	}
+	var stored map[string]int64
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return
+	}
+	now := time.Now()
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+	for token, expMs := range stored {
+		if exp := time.UnixMilli(expMs); exp.After(now) {
+			sessions[token] = &session{token: token, expires: exp}
+		}
+	}
+}
+
+// saveSessions writes current sessions to disk. Caller must hold sessionMu.
+func saveSessions() {
+	if sessionFile == "" {
+		return
+	}
+	stored := make(map[string]int64, len(sessions))
+	for token, s := range sessions {
+		stored[token] = s.expires.UnixMilli()
+	}
+	data, err := json.Marshal(stored)
+	if err != nil {
+		return
+	}
+	os.WriteFile(sessionFile, data, 0600)
+}
+
+// startSessionCleanup removes expired sessions every hour and saves to disk.
+func startSessionCleanup() {
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			now := time.Now()
+			sessionMu.Lock()
+			for token, s := range sessions {
+				if now.After(s.expires) {
+					delete(sessions, token)
+				}
+			}
+			saveSessions()
+			sessionMu.Unlock()
+		}
+	}()
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -41,9 +103,15 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := generateToken()
+	token, err := generateToken()
+	if err != nil {
+		http.Error(w, `{"error":"Internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
 	sessionMu.Lock()
 	sessions[token] = &session{token: token, expires: time.Now().Add(sessionTTL)}
+	saveSessions()
 	sessionMu.Unlock()
 
 	http.SetCookie(w, &http.Cookie{
@@ -63,6 +131,7 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		sessionMu.Lock()
 		delete(sessions, cookie.Value)
+		saveSessions()
 		sessionMu.Unlock()
 	}
 
@@ -100,7 +169,7 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Extend session
+		// Extend session on activity
 		sessionMu.Lock()
 		sess.expires = time.Now().Add(sessionTTL)
 		sessionMu.Unlock()

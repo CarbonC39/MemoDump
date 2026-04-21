@@ -45,6 +45,9 @@ export default {
     moveNote(path, destination) {
         return api.put(`/move/${path}`, { destination })
     },
+    moveFolder(path, destination) {
+        return api.put(`/move/folder/${path}`, { destination })
+    },
     listFolders() {
         return api.get('/folders')
     },
@@ -62,5 +65,8 @@ export default {
         if (q) params.q = q
         if (tag) params.tag = tag
         return api.get('/search', { params })
+    },
+    ping() {
+        return api.get('/ping')
     },
 }

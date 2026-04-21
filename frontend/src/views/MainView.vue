@@ -28,23 +28,34 @@
             <span class="nav-text">All Notes</span>
           </div>
 
-          <div class="nav-item" @click="toggleSection('storage')">
+          <div class="nav-item storage-nav-item" @click="toggleSection('storage')">
             <span class="material-icons-outlined">folder_open</span>
             <span class="nav-text">Storage</span>
-            <span class="material-icons-outlined chevron" :class="{ 'expanded': openSections.storage }">chevron_right</span>
-          </div>
-          
-          <div v-show="openSections.storage" class="nav-children">
-            <div style="display:flex;gap:4px;margin-bottom:6px">
-              <button class="new-folder-btn" @click="promptNewFolder('')" style="flex:1;margin-bottom:0" title="New Folder">
-                <span class="material-icons-outlined" style="font-size:16px">create_new_folder</span>
+            <div class="storage-header-actions" @click.stop>
+              <button class="fa-btn-sm" @click="promptNewFolder('')" title="New Folder">
+                <span class="material-icons-outlined">create_new_folder</span>
               </button>
-              <button class="new-folder-btn" @click="createNewNoteIn('')" style="flex:1;margin-bottom:0" title="New Note Here">
-                <span class="material-icons-outlined" style="font-size:16px">note_add</span>
+              <button class="fa-btn-sm" @click="createNewNoteIn('')" title="New Note">
+                <span class="material-icons-outlined">note_add</span>
               </button>
             </div>
-            
-            <div v-if="folders.length === 0" class="empty-hint">Empty storage</div>
+            <span class="material-icons-outlined chevron" :class="{ 'expanded': openSections.storage }">chevron_right</span>
+          </div>
+
+          <div v-show="openSections.storage" class="nav-children">
+            <!-- Root drop zone -->
+            <div
+              class="root-drop-zone"
+              :class="{ 'drag-over': rootDropOver }"
+              @dragover.prevent="rootDropOver = true"
+              @dragleave="rootDropOver = false"
+              @drop.prevent="onDropOnRoot"
+            >
+              <span class="material-icons-outlined">home</span>
+              Root
+            </div>
+
+            <div v-if="folders.length === 0" class="empty-hint">No folders yet</div>
 
             <FolderNode
               v-for="f in folders"
@@ -57,6 +68,8 @@
               @delete-folder="doDeleteFolder"
               @open-note="openNote"
               @new-note="createNewNoteIn"
+              @drop-note="onDropNote"
+              @drop-folder="onDropFolder"
             />
           </div>
         </div>
@@ -101,29 +114,44 @@
         </div>
       </header>
 
-      <!-- Meta panel (collapsible, shown below header when editing) -->
-      <div v-if="editingNote && showMetaPanel" class="meta-panel">
-        <div class="meta-row">
-          <label class="meta-label">Title</label>
-          <input ref="titleInputRef" v-model="editName" class="input input-sm meta-input" placeholder="Title (optional)" />
-        </div>
-        <div class="meta-row">
-          <label class="meta-label">Tags</label>
-          <div class="tag-input-wrap">
-            <span class="tag" v-for="(t,i) in editTags" :key="i">
-              {{ t }}<span class="remove" @click="editTags.splice(i,1)">×</span>
-            </span>
-            <input v-model="tagInput" class="input input-sm tag-input" placeholder="Tag ↵" @keydown.enter.prevent="addTag" />
+      <!-- Meta side panel backdrop (mobile only) -->
+      <div v-if="editingNote && showMetaPanel" class="meta-backdrop" @click="showMetaPanel = false"></div>
+
+      <!-- Meta side panel -->
+      <transition name="meta-slide">
+        <div v-if="editingNote && showMetaPanel" class="meta-side-panel">
+          <div class="meta-panel-header">
+            <span class="meta-panel-title">Properties</span>
+            <button class="btn btn-icon btn-ghost" @click="showMetaPanel = false">
+              <span class="material-icons-outlined" style="font-size:18px">close</span>
+            </button>
+          </div>
+
+          <div class="meta-field">
+            <label class="meta-field-label">Title</label>
+            <input ref="titleInputRef" v-model="editName" class="input" placeholder="Untitled" />
+          </div>
+
+          <div class="meta-field">
+            <label class="meta-field-label">Folder</label>
+            <button class="folder-select-btn" @click="pickEditFolder">
+              <span class="material-icons-outlined">{{ editFolder ? 'folder' : 'home' }}</span>
+              <span class="folder-select-label">{{ editFolder || 'Root' }}</span>
+              <span class="material-icons-outlined" style="margin-left:auto;font-size:16px;color:var(--text-muted)">unfold_more</span>
+            </button>
+          </div>
+
+          <div class="meta-field">
+            <label class="meta-field-label">Tags</label>
+            <div class="meta-tag-chips">
+              <span class="tag" v-for="(t,i) in editTags" :key="i">
+                {{ t }}<span class="remove" @click="editTags.splice(i,1)">×</span>
+              </span>
+            </div>
+            <input v-model="tagInput" class="input" placeholder="Add tag, press Enter" @keydown.enter.prevent="addTag" />
           </div>
         </div>
-        <div class="meta-row">
-          <label class="meta-label">Folder</label>
-          <select v-model="editFolder" class="input input-sm meta-input">
-            <option value="">Root</option>
-            <option v-for="f in flatFolders" :key="f" :value="f">{{ f }}</option>
-          </select>
-        </div>
-      </div>
+      </transition>
 
       <div class="content-area" :class="{ 'is-editing': editingNote }">
         <!-- Search results (right-side panel) -->
@@ -148,7 +176,8 @@
           </div>
           <div class="waterfall-grid">
             <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(searchResults)" :key="ci">
-              <div v-for="note in col" :key="note.path" class="waterfall-card">
+              <div v-for="note in col" :key="note.path" class="waterfall-card"
+                draggable="true" @dragstart="onNoteDragStart($event, note)">
                 <div class="card-header" v-if="note.hasCustomName">
                   <div class="card-name">{{ note.name }}</div>
                   <button class="btn btn-icon btn-ghost btn-sm card-menu-btn" @click.stop="openContextMenuBtn($event, note)">
@@ -187,14 +216,14 @@
 
         <!-- Waterfall notes view -->
         <div v-else class="waterfall-view">
-          <div class="waterfall-header" v-if="currentFolder"><h2>{{ currentFolder }}</h2></div>
           <div v-if="displayNotes.length === 0" class="empty-state-big">
             <span class="material-icons-outlined" style="font-size:56px;color:var(--border)">description</span>
             <p>No notes yet. Click <strong>New Note</strong> to create one.</p>
           </div>
           <div v-else class="waterfall-grid">
             <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(displayNotes)" :key="ci">
-              <div v-for="note in col" :key="note.path" class="waterfall-card">
+              <div v-for="note in col" :key="note.path" class="waterfall-card"
+                draggable="true" @dragstart="onNoteDragStart($event, note)">
                 <div class="card-header" v-if="note.hasCustomName">
                   <div class="card-name">{{ note.name }}</div>
                   <button class="btn btn-icon btn-ghost btn-sm card-menu-btn" @click.stop="openContextMenuBtn($event, note)">
@@ -345,6 +374,9 @@ const editorKey = ref(0)
 // Dirty state: tracks whether the editor has unsaved changes
 const isDirty = ref(false)
 
+let keepaliveInterval = null
+let searchDebounceTimer = null
+
 // Card Expansion State
 const expandedCards = ref(new Set())
 const fullContentCache = reactive({})
@@ -396,12 +428,14 @@ function stripMarkdown(text) {
   if (!text) return ''
   return text
     .replace(/^#{1,6}\s+/gm, '')              // headings
+    .replace(/<(https?:\/\/[^>\s]+)>/g, '$1') // autolinks <url> → bare url
     .replace(/<[^>]*>/g, '')                  // HTML tags
     .replace(/```[\s\S]*?```/g, '')           // fenced code blocks
     .replace(/!\[.*?\]\(.*?\)/g, '')          // images
     .replace(/\[([^\]]+)\]\(.*?\)/g, '$1')    // links — keep link text, drop URL
     .replace(/^\s*[-*+]\s+\[[ xX]\]\s*/gm, '') // task list items: - [ ] / - [x]
-    .replace(/[*_~`>]/g, '')                  // bold, italic, strikethrough, inline code, blockquote
+    .replace(/[*_~`]/g, '')                   // bold, italic, strikethrough, inline code
+    .replace(/^\s*>\s*/gm, '')                // blockquote markers
     .replace(/^\s*[-+*]\s+/gm, '')            // unordered list bullets
     .replace(/^\s*\d+\.\s+/gm, '')            // ordered list
     .replace(/^---+$/gm, '')                  // hr
@@ -435,7 +469,7 @@ const vCheckOverflow = {
       }
     };
     check();
-    setTimeout(check, 50); // slight delay for layout
+    el._overflowTimer = setTimeout(check, 50); // slight delay for layout
     if (window.ResizeObserver) {
       const ro = new ResizeObserver(check);
       ro.observe(el);
@@ -451,6 +485,7 @@ const vCheckOverflow = {
   },
   unmounted(el, binding) {
     if (el._ro) el._ro.disconnect();
+    if (el._overflowTimer) clearTimeout(el._overflowTimer);
     const path = binding.value;
     delete overlongStates[path];
   }
@@ -640,6 +675,13 @@ function openSearchPanel() {
   updateUrl()
 }
 
+function handleBeforeUnload(e) {
+  if (isDirty.value) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+}
+
 function handleGlobalKeydown(e) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
     e.preventDefault()
@@ -700,6 +742,11 @@ async function restoreFromUrl() {
 onMounted(async () => {
   window.addEventListener('resize', updateColumnCount)
   window.addEventListener('keydown', handleGlobalKeydown)
+  window.addEventListener('beforeunload', handleBeforeUnload)
+  // Ping every 15 minutes to keep session alive while app is open
+  keepaliveInterval = setInterval(() => {
+    apiClient.ping().catch(() => {})
+  }, 15 * 60 * 1000)
   await loadAll()
 
   // Restore draft saved before session-expiry redirect
@@ -727,6 +774,9 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateColumnCount)
   window.removeEventListener('keydown', handleGlobalKeydown)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  if (keepaliveInterval) clearInterval(keepaliveInterval)
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
 })
 
 async function loadAll() {
@@ -893,17 +943,20 @@ async function deleteCurrentNote() {
   }
 }
 
-async function doSearch() {
+function doSearch() {
+  clearTimeout(searchDebounceTimer)
   if (!searchQuery.value && !searchTag.value) {
     searchResults.value = []
     return
   }
-  try {
-    const res = await apiClient.search(searchQuery.value, searchTag.value)
-    searchResults.value = enrichNotes(res.data)
-  } catch (e) {
-    searchResults.value = []
-  }
+  searchDebounceTimer = setTimeout(async () => {
+    try {
+      const res = await apiClient.search(searchQuery.value, searchTag.value)
+      searchResults.value = enrichNotes(res.data)
+    } catch (e) {
+      searchResults.value = []
+    }
+  }, 300)
 }
 
 async function selectFolder(folderPath) {
@@ -973,17 +1026,14 @@ async function promptRenameFolder(folderPath) {
   if (!name || name === currentName) return
   try {
     await apiClient.renameFolder(folderPath, name)
-    const res = await apiClient.listFolders()
-    folders.value = res.data || []
-    
-    // update current folder if it was the one renamed
-    if (currentFolder.value === folderPath) {
+    // Update currentFolder path if it was inside the renamed folder
+    if (currentFolder.value === folderPath || currentFolder.value.startsWith(folderPath + '/')) {
       const parentDir = folderPath.substring(0, folderPath.lastIndexOf('/'))
-      currentFolder.value = parentDir ? parentDir + '/' + name : name
-      const notesRes = await apiClient.listNotes(currentFolder.value)
-      displayNotes.value = enrichNotes(notesRes.data)
-      updateUrl()
+      const newFolderBase = parentDir ? parentDir + '/' + name : name
+      currentFolder.value = currentFolder.value.replace(folderPath, newFolderBase)
     }
+    await loadAll()
+    updateUrl()
   } catch (e) { alert('Failed') }
 }
 
@@ -991,19 +1041,76 @@ async function doDeleteFolder(folderPath) {
   if (!confirm('Delete folder and all contents?')) return
   try {
     await apiClient.deleteFolder(folderPath)
-    const res = await apiClient.listFolders()
-    folders.value = res.data || []
-    if (currentFolder.value === folderPath) {
+    // Reset currentFolder if it was inside the deleted folder
+    if (currentFolder.value === folderPath || currentFolder.value.startsWith(folderPath + '/')) {
       currentFolder.value = ''
-      displayNotes.value = allNotes.value
-      updateUrl()
     }
+    await loadAll()
+    updateUrl()
   } catch (e) { alert('Failed') }
 }
 
 async function doLogout() {
   await apiClient.logout()
   router.push('/login')
+}
+
+// ===== FOLDER PICKER FOR META PANEL =====
+async function pickEditFolder() {
+  const dest = await showFolderPicker(editFolder.value)
+  if (dest !== null) editFolder.value = dest
+}
+
+// ===== DRAG AND DROP =====
+const rootDropOver = ref(false)
+
+function onNoteDragStart(e, note) {
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('memodump-type', 'note')
+  e.dataTransfer.setData('memodump-path', note.path)
+}
+
+async function onDropNote({ notePath, destFolder }) {
+  try {
+    await apiClient.moveNote(notePath, destFolder)
+    await loadAll()
+    if (editingNote.value && editingNote.value.path === notePath) {
+      const filename = notePath.split('/').pop()
+      const newPath = destFolder ? destFolder + '/' + filename : filename
+      openNote({ path: newPath })
+    }
+  } catch (e) {
+    if (e.response?.status === 409) alert('A note with that name already exists in the destination folder.')
+    else alert('Move failed')
+  }
+}
+
+async function onDropFolder({ folderPath, destFolder }) {
+  try {
+    await apiClient.moveFolder(folderPath, destFolder)
+    if (currentFolder.value === folderPath || currentFolder.value.startsWith(folderPath + '/')) {
+      const folderName = folderPath.split('/').pop()
+      currentFolder.value = destFolder ? destFolder + '/' + folderName : folderName
+    }
+    await loadAll()
+    updateUrl()
+  } catch (e) {
+    if (e.response?.status === 409) alert('A folder with that name already exists in the destination.')
+    else if (e.response?.status === 400) alert(e.response.data?.error || 'Move failed')
+    else alert('Move failed')
+  }
+}
+
+async function onDropOnRoot(e) {
+  rootDropOver.value = false
+  const type = e.dataTransfer.getData('memodump-type')
+  const path = e.dataTransfer.getData('memodump-path')
+  if (!path) return
+  if (type === 'note') {
+    await onDropNote({ notePath: path, destFolder: '' })
+  } else if (type === 'folder') {
+    await onDropFolder({ folderPath: path, destFolder: '' })
+  }
 }
 </script>
 
@@ -1129,21 +1236,51 @@ async function doLogout() {
   color: var(--text-muted);
   padding: 8px 4px;
 }
-.new-folder-btn {
+/* Storage nav-item action buttons (appear on hover, before the chevron) */
+.storage-nav-item { position: relative; }
+.storage-header-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.1s;
+  margin-right: 2px;
+}
+.storage-nav-item:hover .storage-header-actions { opacity: 1; }
+.fa-btn-sm {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.fa-btn-sm:hover { background: var(--border); }
+.fa-btn-sm .material-icons-outlined { font-size: 15px; }
+
+/* Root drop zone */
+.root-drop-zone {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 4px 8px;
+  margin-bottom: 4px;
   border-radius: 6px;
   font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  background: none;
-  border: none;
-  cursor: pointer;
-  margin-bottom: 6px;
+  color: var(--text-muted);
+  border: 1px dashed transparent;
+  transition: all 0.15s;
+  cursor: default;
 }
-.new-folder-btn:hover { background: var(--border-light); }
+.root-drop-zone .material-icons-outlined { font-size: 15px; }
+.root-drop-zone.drag-over {
+  border-color: var(--primary);
+  background: var(--primary-bg);
+  color: var(--primary-dark);
+}
 
 .tree-note {
   display: flex;
@@ -1244,37 +1381,89 @@ async function doLogout() {
 /* hide button label on narrow screens */
 .btn-label { display: inline; }
 
-/* ======= META PANEL ======= */
-.meta-panel {
-  background: var(--bg-sidebar);
-  border-bottom: 1px solid var(--border);
-  padding: 10px 16px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  flex-shrink: 0;
+/* ======= META SIDE PANEL ======= */
+.meta-backdrop {
+  display: none; /* desktop: no backdrop */
 }
-.meta-row {
+.meta-side-panel {
+  position: fixed;
+  top: var(--header-height);
+  right: 0;
+  bottom: 0;
+  width: 300px;
+  background: var(--bg-card);
+  border-left: 1px solid var(--border);
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.07);
+  overflow-y: auto;
+  padding: 20px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.meta-panel-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
 }
-.meta-label {
-  font-size: 12px;
-  font-weight: 500;
+.meta-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.meta-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.meta-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
   color: var(--text-muted);
-  white-space: nowrap;
-  min-width: 36px;
 }
-.meta-input { width: 140px; }
-.tag-input-wrap { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.tag-input { width: 90px; }
+.folder-select-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.folder-select-btn:hover {
+  border-color: var(--primary);
+  background: var(--primary-bg);
+}
+.folder-select-btn .material-icons-outlined { font-size: 16px; color: var(--primary); }
+.folder-select-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta-tag-chips { display: flex; flex-wrap: wrap; gap: 4px; min-height: 0; }
+
+/* Slide-in transition */
+.meta-slide-enter-active,
+.meta-slide-leave-active { transition: transform 0.2s ease, opacity 0.2s ease; }
+.meta-slide-enter-from,
+.meta-slide-leave-to { transform: translateX(100%); opacity: 0; }
 
 /* ======= CONTENT AREA ======= */
 .content-area {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   background: var(--bg);
 }
 .content-area.is-editing {
@@ -1318,11 +1507,6 @@ async function doLogout() {
 /* Waterfall */
 .waterfall-view {
   padding: 20px 24px;
-}
-.waterfall-header h2 {
-  font-size: 18px;
-  font-weight: 600;
-  margin-bottom: 16px;
 }
 .empty-state-big {
   display: flex;
@@ -1600,12 +1784,29 @@ async function doLogout() {
   }
   /* Hide Save label text on mobile to save space */
   .btn-label { display: none; }
-  /* Meta panel wraps nicely */
-  .meta-panel {
-    padding: 8px 12px;
+  /* Meta panel becomes bottom sheet on mobile */
+  .meta-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    background: rgba(0, 0, 0, 0.3);
   }
-  .meta-input { width: 100%; }
-  .meta-row { width: 100%; }
+  .meta-side-panel {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-height: 70vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.12);
+    z-index: 50;
+  }
+  .meta-slide-enter-from,
+  .meta-slide-leave-to { transform: translateY(100%); opacity: 1; }
   /* More compact editor padding on mobile */
   .editor-wrap { padding: 10px 14px; }
   .waterfall-view { padding: 10px 12px; }
@@ -1615,8 +1816,7 @@ async function doLogout() {
   .search-inputs-wrap .input { min-width: unset; }
   /* Prevent iOS zoom on input focus by ensuring font-size >= 16px */
   .input,
-  .tag-input,
-  .meta-input,
+  .meta-side-panel .input,
   select {
     font-size: 16px !important;
   }

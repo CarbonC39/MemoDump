@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const maxBodySize = 10 << 20 // 10 MB
+
 // safePath prevents directory traversal attacks
 func safePath(base string, userPath string) (string, error) {
 	cleanPath := filepath.Clean(filepath.FromSlash(userPath))
@@ -219,6 +221,7 @@ func handleGetNote(w http.ResponseWriter, r *http.Request) {
 
 // handleCreateNote creates a new note
 func handleCreateNote(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req struct {
 		Content string   `json:"content"`
 		Name    string   `json:"name"`
@@ -271,6 +274,7 @@ func handleCreateNote(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateNote updates an existing note
 func handleUpdateNote(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	notePath := r.PathValue("path")
 	fullPath, err := safePath(dataDir, notePath)
 	if err != nil {
@@ -293,7 +297,7 @@ func handleUpdateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read existing
+	// Read existing content
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
 		http.Error(w, `{"error":"Failed to read note"}`, http.StatusInternalServerError)
@@ -310,12 +314,7 @@ func handleUpdateNote(w http.ResponseWriter, r *http.Request) {
 	fm := buildFrontMatter(req.Tags)
 	finalContent := fm + body
 
-	if err := os.WriteFile(fullPath, []byte(finalContent), 0644); err != nil {
-		http.Error(w, `{"error":"Failed to save note"}`, http.StatusInternalServerError)
-		return
-	}
-
-	// Handle rename
+	// Determine target path upfront (rename if requested)
 	targetPath := fullPath
 	if req.Rename != nil {
 		newName := *req.Rename
@@ -331,11 +330,25 @@ func handleUpdateNote(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"Path is illegal"}`, http.StatusBadRequest)
 			return
 		}
-		if err := os.Rename(fullPath, newPath); err != nil {
-			http.Error(w, `{"error":"Failed to rename note"}`, http.StatusInternalServerError)
-			return
-		}
 		targetPath = newPath
+	}
+
+	// Atomic write: write to .tmp then rename to target, eliminating the
+	// race where content is overwritten but the subsequent rename fails.
+	tmpPath := targetPath + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(finalContent), 0644); err != nil {
+		http.Error(w, `{"error":"Failed to save note"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		os.Remove(tmpPath)
+		http.Error(w, `{"error":"Failed to save note"}`, http.StatusInternalServerError)
+		return
+	}
+	// If the file was renamed, remove the old path and its cache entry.
+	if targetPath != fullPath {
+		noteCache.Delete(fullPath)
+		os.Remove(fullPath)
 	}
 
 	note, _ := readNote(targetPath, dataDir, true)
@@ -355,6 +368,7 @@ func handleDeleteNote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"Failed to delete note"}`, http.StatusInternalServerError)
 		return
 	}
+	noteCache.Delete(fullPath)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -387,10 +401,22 @@ func handleMoveNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newPath := filepath.Join(destDir, filepath.Base(fullPath))
+	if newPath == fullPath {
+		// Moving to the same location is a no-op
+		note, _ := readNote(fullPath, dataDir, false)
+		writeJSON(w, http.StatusOK, note)
+		return
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		http.Error(w, `{"error":"A note with that name already exists in the destination"}`, http.StatusConflict)
+		return
+	}
+
 	if err := os.Rename(fullPath, newPath); err != nil {
 		http.Error(w, `{"error":"Failed to move note"}`, http.StatusInternalServerError)
 		return
 	}
+	noteCache.Delete(fullPath)
 
 	note, _ := readNote(newPath, dataDir, false)
 	writeJSON(w, http.StatusOK, note)
@@ -407,36 +433,39 @@ func buildFolderTree(dir string, base string) []Folder {
 	if err != nil {
 		return nil
 	}
+	return buildFolderNodes(dir, base, entries)
+}
 
+// buildFolderNodes builds the folder tree from an already-read entries slice,
+// avoiding a second ReadDir call per folder that the original code had.
+func buildFolderNodes(parentDir string, base string, entries []os.DirEntry) []Folder {
 	var folders []Folder
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		relPath, _ := filepath.Rel(base, filepath.Join(dir, e.Name()))
+		folderDir := filepath.Join(parentDir, e.Name())
+		relPath, _ := filepath.Rel(base, folderDir)
 		relPath = filepath.ToSlash(relPath)
-		folderDir := filepath.Join(dir, e.Name())
 
-		f := Folder{
-			Name:     e.Name(),
-			Path:     relPath,
-			Children: buildFolderTree(folderDir, base),
-		}
-
+		// Single ReadDir per folder: used for both notes and recursive children.
 		subEntries, _ := os.ReadDir(folderDir)
+
 		var notes []Note
 		for _, se := range subEntries {
-			if se.IsDir() || !strings.HasSuffix(se.Name(), ".md") {
-				continue
-			}
-			note, err := readNote(filepath.Join(folderDir, se.Name()), base, false)
-			if err == nil {
-				notes = append(notes, *note)
+			if !se.IsDir() && strings.HasSuffix(se.Name(), ".md") {
+				if note, err := readNote(filepath.Join(folderDir, se.Name()), base, false); err == nil {
+					notes = append(notes, *note)
+				}
 			}
 		}
-		f.Notes = notes
 
-		folders = append(folders, f)
+		folders = append(folders, Folder{
+			Name:     e.Name(),
+			Path:     relPath,
+			Children: buildFolderNodes(folderDir, base, subEntries),
+			Notes:    notes,
+		})
 	}
 	return folders
 }
@@ -492,6 +521,15 @@ func handleRenameFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Invalidate all note cache entries under the renamed folder.
+	oldPrefix := fullPath + string(filepath.Separator)
+	noteCache.Range(func(key, _ any) bool {
+		if strings.HasPrefix(key.(string), oldPrefix) {
+			noteCache.Delete(key)
+		}
+		return true
+	})
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -509,6 +547,15 @@ func handleDeleteFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Invalidate all note cache entries under the deleted folder.
+	deletedPrefix := fullPath + string(filepath.Separator)
+	noteCache.Range(func(key, _ any) bool {
+		if strings.HasPrefix(key.(string), deletedPrefix) {
+			noteCache.Delete(key)
+		}
+		return true
+	})
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -523,7 +570,6 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
-		// readNote uses the extremely fast ModTime cache to avoid re-reading disk
 		note, checkErr := readNote(path, dataDir, false)
 		if checkErr != nil {
 			return nil
@@ -533,7 +579,6 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		if entry, ok := noteCache.Load(path); ok {
 			bodyLower = entry.(*NoteCacheEntry).BodyLower
 		} else {
-			// fallback check safely
 			note, checkErr = readNote(path, dataDir, true)
 			if checkErr != nil {
 				return nil
@@ -541,23 +586,19 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 			bodyLower = strings.ToLower(note.Content)
 		}
 
-		match := false
-		if query != "" && strings.Contains(bodyLower, query) {
-			match = true
-		}
-		if tag != "" {
+		// AND logic: both conditions must match when both are specified.
+		matchQuery := query == "" || strings.Contains(bodyLower, query)
+		matchTag := tag == ""
+		if !matchTag {
 			for _, t := range note.Tags {
 				if strings.ToLower(t) == tag {
-					match = true
+					matchTag = true
 					break
 				}
 			}
 		}
-		if query == "" && tag == "" {
-			match = true
-		}
 
-		if match {
+		if matchQuery && matchTag {
 			results = append(results, *note)
 		}
 		return nil
@@ -571,6 +612,72 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		results = []Note{}
 	}
 	writeJSON(w, http.StatusOK, results)
+}
+
+// handleMoveFolder moves a folder (and all its contents) to a new parent.
+func handleMoveFolder(w http.ResponseWriter, r *http.Request) {
+	folderPath := r.PathValue("path")
+	fullPath, err := safePath(dataDir, folderPath)
+	if err != nil {
+		http.Error(w, `{"error":"Path is illegal"}`, http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Destination string `json:"destination"` // empty = root
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"Request format error"}`, http.StatusBadRequest)
+		return
+	}
+
+	destDir := dataDir
+	if req.Destination != "" {
+		destDir, err = safePath(dataDir, req.Destination)
+		if err != nil {
+			http.Error(w, `{"error":"Path is illegal"}`, http.StatusBadRequest)
+			return
+		}
+	}
+
+	folderName := filepath.Base(fullPath)
+	newPath := filepath.Join(destDir, folderName)
+
+	if newPath == fullPath {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	// Prevent moving a folder into itself or any of its descendants.
+	if strings.HasPrefix(newPath+string(filepath.Separator), fullPath+string(filepath.Separator)) {
+		http.Error(w, `{"error":"Cannot move folder into itself"}`, http.StatusBadRequest)
+		return
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		http.Error(w, `{"error":"A folder with that name already exists in the destination"}`, http.StatusConflict)
+		return
+	}
+
+	os.MkdirAll(destDir, 0755)
+	if err := os.Rename(fullPath, newPath); err != nil {
+		http.Error(w, `{"error":"Failed to move folder"}`, http.StatusInternalServerError)
+		return
+	}
+
+	oldPrefix := fullPath + string(filepath.Separator)
+	noteCache.Range(func(key, _ any) bool {
+		if strings.HasPrefix(key.(string), oldPrefix) {
+			noteCache.Delete(key)
+		}
+		return true
+	})
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handlePing is a lightweight authenticated endpoint used by the frontend
+// keepalive to prevent session expiry during long idle periods.
+func handlePing(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

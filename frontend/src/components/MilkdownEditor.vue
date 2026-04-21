@@ -15,6 +15,7 @@ const props = defineProps({
 const emit = defineEmits(['update'])
 const editorEl = ref(null)
 let crepeInstance = null
+let _destroyed = false
 
 onMounted(async () => {
   if (!editorEl.value) return
@@ -34,16 +35,30 @@ onMounted(async () => {
 
   crepeInstance.on((listener) => {
     listener.markdownUpdated((_, markdown) => {
-      emit('update', markdown)
+      if (!_destroyed) emit('update', markdown)
     })
   })
 
-  await crepeInstance.create()
+  try {
+    await crepeInstance.create()
+  } catch (e) {
+    // Editor creation failed (e.g. component was unmounted mid-creation)
+    if (crepeInstance) { crepeInstance.destroy(); crepeInstance = null }
+    return
+  }
+
+  // Component was unmounted while creation was in-flight
+  if (_destroyed && crepeInstance) {
+    crepeInstance.destroy()
+    crepeInstance = null
+  }
 })
 
 onBeforeUnmount(() => {
+  _destroyed = true
   if (crepeInstance) {
     crepeInstance.destroy()
+    crepeInstance = null
   }
 })
 </script>
@@ -63,7 +78,6 @@ onBeforeUnmount(() => {
 }
 
 /* ===== Fix Milkdown heading display anomaly ===== */
-/* Reset any conflicting styles on heading nodes */
 .crepe-editor :deep(.editor h1),
 .crepe-editor :deep(.editor h2),
 .crepe-editor :deep(.editor h3),
@@ -77,10 +91,8 @@ onBeforeUnmount(() => {
   white-space: normal;
   word-break: break-word;
   overflow-wrap: break-word;
-  /* Ensure heading markers don't get swallowed */
   min-height: 1em;
 }
-/* Fix heading prefix # marker display (sometimes hidden by Crepe) */
 .crepe-editor :deep(.editor h1::before),
 .crepe-editor :deep(.editor h2::before),
 .crepe-editor :deep(.editor h3::before),
@@ -99,7 +111,6 @@ onBeforeUnmount(() => {
   margin-bottom: 0.15em;
   line-height: 1.7;
 }
-/* Nested ordered lists */
 .crepe-editor :deep(.editor ol ol) {
   list-style-type: lower-alpha;
   margin: 0.1em 0;
@@ -132,7 +143,6 @@ onBeforeUnmount(() => {
 .crepe-editor :deep(.editor ul[data-type="taskList"]) {
   padding-left: 0.2em;
 }
-/* The checkbox input inside task list items */
 .crepe-editor :deep(.editor li[data-type="taskItem"] > label),
 .crepe-editor :deep(.editor .task-list-item > label) {
   display: inline-flex;
@@ -150,7 +160,6 @@ onBeforeUnmount(() => {
   top: -1px;
   accent-color: var(--primary, #6495ED);
 }
-/* Ensure text after checkbox is aligned to baseline */
 .crepe-editor :deep(.editor li[data-type="taskItem"] > div),
 .crepe-editor :deep(.editor .task-list-item > div) {
   display: inline;
@@ -190,7 +199,6 @@ onBeforeUnmount(() => {
 .crepe-editor :deep(.editor h6) { font-size: 0.9em;  font-weight: 600; line-height: 1.4;  margin: 0.4em 0 0.2em; }
 
 /* ===== Fix table display ===== */
-/* Wrap table in scrollable container on small screens */
 .crepe-editor :deep(.editor .tableWrapper),
 .crepe-editor :deep(.editor .milkdown-table-wrapper) {
   overflow-x: auto;
@@ -226,7 +234,6 @@ onBeforeUnmount(() => {
   .crepe-editor :deep(.editor) {
     font-size: 16px;
   }
-  /* Ensure Milkdown input elements don't trigger zoom */
   .crepe-editor :deep(input),
   .crepe-editor :deep(textarea),
   .crepe-editor :deep(select) {

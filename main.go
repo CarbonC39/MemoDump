@@ -43,6 +43,10 @@ func main() {
 		log.Fatalf("Failed to create data directory: %v", err)
 	}
 
+	sessionFile = filepath.Join(dataDir, ".sessions.json")
+	loadSessions()
+	startSessionCleanup()
+
 	mux := http.NewServeMux()
 
 	// API routes
@@ -59,6 +63,8 @@ func main() {
 	mux.HandleFunc("PUT /api/folders/{path...}", authMiddleware(handleRenameFolder))
 	mux.HandleFunc("DELETE /api/folders/{path...}", authMiddleware(handleDeleteFolder))
 	mux.HandleFunc("GET /api/search", authMiddleware(handleSearch))
+	mux.HandleFunc("PUT /api/move/folder/{path...}", authMiddleware(handleMoveFolder))
+	mux.HandleFunc("GET /api/ping", authMiddleware(handlePing))
 
 	// Serve frontend SPA
 	distFS, err := fs.Sub(frontendFS, "frontend/dist")

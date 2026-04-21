@@ -2,9 +2,14 @@
   <div class="folder-node">
     <div
       class="folder-row"
-      :class="{ active: activeFolder === folder.path }"
+      :class="{ active: activeFolder === folder.path, 'drag-over': isDragOver }"
       @click="$emit('select', folder.path)"
       @dblclick="$emit('rename', folder.path)"
+      draggable="true"
+      @dragstart.stop="onFolderDragStart"
+      @dragover.prevent.stop="onDragOver"
+      @dragleave.stop="onDragLeave"
+      @drop.prevent.stop="onDrop"
     >
       <span class="material-icons-outlined folder-chevron" @click.stop="toggleExpand">
         {{ expanded ? 'expand_more' : 'chevron_right' }}
@@ -25,7 +30,14 @@
     </div>
     <div v-if="expanded" class="folder-children">
       <div v-if="folder.notes && folder.notes.length">
-        <div v-for="note in folder.notes.filter(n => !/^\d{4}-\d{2}-\d{2}_\d{6}/.test(n.name))" :key="note.path" class="tree-note" @click.stop="$emit('open-note', note)">
+        <div
+          v-for="note in folder.notes.filter(n => !/^\d{4}-\d{2}-\d{2}_\d{6}/.test(n.name))"
+          :key="note.path"
+          class="tree-note"
+          draggable="true"
+          @dragstart.stop="onNoteDragStart($event, note)"
+          @click.stop="$emit('open-note', note)"
+        >
           <span class="material-icons-outlined">description</span>
           <span class="note-name">{{ note.name }}</span>
         </div>
@@ -42,6 +54,8 @@
           @delete-folder="$emit('delete-folder', $event)"
           @open-note="$emit('open-note', $event)"
           @new-note="$emit('new-note', $event)"
+          @drop-note="$emit('drop-note', $event)"
+          @drop-folder="$emit('drop-folder', $event)"
         />
       </div>
     </div>
@@ -56,12 +70,56 @@ const props = defineProps({
   activeFolder: String,
 })
 
-defineEmits(['select', 'new-folder', 'rename', 'delete-folder', 'open-note', 'new-note'])
+const emit = defineEmits(['select', 'new-folder', 'rename', 'delete-folder', 'open-note', 'new-note', 'drop-note', 'drop-folder'])
 
 const expanded = ref(false)
+const isDragOver = ref(false)
+let dragLeaveTimer = null
 
 function toggleExpand() {
   expanded.value = !expanded.value
+}
+
+function onFolderDragStart(e) {
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('memodump-type', 'folder')
+  e.dataTransfer.setData('memodump-path', props.folder.path)
+}
+
+function onNoteDragStart(e, note) {
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('memodump-type', 'note')
+  e.dataTransfer.setData('memodump-path', note.path)
+}
+
+function onDragOver(e) {
+  clearTimeout(dragLeaveTimer)
+  isDragOver.value = true
+  e.dataTransfer.dropEffect = 'move'
+  // Auto-expand folder while hovering so user can drop into sub-folders
+  if (!expanded.value) {
+    dragLeaveTimer = setTimeout(() => { expanded.value = true }, 600)
+  }
+}
+
+function onDragLeave() {
+  clearTimeout(dragLeaveTimer)
+  isDragOver.value = false
+}
+
+function onDrop(e) {
+  clearTimeout(dragLeaveTimer)
+  isDragOver.value = false
+  const type = e.dataTransfer.getData('memodump-type')
+  const path = e.dataTransfer.getData('memodump-path')
+  if (!path || path === props.folder.path) return
+  if (type === 'note') {
+    emit('drop-note', { notePath: path, destFolder: props.folder.path })
+  } else if (type === 'folder') {
+    // Prevent dropping a folder into its own subtree
+    if (props.folder.path.startsWith(path + '/')) return
+    emit('drop-folder', { folderPath: path, destFolder: props.folder.path })
+  }
 }
 </script>
 
@@ -84,6 +142,11 @@ function toggleExpand() {
 .folder-row.active {
   background: var(--primary-bg);
   color: var(--primary-dark);
+}
+.folder-row.drag-over {
+  background: var(--primary-bg);
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 .folder-chevron {
   font-size: 18px;
@@ -141,7 +204,7 @@ function toggleExpand() {
   transition: background 0.1s;
 }
 .tree-note:hover { background: var(--border-light); }
-.tree-note .material-icons-outlined { font-size: 16px; color: var(--text-secondary); }
+.tree-note .material-icons-outlined { font-size: 16px; color: var(--text-secondary); flex-shrink: 0; }
 .tree-note .note-name {
   white-space: nowrap;
   overflow: hidden;
