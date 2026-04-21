@@ -1,0 +1,95 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ "public" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "public" ]
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            binary_name: memodump-linux-amd64
+          - os: linux
+            arch: arm64
+            binary_name: memodump-linux-arm64
+          - os: linux
+            arch: arm
+            binary_name: memodump-linux-arm
+          - os: windows
+            arch: amd64
+            binary_name: memodump-windows-amd64.exe
+          - os: windows
+            arch: 386
+            binary_name: memodump-windows-386.exe
+          - os: darwin
+            arch: amd64
+            binary_name: memodump-darwin-amd64
+          - os: darwin
+            arch: arm64
+            binary_name: memodump-darwin-arm64
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Build Frontend
+      working-directory: ./frontend
+      run: |
+        npm install
+        npm run build
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25'
+        cache: true
+
+    - name: Build Backend
+      env:
+        GOOS: ${{ matrix.os }}
+        GOARCH: ${{ matrix.arch }}
+      run: |
+        go build -o ${{ matrix.binary_name }} .
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.binary_name }}
+        path: ${{ matrix.binary_name }}
+
+  release:
+    name: Create Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            memodump-linux-amd64/memodump-linux-amd64
+            memodump-linux-arm64/memodump-linux-arm64
+            memodump-linux-arm/memodump-linux-arm
+            memodump-windows-amd64.exe/memodump-windows-amd64.exe
+            memodump-windows-386.exe/memodump-windows-386.exe
+            memodump-darwin-amd64/memodump-darwin-amd64
+            memodump-darwin-arm64/memodump-darwin-arm64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
