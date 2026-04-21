@@ -177,7 +177,7 @@
           <div class="waterfall-grid">
             <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(searchResults)" :key="ci">
               <div v-for="note in col" :key="note.path" class="waterfall-card"
-                draggable="true" @dragstart="onNoteDragStart($event, note)">
+                :draggable="hoveredNotePath !== note.path" @dragstart="onNoteDragStart($event, note)">
                 <div class="card-header" v-if="note.hasCustomName">
                   <div class="card-name">{{ note.name }}</div>
                   <button class="btn btn-icon btn-ghost btn-sm card-menu-btn" @click.stop="openContextMenuBtn($event, note)">
@@ -187,7 +187,10 @@
                 <button v-else class="btn btn-icon btn-ghost btn-sm card-menu-btn" style="position: absolute; top: 12px; right: 14px; margin: 0; z-index: 2" @click.stop="openContextMenuBtn($event, note)">
                   <span class="material-icons-outlined">more_vert</span>
                 </button>
-                <div class="card-preview" v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
+                <div class="card-preview" draggable="false" 
+                  @mouseenter="hoveredNotePath = note.path" 
+                  @mouseleave="hoveredNotePath = null"
+                  @dragstart.stop v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
                   {{ expandedCards.has(note.path) && fullContentCache[note.path] ? fullContentCache[note.path] : note.plainPreview }}
                 </div>
                 <div class="card-expand-bar" v-if="overlongStates[note.path]" @click.stop="toggleExpand(note.path)">
@@ -223,7 +226,7 @@
           <div v-else class="waterfall-grid">
             <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(displayNotes)" :key="ci">
               <div v-for="note in col" :key="note.path" class="waterfall-card"
-                draggable="true" @dragstart="onNoteDragStart($event, note)">
+                :draggable="hoveredNotePath !== note.path" @dragstart="onNoteDragStart($event, note)">
                 <div class="card-header" v-if="note.hasCustomName">
                   <div class="card-name">{{ note.name }}</div>
                   <button class="btn btn-icon btn-ghost btn-sm card-menu-btn" @click.stop="openContextMenuBtn($event, note)">
@@ -233,7 +236,10 @@
                 <button v-else class="btn btn-icon btn-ghost btn-sm card-menu-btn" style="position: absolute; top: 12px; right: 14px; margin: 0; z-index: 2" @click.stop="openContextMenuBtn($event, note)">
                   <span class="material-icons-outlined">more_vert</span>
                 </button>
-                <div class="card-preview" v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
+                <div class="card-preview" draggable="false" 
+                  @mouseenter="hoveredNotePath = note.path" 
+                  @mouseleave="hoveredNotePath = null"
+                  @dragstart.stop v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
                   {{ expandedCards.has(note.path) && fullContentCache[note.path] ? fullContentCache[note.path] : note.plainPreview }}
                 </div>
                 <div class="card-expand-bar" v-if="overlongStates[note.path]" @click.stop="toggleExpand(note.path)">
@@ -382,6 +388,7 @@ const expandedCards = ref(new Set())
 const fullContentCache = reactive({})
 
 // Context Menu State
+const hoveredNotePath = ref(null)
 const contextMenu = reactive({
   visible: false,
   x: 0,
@@ -1582,6 +1589,7 @@ async function onDropOnRoot(e) {
   cursor: text;
   user-select: text;
   -webkit-user-select: text;
+  -webkit-user-drag: none;
 }
 .card-preview.expanded {
   display: block;
