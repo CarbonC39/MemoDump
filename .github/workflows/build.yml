@@ -6,6 +6,7 @@ on:
     tags: [ "v*" ]
   pull_request:
     branches: [ "public" ]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -91,5 +92,6 @@ jobs:
         with:
           files: |
             ./artifacts/memodump-*
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
