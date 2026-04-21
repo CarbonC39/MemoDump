@@ -82,17 +82,14 @@ jobs:
     steps:
       - name: Download Artifacts
         uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          merge-multiple: true
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            memodump-linux-amd64/memodump-linux-amd64
-            memodump-linux-arm64/memodump-linux-arm64
-            memodump-linux-arm/memodump-linux-arm
-            memodump-windows-amd64.exe/memodump-windows-amd64.exe
-            memodump-windows-386.exe/memodump-windows-386.exe
-            memodump-darwin-amd64/memodump-darwin-amd64
-            memodump-darwin-arm64/memodump-darwin-arm64
+            ./artifacts/memodump-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
