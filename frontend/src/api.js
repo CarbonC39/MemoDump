@@ -69,4 +69,10 @@ export default {
     ping() {
         return api.get('/ping')
     },
+    uploadNote(formData, folder) {
+        if (folder) formData.append('folder', folder)
+        return api.post('/upload', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+        })
+    },
 }

@@ -65,6 +65,7 @@ func main() {
 	mux.HandleFunc("GET /api/search", authMiddleware(handleSearch))
 	mux.HandleFunc("PUT /api/move/folder/{path...}", authMiddleware(handleMoveFolder))
 	mux.HandleFunc("GET /api/ping", authMiddleware(handlePing))
+	mux.HandleFunc("POST /api/upload", authMiddleware(handleUploadNote))
 
 	// Serve frontend SPA
 	distFS, err := fs.Sub(frontendFS, "frontend/dist")

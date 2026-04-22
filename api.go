@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const maxBodySize = 10 << 20 // 10 MB
@@ -678,6 +680,127 @@ func handleMoveFolder(w http.ResponseWriter, r *http.Request) {
 // keepalive to prevent session expiry during long idle periods.
 func handlePing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleUploadNote accepts a multipart .md/.txt file upload and saves it as a note.
+// Security: extension + size + UTF-8 + null-byte + path traversal checks.
+func handleUploadNote(w http.ResponseWriter, r *http.Request) {
+	const uploadLimit = 1 << 20 // 1 MB
+
+	r.Body = http.MaxBytesReader(w, r.Body, uploadLimit+4096)
+	if err := r.ParseMultipartForm(uploadLimit); err != nil {
+		http.Error(w, `{"error":"File too large or invalid request (max 1 MB)"}`, http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, `{"error":"No file provided"}`, http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Validate extension
+	origName := filepath.Base(header.Filename)
+	ext := strings.ToLower(filepath.Ext(origName))
+	if ext != ".md" && ext != ".txt" {
+		http.Error(w, `{"error":"Only .md and .txt files are accepted"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Enforce size limit via header first, then hard-cap via LimitReader
+	if header.Size > uploadLimit {
+		http.Error(w, `{"error":"File too large (max 1 MB)"}`, http.StatusRequestEntityTooLarge)
+		return
+	}
+	content, err := io.ReadAll(io.LimitReader(file, uploadLimit+1))
+	if err != nil {
+		http.Error(w, `{"error":"Failed to read file"}`, http.StatusInternalServerError)
+		return
+	}
+	if len(content) > uploadLimit {
+		http.Error(w, `{"error":"File too large (max 1 MB)"}`, http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	// Must be valid UTF-8 text
+	if !utf8.Valid(content) {
+		http.Error(w, `{"error":"File must be valid UTF-8 text"}`, http.StatusBadRequest)
+		return
+	}
+	// Reject null bytes (binary content masquerading as text)
+	if bytes.IndexByte(content, 0) >= 0 {
+		http.Error(w, `{"error":"File contains binary data"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Sanitize note name derived from the filename
+	noteName := sanitizeUploadName(strings.TrimSuffix(origName, ext))
+
+	// Optional target folder
+	dir := dataDir
+	folder := r.FormValue("folder")
+	if folder != "" {
+		dir, err = safePath(dataDir, folder)
+		if err != nil {
+			http.Error(w, `{"error":"Invalid folder path"}`, http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Build filename (.txt files are saved as .md)
+	filename := noteName
+	if filename == "" {
+		filename = time.Now().Format("2006-01-02_150405")
+	}
+	filename += ".md"
+	fullPath := filepath.Join(dir, filename)
+
+	// Avoid overwriting existing file
+	if _, err := os.Stat(fullPath); err == nil {
+		base := strings.TrimSuffix(filename, ".md")
+		filename = base + "_" + time.Now().Format("150405") + ".md"
+		fullPath = filepath.Join(dir, filename)
+	}
+
+	// Atomic write: tmp → rename
+	tmpPath := fullPath + ".tmp"
+	if err := os.WriteFile(tmpPath, content, 0644); err != nil {
+		http.Error(w, `{"error":"Failed to save file"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := os.Rename(tmpPath, fullPath); err != nil {
+		os.Remove(tmpPath)
+		http.Error(w, `{"error":"Failed to save file"}`, http.StatusInternalServerError)
+		return
+	}
+
+	note, _ := readNote(fullPath, dataDir, true)
+	writeJSON(w, http.StatusCreated, note)
+}
+
+// sanitizeUploadName strips path components and characters forbidden in filenames.
+// Unicode letters/digits (including CJK) are preserved; only control chars and
+// Windows-forbidden chars are replaced.
+func sanitizeUploadName(name string) string {
+	name = filepath.Base(name)
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r < 0x20, r == 0x7F,
+			r == '/', r == '\\', r == ':',
+			r == '*', r == '?', r == '"',
+			r == '<', r == '>', r == '|':
+			b.WriteRune('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	result := strings.Trim(b.String(), " .")
+	if len(result) > 200 {
+		result = result[:200]
+	}
+	return result
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

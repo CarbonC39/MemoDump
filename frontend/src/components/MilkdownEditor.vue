@@ -16,9 +16,27 @@ const emit = defineEmits(['update'])
 const editorEl = ref(null)
 let crepeInstance = null
 let _destroyed = false
+let _editorElRef = null
+let _handleKeyScroll = null
+
+function doTypewriterScroll() {
+  if (_destroyed || !_editorElRef) return
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) return
+  const rect = sel.getRangeAt(0).getBoundingClientRect()
+  if (!rect.height) return
+  const containerRect = _editorElRef.getBoundingClientRect()
+  const cursorY = rect.top - containerRect.top
+  const threshold = containerRect.height * 0.60
+  const targetY = containerRect.height * 0.42
+  if (cursorY > threshold) {
+    _editorElRef.scrollBy({ top: cursorY - targetY, behavior: 'smooth' })
+  }
+}
 
 onMounted(async () => {
   if (!editorEl.value) return
+  _editorElRef = editorEl.value
 
   crepeInstance = new Crepe({
     root: editorEl.value,
@@ -35,7 +53,10 @@ onMounted(async () => {
 
   crepeInstance.on((listener) => {
     listener.markdownUpdated((_, markdown) => {
-      if (!_destroyed) emit('update', markdown)
+      if (!_destroyed) {
+        emit('update', markdown)
+        requestAnimationFrame(doTypewriterScroll)
+      }
     })
   })
 
@@ -51,11 +72,19 @@ onMounted(async () => {
   if (_destroyed && crepeInstance) {
     crepeInstance.destroy()
     crepeInstance = null
+    return
   }
+
+  // Typewriter scroll on arrow/cursor key navigation
+  _handleKeyScroll = () => requestAnimationFrame(doTypewriterScroll)
+  _editorElRef.addEventListener('keydown', _handleKeyScroll)
 })
 
 onBeforeUnmount(() => {
   _destroyed = true
+  if (_editorElRef && _handleKeyScroll) {
+    _editorElRef.removeEventListener('keydown', _handleKeyScroll)
+  }
   if (crepeInstance) {
     crepeInstance.destroy()
     crepeInstance = null
@@ -75,6 +104,7 @@ onBeforeUnmount(() => {
 .crepe-editor :deep(.editor) {
   min-height: 100%;
   outline: none;
+  padding-bottom: 45vh;
 }
 
 /* ===== Fix Milkdown heading display anomaly ===== */
@@ -180,9 +210,64 @@ onBeforeUnmount(() => {
   margin: 0.15em 0;
 }
 
-/* ===== Fix code block spacing ===== */
+/* ===== Fix code block spacing + font ===== */
 .crepe-editor :deep(.editor pre) {
   margin: 0.6em 0;
+  font-family: 'Roboto Mono', 'Consolas', 'Menlo', monospace;
+}
+.crepe-editor :deep(.editor code) {
+  font-family: 'Roboto Mono', 'Consolas', 'Menlo', monospace;
+}
+
+/* ===== Crepe code fence (CodeMirror) dark theme ===== */
+.crepe-editor :deep(.code-fence) {
+  background: #1E293B;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 0.7em 0;
+}
+.crepe-editor :deep(.code-fence-language),
+.crepe-editor :deep(.code-fence-language-select) {
+  background: #162032;
+  color: #64748B;
+  font-family: 'Roboto Mono', monospace;
+  font-size: 12px;
+  border: none;
+  padding: 5px 12px;
+}
+.crepe-editor :deep(.cm-editor) {
+  background: #1E293B !important;
+}
+.crepe-editor :deep(.cm-editor.cm-focused) {
+  outline: none;
+}
+.crepe-editor :deep(.cm-scroller) {
+  background: #1E293B;
+  font-family: 'Roboto Mono', 'Consolas', 'Menlo', monospace !important;
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+.crepe-editor :deep(.cm-content) {
+  font-family: 'Roboto Mono', 'Consolas', 'Menlo', monospace !important;
+  color: #CBD5E1;
+  caret-color: #6495ED;
+}
+.crepe-editor :deep(.cm-line) {
+  color: #CBD5E1;
+}
+.crepe-editor :deep(.cm-gutters) {
+  background: #162032 !important;
+  border-right: 1px solid #2D3F56;
+  color: #475569;
+}
+.crepe-editor :deep(.cm-activeLineGutter) {
+  background: #1A2A3E !important;
+}
+.crepe-editor :deep(.cm-activeLine) {
+  background: rgba(100, 149, 237, 0.06) !important;
+}
+.crepe-editor :deep(.cm-cursor) {
+  border-left-color: #6495ED;
 }
 
 /* ===== Fix horizontal rule spacing ===== */

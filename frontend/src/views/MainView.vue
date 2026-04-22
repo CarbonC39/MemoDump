@@ -38,6 +38,17 @@
               <button class="fa-btn-sm" @click="createNewNoteIn('')" title="New Note">
                 <span class="material-icons-outlined">note_add</span>
               </button>
+              <button class="fa-btn-sm" @click="triggerFileInput" :disabled="uploadingFiles" :title="uploadingFiles ? 'Importing…' : 'Import .md'">
+                <span class="material-icons-outlined">upload_file</span>
+              </button>
+              <input
+                ref="fileInputRef"
+                type="file"
+                accept=".md,.txt"
+                multiple
+                style="display:none"
+                @change="onFileInputChange"
+              />
             </div>
             <span class="material-icons-outlined chevron" :class="{ 'expanded': openSections.storage }">chevron_right</span>
           </div>
@@ -84,74 +95,73 @@
     </aside>
 
     <!-- Main content -->
-    <main class="main-content">
+    <main class="main-content"
+      @dragenter="onMainDragEnter"
+      @dragleave="onMainDragLeave"
+      @dragover="onMainDragOver"
+      @drop="onMainDrop"
+    >
       <!-- Header -->
       <header class="main-header">
-        <div class="header-left">
-          <button class="btn btn-icon btn-ghost menu-toggle" @click="mobileSidebar = !mobileSidebar">
-            <span class="material-icons-outlined">menu</span>
+        <button class="btn btn-icon btn-ghost menu-toggle" @click="mobileSidebar = !mobileSidebar">
+          <span class="material-icons-outlined">menu</span>
+        </button>
+
+        <!-- Editing: horizontally scrollable metadata (title · folder · tags) -->
+        <div v-if="editingNote" class="header-meta-scroll">
+          <input
+            ref="titleInputRef"
+            class="header-title-input"
+            v-model="editName"
+            :size="Math.max(10, (editName || 'Untitled').length + 2)"
+            placeholder="Untitled"
+            @input="isDirty = true"
+          />
+          <span class="header-meta-sep">·</span>
+          <button class="note-folder-btn" @click="pickEditFolder">
+            <span class="material-icons-outlined">{{ editFolder ? 'folder' : 'home' }}</span>
+            <span class="note-folder-label">{{ editFolder || 'Root' }}</span>
           </button>
-          <!-- Breadcrumb / title shown in header -->
-          <span v-if="editingNote" class="header-title-display" @click="focusTitleInput">
-            {{ editName || 'Untitled' }}
-          </span>
-          <span v-else-if="currentFolder" class="header-folder-display">
+          <span class="header-meta-sep">·</span>
+          <div class="note-tags-inline">
+            <span class="tag" v-for="(t, i) in editTags" :key="i">
+              {{ t }}<span class="remove" @click="editTags.splice(i, 1); isDirty = true">×</span>
+            </span>
+            <input
+              class="tag-inline-input"
+              v-model="tagInput"
+              placeholder="+ tag"
+              @keydown.enter.prevent="addTag"
+            />
+          </div>
+        </div>
+
+        <!-- Not editing: static breadcrumb -->
+        <div v-else class="header-left">
+          <span v-if="currentFolder" class="header-folder-display">
             <span class="material-icons-outlined" style="font-size:16px;opacity:0.6">folder_open</span>
             {{ currentFolder }}
           </span>
         </div>
-        <div class="header-right" v-if="editingNote">
-          <button class="btn btn-sm btn-ghost" @click="showMetaPanel = !showMetaPanel" title="Note info">
-            <span class="material-icons-outlined" style="font-size:16px">tune</span>
+
+        <!-- Right: new note shortcut when browsing waterfall -->
+        <div class="header-right" v-if="!editingNote && !searchOpen">
+          <button class="btn btn-icon header-new-btn" @click="createNewNoteIn(currentFolder)" title="New note">
+            <span class="material-icons-outlined">add</span>
           </button>
-          <button class="btn btn-sm btn-primary" @click="saveNote">
-            <span class="material-icons-outlined" style="font-size:16px">save</span>
-            <span class="btn-label">Save</span>
+        </div>
+
+        <!-- Fixed right: save & delete — do NOT scroll -->
+        <div class="header-right" v-else-if="editingNote">
+          <button class="save-btn" :class="{ dirty: isDirty }" @click="saveNote">
+            <span class="save-dot" v-if="isDirty"></span>
+            Save
           </button>
           <button class="btn btn-sm btn-icon btn-danger-subtle" v-if="editingNote.path" @click="deleteCurrentNote" title="Delete note">
             <span class="material-icons-outlined" style="font-size:16px">delete_outline</span>
           </button>
         </div>
       </header>
-
-      <!-- Meta side panel backdrop (mobile only) -->
-      <div v-if="editingNote && showMetaPanel" class="meta-backdrop" @click="showMetaPanel = false"></div>
-
-      <!-- Meta side panel -->
-      <transition name="meta-slide">
-        <div v-if="editingNote && showMetaPanel" class="meta-side-panel">
-          <div class="meta-panel-header">
-            <span class="meta-panel-title">Properties</span>
-            <button class="btn btn-icon btn-ghost" @click="showMetaPanel = false">
-              <span class="material-icons-outlined" style="font-size:18px">close</span>
-            </button>
-          </div>
-
-          <div class="meta-field">
-            <label class="meta-field-label">Title</label>
-            <input ref="titleInputRef" v-model="editName" class="input" placeholder="Untitled" />
-          </div>
-
-          <div class="meta-field">
-            <label class="meta-field-label">Folder</label>
-            <button class="folder-select-btn" @click="pickEditFolder">
-              <span class="material-icons-outlined">{{ editFolder ? 'folder' : 'home' }}</span>
-              <span class="folder-select-label">{{ editFolder || 'Root' }}</span>
-              <span class="material-icons-outlined" style="margin-left:auto;font-size:16px;color:var(--text-muted)">unfold_more</span>
-            </button>
-          </div>
-
-          <div class="meta-field">
-            <label class="meta-field-label">Tags</label>
-            <div class="meta-tag-chips">
-              <span class="tag" v-for="(t,i) in editTags" :key="i">
-                {{ t }}<span class="remove" @click="editTags.splice(i,1)">×</span>
-              </span>
-            </div>
-            <input v-model="tagInput" class="input" placeholder="Add tag, press Enter" @keydown.enter.prevent="addTag" />
-          </div>
-        </div>
-      </transition>
 
       <div class="content-area" :class="{ 'is-editing': editingNote }">
         <!-- Search results (right-side panel) -->
@@ -257,6 +267,14 @@
           </div>
         </div>
       </div>
+
+      <!-- File drop overlay -->
+      <div v-if="isFileDragOver" class="file-drop-overlay">
+        <div class="file-drop-inner">
+          <span class="material-icons-outlined">upload_file</span>
+          <p>Drop .md or .txt files to import</p>
+        </div>
+      </div>
     </main>
 
     <!-- Draft Restored Banner -->
@@ -352,12 +370,9 @@ const mobileSidebar = ref(false)
 const openSections = reactive({ search: false, all: false, storage: false })
 const searchOpen = ref(false)
 
-// Meta panel toggle
-const showMetaPanel = ref(false)
 const titleInputRef = ref(null)
 
 function focusTitleInput() {
-  showMetaPanel.value = true
   nextTick(() => { if (titleInputRef.value) titleInputRef.value.focus() })
 }
 
@@ -698,7 +713,6 @@ function handleGlobalKeydown(e) {
   }
   if (e.key === 'Escape') {
     closeContextMenu()
-    if (showMetaPanel.value) showMetaPanel.value = false
   }
 }
 
@@ -825,7 +839,6 @@ function _forceNewNote() {
   editorKey.value++
   searchOpen.value = false
   mobileSidebar.value = false
-  showMetaPanel.value = false
   updateUrl()
 }
 
@@ -858,7 +871,6 @@ async function openNote(note) {
     editorKey.value++
     searchOpen.value = false
     mobileSidebar.value = false
-    showMetaPanel.value = false
     updateUrl()
   } catch (e) {
     console.error('Failed to open note', e)
@@ -1119,6 +1131,77 @@ async function onDropOnRoot(e) {
     await onDropFolder({ folderPath: path, destFolder: '' })
   }
 }
+
+// ===== FILE UPLOAD =====
+const uploadingFiles = ref(false)
+const isFileDragOver = ref(false)
+let fileDragCounter = 0
+const fileInputRef = ref(null)
+
+function triggerFileInput() {
+  if (fileInputRef.value) fileInputRef.value.click()
+}
+
+function onFileInputChange(e) {
+  const files = Array.from(e.target.files || [])
+  e.target.value = ''
+  if (files.length) uploadFiles(files)
+}
+
+function onMainDragEnter(e) {
+  if (!e.dataTransfer.types.includes('Files')) return
+  fileDragCounter++
+  isFileDragOver.value = true
+  e.preventDefault()
+}
+
+function onMainDragLeave(e) {
+  if (!e.dataTransfer.types.includes('Files')) return
+  fileDragCounter--
+  if (fileDragCounter <= 0) {
+    fileDragCounter = 0
+    isFileDragOver.value = false
+  }
+}
+
+function onMainDragOver(e) {
+  if (!e.dataTransfer.types.includes('Files')) return
+  e.preventDefault()
+  e.dataTransfer.dropEffect = 'copy'
+}
+
+function onMainDrop(e) {
+  if (!e.dataTransfer.types.includes('Files')) return
+  e.preventDefault()
+  fileDragCounter = 0
+  isFileDragOver.value = false
+  const files = Array.from(e.dataTransfer.files)
+  if (files.length) uploadFiles(files)
+}
+
+async function uploadFiles(files) {
+  const allowed = files.filter(f => /\.(md|txt)$/i.test(f.name))
+  if (!allowed.length) {
+    alert('Only .md and .txt files are supported.')
+    return
+  }
+  uploadingFiles.value = true
+  let lastOpened = null
+  for (const file of allowed) {
+    const fd = new FormData()
+    fd.append('file', file)
+    try {
+      const res = await apiClient.uploadNote(fd, editFolder.value || currentFolder.value || '')
+      lastOpened = res.data
+    } catch (e) {
+      const msg = e.response?.data?.error || e.message
+      alert(`Failed to import "${file.name}": ${msg}`)
+    }
+  }
+  uploadingFiles.value = false
+  await loadAll()
+  if (lastOpened) openNote(lastOpened)
+}
 </script>
 
 <style scoped>
@@ -1376,6 +1459,20 @@ async function onDropOnRoot(e) {
   text-overflow: ellipsis;
 }
 
+/* New note shortcut in header (waterfall view) */
+.header-new-btn {
+  width: 28px;
+  height: 28px;
+  color: var(--primary);
+  border-radius: var(--radius);
+}
+.header-new-btn:hover {
+  background: var(--primary-bg);
+}
+.header-new-btn .material-icons-outlined {
+  font-size: 22px;
+}
+
 /* Danger-subtle button (delete, not as alarming as red bg) */
 .btn-danger-subtle {
   color: var(--text-muted);
@@ -1385,86 +1482,139 @@ async function onDropOnRoot(e) {
   background: var(--danger-light);
 }
 
-/* hide button label on narrow screens */
-.btn-label { display: inline; }
-
-/* ======= META SIDE PANEL ======= */
-.meta-backdrop {
-  display: none; /* desktop: no backdrop */
-}
-.meta-side-panel {
-  position: fixed;
-  top: var(--header-height);
-  right: 0;
-  bottom: 0;
-  width: 300px;
-  background: var(--bg-card);
-  border-left: 1px solid var(--border);
-  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.07);
-  overflow-y: auto;
-  padding: 20px;
-  z-index: 50;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-.meta-panel-header {
-  display: flex;
+/* ======= SAVE BUTTON ======= */
+.save-btn {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-}
-.meta-panel-title {
+  gap: 6px;
+  padding: 5px 14px;
+  border: 1.5px solid var(--primary);
+  border-radius: 100px;
+  background: transparent;
+  color: var(--primary-dark);
   font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.meta-field {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-.meta-field-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-muted);
-}
-.folder-select-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-card);
-  font-size: 13px;
-  color: var(--text);
+  font-weight: 700;
   cursor: pointer;
-  text-align: left;
-  transition: border-color 0.15s, background 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  flex-shrink: 0;
 }
-.folder-select-btn:hover {
-  border-color: var(--primary);
+.save-btn:hover {
   background: var(--primary-bg);
 }
-.folder-select-btn .material-icons-outlined { font-size: 16px; color: var(--primary); }
-.folder-select-label {
+.save-btn.dirty {
+  background: var(--primary);
+  color: #fff;
+}
+.save-btn.dirty:hover {
+  background: var(--primary-dark);
+}
+.save-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+  flex-shrink: 0;
+}
+
+/* ======= HEADER METADATA SCROLL ======= */
+.header-meta-scroll {
   flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  display: flex;
+  align-items: center;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.header-meta-scroll::-webkit-scrollbar { display: none; }
+
+.header-title-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 4px 4px;
+  flex-shrink: 0;
+  font-family: inherit;
+  caret-color: var(--primary);
+  min-width: 60px;
+}
+.header-title-input::placeholder {
+  color: var(--text-muted);
+}
+.header-meta-sep {
+  color: var(--border);
+  font-size: 14px;
+  margin: 0 6px;
+  flex-shrink: 0;
+  user-select: none;
+}
+.note-folder-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 4px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+  font-family: inherit;
+}
+.note-folder-btn:hover {
+  background: var(--primary-bg);
+  color: var(--primary-dark);
+}
+.note-folder-btn .material-icons-outlined {
+  font-size: 14px;
+  color: var(--primary);
+}
+.note-folder-label {
+  max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.meta-tag-chips { display: flex; flex-wrap: wrap; gap: 4px; min-height: 0; }
-
-/* Slide-in transition */
-.meta-slide-enter-active,
-.meta-slide-leave-active { transition: transform 0.2s ease, opacity 0.2s ease; }
-.meta-slide-enter-from,
-.meta-slide-leave-to { transform: translateX(100%); opacity: 0; }
+.note-tags-inline {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.note-tags-inline :deep(.tag),
+.note-tags-inline .tag {
+  font-size: 13px;
+}
+.tag-inline-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  width: 48px;
+  padding: 2px 4px;
+  font-family: inherit;
+  flex-shrink: 0;
+  transition: color 0.12s, width 0.15s;
+}
+.tag-inline-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+.tag-inline-input:focus {
+  color: var(--primary-dark);
+  width: 72px;
+}
 
 /* ======= CONTENT AREA ======= */
 .content-area {
@@ -1476,10 +1626,11 @@ async function onDropOnRoot(e) {
 .content-area.is-editing {
   background: #FFFFFF;
 }
+
 .editor-wrap {
   max-width: 860px;
   margin: 0 auto;
-  padding: 16px 60px;
+  padding: 20px 60px;
   background: #FFFFFF;
   min-height: 100%;
   display: flex;
@@ -1790,33 +1941,7 @@ async function onDropOnRoot(e) {
   .main-header {
     padding: 0 8px;
   }
-  /* Hide Save label text on mobile to save space */
-  .btn-label { display: none; }
-  /* Meta panel becomes bottom sheet on mobile */
-  .meta-backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 49;
-    background: rgba(0, 0, 0, 0.3);
-  }
-  .meta-side-panel {
-    top: auto;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    width: 100%;
-    max-height: 70vh;
-    border-left: none;
-    border-top: 1px solid var(--border);
-    border-radius: 20px 20px 0 0;
-    box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.12);
-    z-index: 50;
-  }
-  .meta-slide-enter-from,
-  .meta-slide-leave-to { transform: translateY(100%); opacity: 1; }
-  /* More compact editor padding on mobile */
-  .editor-wrap { padding: 10px 14px; }
+  .editor-wrap { padding: 16px 14px; }
   .waterfall-view { padding: 10px 12px; }
   .search-results-view { padding: 14px 12px; }
   /* Search inputs stack vertically on small screens */
@@ -1824,10 +1949,9 @@ async function onDropOnRoot(e) {
   .search-inputs-wrap .input { min-width: unset; }
   /* Prevent iOS zoom on input focus by ensuring font-size >= 16px */
   .input,
-  .meta-side-panel .input,
-  select {
-    font-size: 16px !important;
-  }
+  .header-title-input,
+  .tag-inline-input,
+  select { font-size: 16px !important; }
   /* Larger touch targets for context menu items */
   .context-menu-item {
     padding: 14px 16px;
@@ -1846,5 +1970,41 @@ async function onDropOnRoot(e) {
 
 @media (min-width: 769px) and (max-width: 1100px) {
   /* 2-col handled by JS columnCount, CSS just ensures gap stays */
+}
+
+/* ===== FILE DROP OVERLAY ===== */
+.file-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: rgba(100, 149, 237, 0.10);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.file-drop-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 2px dashed var(--primary);
+  border-radius: var(--radius-lg);
+  padding: 48px 64px;
+  color: var(--primary-dark);
+  font-size: 15px;
+  font-weight: 600;
+  box-shadow: var(--shadow-md);
+}
+.file-drop-inner .material-icons-outlined {
+  font-size: 48px;
+  color: var(--primary);
+}
+.sidebar-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 </style>

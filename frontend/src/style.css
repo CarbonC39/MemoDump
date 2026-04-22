@@ -1,7 +1,8 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;500;600;700;800&family=Roboto+Mono:wght@400;500&display=swap');
 @import url('https://fonts.googleapis.com/icon?family=Material+Icons+Outlined');
 
 :root {
+  /* Main palette — cornflower blue (original) */
   --primary: #6495ED;
   --primary-light: #89B4FA;
   --primary-dark: #4A78D4;
@@ -25,6 +26,14 @@
   --sidebar-width: 52px;
   --sidebar-expanded: 240px;
   --header-height: 48px;
+
+  /* Markdown accent colors — blue/pink/purple family */
+  --md-bold: #3B6BD4;
+  --md-link: #9050BA;
+  --md-code-fg: #6B54A8;
+  --md-code-bg: #EDE9F8;
+  --md-quote-border: #9B87C8;
+  --md-quote-bg: #F4F0FA;
 }
 
 * {
@@ -42,7 +51,8 @@ body,
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-weight: 500;
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -112,16 +122,16 @@ a {
   --crepe-color-selected: var(--primary-bg);
   --crepe-color-inline-area: var(--primary-bg);
 
-  --crepe-font-title: 'Inter', -apple-system, sans-serif;
-  --crepe-font-default: 'Inter', -apple-system, sans-serif;
+  --crepe-font-title: 'Nunito', -apple-system, sans-serif;
+  --crepe-font-default: 'Nunito', -apple-system, sans-serif;
 }
 
-/* Milkdown Editor Overrides */
+/* Milkdown Editor Base */
 .milkdown .editor {
   padding: 16px 0;
   outline: none;
-  font-size: 15px;
-  line-height: 1.7;
+  font-size: 16px;
+  line-height: 1.75;
   color: var(--text);
 }
 
@@ -129,30 +139,32 @@ a {
   background: #A5C5FC;
 }
 
-/* Headings — explicit display:block prevents rendering anomaly where
-   headings occasionally collapse or show as invisible/inline. */
+/* Headings — two-tone: h1/h2 deep blue, h3-h6 blue-lavender */
 .milkdown .editor h1 {
   display: block;
   font-size: 1.8em;
-  font-weight: 700;
+  font-weight: 800;
   margin: 1em 0 0.5em;
-  line-height: 1.35;
+  line-height: 1.3;
+  color: #2A52C0;
 }
 
 .milkdown .editor h2 {
   display: block;
   font-size: 1.4em;
-  font-weight: 600;
+  font-weight: 700;
   margin: 0.8em 0 0.4em;
   line-height: 1.35;
+  color: #2A52C0;
 }
 
 .milkdown .editor h3 {
   display: block;
   font-size: 1.2em;
-  font-weight: 600;
+  font-weight: 700;
   margin: 0.6em 0 0.3em;
   line-height: 1.4;
+  color: #6070C8;
 }
 
 .milkdown .editor h4,
@@ -163,13 +175,82 @@ a {
   font-weight: 600;
   margin: 0.5em 0 0.25em;
   line-height: 1.5;
+  color: #6070C8;
 }
 
 .milkdown .editor p {
   margin: 0.4em 0;
 }
 
-/* Lists — consistent padding and spacing */
+/* Bold — distinctly blue */
+.milkdown .editor strong,
+.milkdown .editor b {
+  color: var(--md-bold);
+  font-weight: 700;
+}
+
+/* Links — muted purple */
+.milkdown .editor a {
+  color: var(--md-link);
+  text-decoration: underline;
+  text-decoration-color: rgba(144, 80, 186, 0.3);
+  text-underline-offset: 2px;
+}
+
+.milkdown .editor a:hover {
+  color: #6E3D90;
+  text-decoration-color: rgba(144, 80, 186, 0.65);
+}
+
+/* Inline code — soft purple chip */
+.milkdown .editor code {
+  background: var(--md-code-bg);
+  color: var(--md-code-fg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-family: 'Roboto Mono', 'Consolas', 'Menlo', monospace;
+}
+
+/* Fallback pre/code for cases where CodeMirror isn't used */
+.milkdown .editor pre {
+  background: #1E293B;
+  color: #E2E8F0;
+  padding: 16px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  margin: 0.6em 0;
+  font-family: 'Roboto Mono', 'Consolas', 'Menlo', monospace;
+}
+
+.milkdown .editor pre code {
+  background: none;
+  color: inherit;
+  padding: 0;
+  font-size: 0.9em;
+}
+
+/* Strikethrough */
+.milkdown .editor s,
+.milkdown .editor del {
+  color: var(--text-muted);
+}
+
+/* Blockquote */
+.milkdown .editor blockquote {
+  border-left: 3px solid var(--md-quote-border);
+  background: var(--md-quote-bg);
+  padding: 0.4em 0.8em 0.4em 1em;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  color: var(--text-secondary);
+  margin: 0.6em 0;
+}
+
+.milkdown .editor blockquote p {
+  margin: 0.15em 0;
+}
+
+/* Lists */
 .milkdown .editor ul,
 .milkdown .editor ol {
   padding-left: 1.6em;
@@ -179,62 +260,31 @@ a {
 .milkdown .editor li {
   padding-left: 0.15em;
   margin-bottom: 0.1em;
-  line-height: 1.7;
+  line-height: 1.75;
 }
 
 .milkdown .editor li p {
   margin: 0;
 }
 
-/* Task lists */
 .milkdown .editor li[data-type="taskItem"] {
   list-style: none;
 }
 
-.milkdown .editor blockquote {
-  border-left: 3px solid var(--primary);
-  padding-left: 1em;
-  color: var(--text-secondary);
-  margin: 0.6em 0;
-}
-
-.milkdown .editor blockquote p {
-  margin: 0.15em 0;
-}
-
-.milkdown .editor code {
-  background: var(--primary-bg);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 0.9em;
-}
-
-.milkdown .editor pre {
-  background: #1E293B;
-  color: #E2E8F0;
-  padding: 16px;
-  border-radius: var(--radius);
-  overflow-x: auto;
-  margin: 0.6em 0;
-}
-
-.milkdown .editor pre code {
-  background: none;
-  padding: 0;
-  color: inherit;
-}
-
+/* HR */
 .milkdown .editor hr {
   border: none;
   border-top: 1px solid var(--border);
   margin: 1em 0;
 }
 
+/* Images */
 .milkdown .editor img {
   max-width: 100%;
   border-radius: var(--radius);
 }
 
+/* Tables */
 .milkdown .editor table {
   width: 100%;
   border-collapse: collapse;
@@ -255,7 +305,7 @@ a {
   font-weight: 600;
 }
 
-/* Prevent mobile zoom on Milkdown inline inputs (e.g. link dialog) */
+/* Prevent mobile zoom on Milkdown inline inputs */
 .milkdown input,
 .milkdown textarea,
 .milkdown select {
@@ -321,6 +371,7 @@ a {
   font-size: 14px;
   outline: none;
   background: var(--bg-card);
+  color: var(--text);
   transition: border-color 0.15s;
 }
 
@@ -333,7 +384,7 @@ a {
   font-size: 13px;
 }
 
-/* Tag */
+/* Tag chip */
 .tag {
   display: inline-flex;
   align-items: center;
