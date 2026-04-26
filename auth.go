@@ -98,7 +98,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Username != username || req.Password != password {
+	if !noAuth && (req.Username != username || req.Password != password) {
 		http.Error(w, `{"error":"Username or password error"}`, http.StatusUnauthorized)
 		return
 	}
@@ -149,6 +149,10 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if noAuth {
+			next(w, r)
+			return
+		}
 		cookie, err := r.Cookie("session")
 		if err != nil {
 			http.Error(w, `{"error":"Not logged in"}`, http.StatusUnauthorized)

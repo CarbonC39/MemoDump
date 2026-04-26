@@ -107,6 +107,11 @@
           <span class="material-icons-outlined">menu</span>
         </button>
 
+        <!-- Back button: always visible when editing (desktop + PWA) -->
+        <button v-if="editingNote" class="btn btn-icon btn-ghost editor-back-btn" @click="goBack" title="Back">
+          <span class="material-icons-outlined">arrow_back</span>
+        </button>
+
         <!-- Editing: horizontally scrollable metadata (title · folder · tags) -->
         <div v-if="editingNote" class="header-meta-scroll">
           <input
@@ -418,6 +423,9 @@ let folderPickerResolve = null
 // Draft restored banner
 const showDraftRestoredBanner = ref(false)
 
+// View context captured before entering the editor, used by the back button.
+const prevView = reactive({ folder: '', search: false })
+
 // Display notes
 const displayNotes = ref([])
 
@@ -679,14 +687,29 @@ function toggleSection(section) {
   openSections[section] = !openSections[section]
 }
 
-function handleAllClick() {
+async function handleAllClick() {
   if (!confirmLeave()) return
   editingNote.value = null
   isDirty.value = false
   searchOpen.value = false
   currentFolder.value = ''
-  displayNotes.value = allNotes.value
   updateUrl()
+  await loadAll()
+}
+
+async function goBack() {
+  if (!confirmLeave()) return
+  editingNote.value = null
+  isDirty.value = false
+  if (prevView.search) {
+    searchOpen.value = true
+    currentFolder.value = ''
+    updateUrl()
+  } else if (prevView.folder) {
+    await selectFolder(prevView.folder)
+  } else {
+    await handleAllClick()
+  }
 }
 
 function openSearchPanel() {
@@ -829,6 +852,8 @@ function confirmLeave() {
 
 // Internal helper: create new note without confirmLeave check (used after delete/startup)
 function _forceNewNote() {
+  prevView.folder = currentFolder.value
+  prevView.search = searchOpen.value
   _editorReady = false
   editingNote.value = { content: '', path: '' }
   editName.value = ''
@@ -856,6 +881,8 @@ function createNewNoteIn(folderPath) {
 
 async function openNote(note) {
   if (!confirmLeave()) return
+  prevView.folder = currentFolder.value
+  prevView.search = searchOpen.value
   try {
     const res = await apiClient.getNote(note.path)
     const data = res.data
@@ -1457,6 +1484,12 @@ async function uploadFiles(files) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Back button in editor header — always visible on desktop and mobile */
+.editor-back-btn {
+  display: flex;
+  flex-shrink: 0;
 }
 
 /* New note shortcut in header (waterfall view) */
