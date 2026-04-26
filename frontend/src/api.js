@@ -9,10 +9,9 @@ api.interceptors.response.use(
     res => res,
     err => {
         if (err.response && err.response.status === 401) {
-            // Don't redirect if we're already on the login page (e.g. wrong password)
-            if (!window.location.pathname.startsWith('/login')) {
-                const returnPath = window.location.pathname + window.location.search
-                window.location.href = '/login?redirect=' + encodeURIComponent(returnPath)
+            // Hash-routing: check hash, not pathname. Don't redirect when already on login.
+            if (!window.location.hash.startsWith('#/login')) {
+                window.location.href = '/#/login'
             }
         }
         return Promise.reject(err)
@@ -68,6 +67,9 @@ export default {
     },
     ping() {
         return api.get('/ping')
+    },
+    config() {
+        return api.get('/config')
     },
     uploadNote(formData, folder) {
         if (folder) formData.append('folder', folder)

@@ -87,7 +87,11 @@
       </div>
 
       <div class="sidebar-footer">
-        <button class="sidebar-action logout" @click="doLogout">
+        <button v-if="isWailsApp" class="sidebar-action" @click="changeDataDir" :title="wailsDataDir">
+          <span class="material-icons-outlined">folder_open</span>
+          Data Folder
+        </button>
+        <button v-if="!serverNoAuth" class="sidebar-action logout" @click="doLogout">
           <span class="material-icons-outlined">logout</span>
           Sign Out
         </button>
@@ -369,6 +373,26 @@ import FolderNode from '../components/FolderNode.vue'
 
 const router = useRouter()
 const route = useRoute()
+
+// Wails desktop detection — window.go is injected by the Wails runtime.
+const isWailsApp = typeof window !== 'undefined' && typeof window.go !== 'undefined'
+const wailsDataDir = ref('')
+const serverNoAuth = ref(false)
+
+async function initWails() {
+  if (!isWailsApp) return
+  try {
+    wailsDataDir.value = await window.go.main.App.GetDataDir()
+  } catch (_) {}
+}
+
+async function changeDataDir() {
+  if (!isWailsApp) return
+  const changed = await window.go.main.App.ChangeDataDir()
+  if (changed) {
+    wailsDataDir.value = await window.go.main.App.GetDataDir()
+  }
+}
 
 // Sidebar state
 const mobileSidebar = ref(false)
@@ -784,6 +808,8 @@ async function restoreFromUrl() {
 }
 
 onMounted(async () => {
+  initWails()
+  try { serverNoAuth.value = (await apiClient.config()).data.noAuth } catch (_) {}
   window.addEventListener('resize', updateColumnCount)
   window.addEventListener('keydown', handleGlobalKeydown)
   window.addEventListener('beforeunload', handleBeforeUnload)

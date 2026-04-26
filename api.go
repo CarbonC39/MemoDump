@@ -682,6 +682,12 @@ func handlePing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// handleConfig is unauthenticated and returns server configuration the UI needs
+// before login (e.g. whether auth is required so the Sign Out button can be hidden).
+func handleConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]bool{"noAuth": noAuth})
+}
+
 // handleUploadNote accepts a multipart .md/.txt file upload and saves it as a note.
 // Security: extension + size + UTF-8 + null-byte + path traversal checks.
 func handleUploadNote(w http.ResponseWriter, r *http.Request) {

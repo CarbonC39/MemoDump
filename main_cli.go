@@ -1,7 +1,8 @@
+//go:build !production && !dev && !bindings
+
 package main
 
 import (
-	"bufio"
 	"embed"
 	"flag"
 	"fmt"
@@ -11,47 +12,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 )
 
 //go:embed frontend/dist/*
 var frontendFS embed.FS
-
-var (
-	dataDir  string
-	username string
-	password string
-	port     int
-	noAuth   bool
-)
-
-// parseEnvFile reads a KEY=VALUE .env file. Lines starting with '#' and blank
-// lines are skipped. Values are whitespace-trimmed but not quote-stripped.
-func parseEnvFile(path string) map[string]string {
-	result := make(map[string]string)
-	f, err := os.Open(path)
-	if err != nil {
-		return result
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		idx := strings.IndexByte(line, '=')
-		if idx < 0 {
-			continue
-		}
-		key := strings.TrimSpace(line[:idx])
-		val := strings.TrimSpace(line[idx+1:])
-		if key != "" {
-			result[key] = val
-		}
-	}
-	return result
-}
 
 func main() {
 	flag.StringVar(&dataDir, "data", "", "Data directory path")
@@ -127,25 +91,7 @@ func main() {
 	loadSessions()
 	startSessionCleanup()
 
-	mux := http.NewServeMux()
-
-	// API routes
-	mux.HandleFunc("POST /api/login", handleLogin)
-	mux.HandleFunc("POST /api/logout", handleLogout)
-	mux.HandleFunc("GET /api/notes", authMiddleware(handleListNotes))
-	mux.HandleFunc("GET /api/notes/{path...}", authMiddleware(handleGetNote))
-	mux.HandleFunc("POST /api/notes", authMiddleware(handleCreateNote))
-	mux.HandleFunc("PUT /api/notes/{path...}", authMiddleware(handleUpdateNote))
-	mux.HandleFunc("DELETE /api/notes/{path...}", authMiddleware(handleDeleteNote))
-	mux.HandleFunc("PUT /api/move/{path...}", authMiddleware(handleMoveNote))
-	mux.HandleFunc("GET /api/folders", authMiddleware(handleListFolders))
-	mux.HandleFunc("POST /api/folders", authMiddleware(handleCreateFolder))
-	mux.HandleFunc("PUT /api/folders/{path...}", authMiddleware(handleRenameFolder))
-	mux.HandleFunc("DELETE /api/folders/{path...}", authMiddleware(handleDeleteFolder))
-	mux.HandleFunc("GET /api/search", authMiddleware(handleSearch))
-	mux.HandleFunc("PUT /api/move/folder/{path...}", authMiddleware(handleMoveFolder))
-	mux.HandleFunc("GET /api/ping", authMiddleware(handlePing))
-	mux.HandleFunc("POST /api/upload", authMiddleware(handleUploadNote))
+	mux := buildAPIMux()
 
 	// Serve frontend SPA
 	distFS, err := fs.Sub(frontendFS, "frontend/dist")
@@ -154,14 +100,12 @@ func main() {
 	}
 	fileServer := http.FileServer(http.FS(distFS))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Try to serve static file first
 		path := r.URL.Path
 		if path == "/" {
 			path = "/index.html"
 		}
 		f, err := distFS.Open(path[1:])
 		if err != nil {
-			// SPA fallback: serve index.html for client-side routing
 			r.URL.Path = "/"
 			fileServer.ServeHTTP(w, r)
 			return
