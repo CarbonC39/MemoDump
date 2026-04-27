@@ -107,6 +107,12 @@ jobs:
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
+      - name: Build frontend
+        working-directory: ./frontend
+        run: |
+          npm install
+          npm run build
+
       - name: Build desktop app
         if: matrix.os != 'windows'
         run: wails build
