@@ -1,4 +1,4 @@
-import { createRouter, createWebHashHistory } from 'vue-router'
+import { createRouter, createWebHashHistory, createWebHistory } from 'vue-router'
 import LoginView from './views/LoginView.vue'
 import MainView from './views/MainView.vue'
 
@@ -7,8 +7,11 @@ const routes = [
     { path: '/', name: 'Main', component: MainView },
 ]
 
+// Wails WebView needs hash history; normal browsers use clean history
+const isWails = typeof window !== 'undefined' && typeof window.go !== 'undefined'
+
 const router = createRouter({
-    history: createWebHashHistory(),
+    history: isWails ? createWebHashHistory() : createWebHistory(),
     routes,
 })
 

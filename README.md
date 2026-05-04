@@ -1,19 +1,33 @@
 # MemoDump
 
-![MemoDump](frontend/public/icon-512.png)
+<p align="center">
+  <img src="frontend/public/memodump.svg" width="80" alt="MemoDump logo" />
+</p>
+
+<p align="center">
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white" />
+  <img alt="License" src="https://img.shields.io/badge/License-MIT-green" />
+  <img alt="PWA" src="https://img.shields.io/badge/PWA-ready-5A0FC8?logo=pwa&logoColor=white" />
+  <img alt="Wails" src="https://img.shields.io/badge/Desktop-Wails-red?logo=go" />
+</p>
 
 A lightweight, single-binary Markdown notes app. Run it as a self-hosted web server or as a native desktop application (via [Wails](https://wails.io/)).
 
 ## Features
 
-- **Single binary:** Go backend with embedded Vue 3 frontend — drop it anywhere and run.
-- **Markdown editor:** [Milkdown](https://milkdown.dev/) WYSIWYG editor with full Markdown support.
-- **Folder organisation:** Hierarchical folders with drag-and-drop and button-based `.md` file import.
-- **Full-text search:** Fast in-memory search across all notes.
-- **Flexible auth:** Username/password session auth, or no-auth mode for personal/trusted-network use.
-- **Config layering:** Flags → environment variables → `.env` file (any combination works).
-- **Desktop app:** Native window via Wails — same codebase, no browser required.
-- **Mobile/PWA friendly:** Responsive design with back-navigation support.
+- **Single binary** — Go backend with embedded Vue 3 frontend. Drop it anywhere and run.
+- **Markdown editor** — [Milkdown](https://milkdown.dev/) WYSIWYG editor with full Markdown support.
+- **Folder organisation** — Hierarchical folders with drag-and-drop and `.md` file import.
+- **Full-text search** — Fast in-memory search across all notes.
+- **Flexible auth** — Username/password session auth, or no-auth mode for personal/trusted-network use.
+- **Config layering** — Flags → environment variables → `.env` file (any combination works).
+- **Desktop app** — Native window via Wails — same codebase, no browser required.
+- **Mobile/PWA friendly** — Responsive design, installable as a PWA with back-navigation support.
+
+<p align="center">
+  <img src="images/md-editor.avif" alt="Markdown editor view" width="49%" />
+  <img src="images/waterfall-view.avif" alt="Waterfall notes view" width="49%" />
+</p>
 
 ---
 
@@ -159,16 +173,16 @@ memodump/
 │   └── src/
 │       ├── views/MainView.vue
 │       └── style.css
-└── .github/workflows/build.yml
+└── .forgejo/workflows/build.yml
 ```
 
 ---
 
-## GitHub Actions
+## CI / CD (Forgejo Actions on Codeberg)
 
-The workflow (`.github/workflows/build.yml`) runs on every push/PR to `public` and on `v*` tags.
+The workflow (`.forgejo/workflows/build.yml`) runs on every push/PR to `public` and on `v*` tags.
 
-### `build-server` — CLI cross-compilation
+### `build` — CLI cross-compilation
 
 Builds on `ubuntu-latest` for all targets:
 
@@ -182,16 +196,8 @@ Builds on `ubuntu-latest` for all targets:
 | macOS amd64 | `memodump-darwin-amd64` |
 | macOS arm64 | `memodump-darwin-arm64` |
 
-### `build-desktop` — Wails native builds
+### `release` — Codeberg Release
 
-Runs natively on each platform (required for the native WebView dependency):
+Triggered only on `v*` tags. Uploads all artifacts to a Codeberg release via the Forgejo API.
 
-| Runner | Output |
-|--------|--------|
-| `windows-latest` | `memodump-desktop-windows-amd64.exe` |
-| `macos-latest` | `memodump-desktop-macos-universal.zip` (contains `MemoDump.app`) |
-| `ubuntu-latest` | `memodump-desktop-linux-amd64` |
-
-### `release` — GitHub Release
-
-Triggered only on `v*` tags. Downloads all artifacts and attaches them to a GitHub Release with auto-generated release notes.
+> **Desktop builds** (Wails) require native macOS/Windows runners and are not included in the automated workflow. Build locally with `wails build`.

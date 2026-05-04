@@ -342,6 +342,24 @@
       </div>
     </div>
 
+    <!-- Copy Dialog (iOS PWA fallback) -->
+    <div v-if="copyDialog.visible" class="modal-overlay" @click.self="copyDialog.visible = false">
+      <div class="prompt-modal">
+        <h3>Copy Text</h3>
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">Long-press the text below to copy:</p>
+        <textarea
+          class="input"
+          :value="copyDialog.content"
+          readonly
+          style="width:100%;height:180px;resize:vertical;font-size:13px;font-family:monospace;box-sizing:border-box;"
+          @focus="e => e.target.setSelectionRange(0, e.target.value.length)"
+        />
+        <div class="prompt-actions">
+          <button class="btn btn-ghost" @click="copyDialog.visible = false">Close</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Context Menu -->
     <div v-if="contextMenu.visible" class="context-menu-overlay" @click="closeContextMenu" @contextmenu.prevent="closeContextMenu"></div>
     <div v-if="contextMenu.visible" class="context-menu" :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }">
@@ -439,6 +457,9 @@ const contextMenu = reactive({
   y: 0,
   note: null
 })
+
+// Copy dialog — shown as iOS PWA fallback when clipboard API fails
+const copyDialog = reactive({ visible: false, content: '' })
 
 // Folder Picker Modal State
 const folderPicker = reactive({ visible: false, selected: '' })
@@ -619,21 +640,29 @@ async function menuCopyContent() {
   try {
     const res = await apiClient.getNote(note.path)
     const content = res.data.content || ''
-    // Try modern clipboard API first; fall back to execCommand for iOS PWA
-    if (navigator.clipboard && navigator.clipboard.writeText) {
+
+    // Modern clipboard API (works on iOS 16.4+ PWA even after async)
+    if (navigator.clipboard?.writeText) {
       try {
         await navigator.clipboard.writeText(content)
         return
-      } catch (_) { /* fall through to execCommand */ }
+      } catch (_) {}
     }
+
+    // Legacy fallback — setSelectionRange required for iOS (ta.select() is unreliable)
     const ta = document.createElement('textarea')
     ta.value = content
-    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0'
+    ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:none;outline:none;font-size:16px;opacity:0.01;'
     document.body.appendChild(ta)
-    ta.focus()
-    ta.select()
-    document.execCommand('copy')
+    ta.focus({ preventScroll: true })
+    ta.setSelectionRange(0, content.length)
+    const ok = document.execCommand('copy')
     document.body.removeChild(ta)
+    if (ok) return
+
+    // Final fallback: show dialog so user can manually long-press → copy
+    copyDialog.content = content
+    copyDialog.visible = true
   } catch (e) {
     alert('Copy failed')
   }
