@@ -56,7 +56,7 @@ jobs:
         run: go build -ldflags="-s -w" -o ${{ matrix.output }} .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: ${{ matrix.output }}
           path: ${{ matrix.output }}
@@ -71,10 +71,9 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v3
         with:
           path: dist
-          merge-multiple: true
 
       - name: Publish release
         env:
@@ -98,8 +97,8 @@ jobs:
             "${API}/repos/${OWNER}/${REPO}/releases/tags/${TAG}" \
             | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 
-          # Upload each binary
-          for f in dist/*; do
+          # Upload each binary (find recursively because v3 download-artifact creates subdirs)
+          find dist -type f | while read -r f; do
             name=$(basename "$f")
             echo "Uploading $name …"
             curl -sf -X POST \
