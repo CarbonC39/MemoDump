@@ -1,7 +1,7 @@
 # MemoDump
 
 <p align="center">
-  <img src="frontend/public/memodump.svg" width="80" alt="MemoDump logo" />
+  <img src="frontend/public/memodump.svg" alt="MemoDump logo" width=150/>
 </p>
 
 <p align="center">
@@ -25,8 +25,8 @@ A lightweight, single-binary Markdown notes app. Run it as a self-hosted web ser
 - **Mobile/PWA friendly** — Responsive design, installable as a PWA with back-navigation support.
 
 <p align="center">
-  <img src="images/md-editor.avif" alt="Markdown editor view" width="49%" />
-  <img src="images/waterfall-view.avif" alt="Waterfall notes view" width="49%" />
+  <img src="images/md-editor.avif" alt="Markdown editor view"/>
+  <img src="images/waterfall-view.avif" alt="Waterfall notes view"/>
 </p>
 
 ---
@@ -56,6 +56,7 @@ Open `http://localhost:8080` in your browser (or the custom port).
 | `--user` | Login username | — |
 | `--pass` | Login password | — |
 | `--port` | HTTP port | `8080` |
+| `--css` | Custom CSS file injected into the UI | — |
 
 ### Configuration sources
 
@@ -64,8 +65,8 @@ Settings can be supplied three ways, in priority order:
 | Priority | Source | Notes |
 |----------|--------|-------|
 | 1 (highest) | CLI flags | `--user alice --pass secret` |
-| 2 | Environment variables | `MEMODUMP_DATA`, `MEMODUMP_USER`, `MEMODUMP_PASS`, `MEMODUMP_PORT` |
-| 3 (lowest) | `.env` file in working directory | `DATA=`, `USER=`, `PASS=`, `PORT=` |
+| 2 | Environment variables | `MEMODUMP_DATA`, `MEMODUMP_USER`, `MEMODUMP_PASS`, `MEMODUMP_PORT`, `MEMODUMP_CSS` |
+| 3 (lowest) | `.env` file in working directory | `DATA=`, `USER=`, `PASS=`, `PORT=`, `CSS=` |
 
 **.env file example**
 
@@ -74,6 +75,7 @@ DATA=./notes
 USER=alice
 PASS=secret
 PORT=9090
+CSS=./custom.css
 ```
 
 Lines starting with `#` and blank lines are ignored. Values are not quote-stripped.

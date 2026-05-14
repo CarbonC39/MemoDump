@@ -22,6 +22,7 @@ func main() {
 	flag.StringVar(&username, "user", "", "Login username")
 	flag.StringVar(&password, "pass", "", "Login password")
 	flag.IntVar(&port, "port", 0, "Service port (default 8080)")
+	flag.StringVar(&cssFile, "css", "", "Custom CSS file to inject")
 	flag.Parse()
 
 	// Load .env from CWD (lower priority than flags and env vars).
@@ -60,14 +61,29 @@ func main() {
 			}
 		}
 	}
+	if cssFile == "" {
+		if v := os.Getenv("MEMODUMP_CSS"); v != "" {
+			cssFile = v
+		} else if v := dotenv["CSS"]; v != "" {
+			cssFile = v
+		}
+	}
+	if cssFile != "" {
+		if abs, err := filepath.Abs(cssFile); err == nil {
+			cssFile = abs
+		}
+		if _, err := os.Stat(cssFile); err != nil {
+			log.Fatalf("CSS file not found: %s", cssFile)
+		}
+	}
 	if port == 0 {
 		port = 8080
 	}
 
 	if dataDir == "" {
-		fmt.Println("Usage: memodump --data <folder> [--user <username> --pass <password>] [--port <port>]")
+		fmt.Println("Usage: memodump --data <folder> [--user <username> --pass <password>] [--port <port>] [--css <file>]")
 		fmt.Println("  Credentials can also be set via MEMODUMP_USER / MEMODUMP_PASS env vars")
-		fmt.Println("  or a .env file in the current directory (DATA=, USER=, PASS=, PORT=).")
+		fmt.Println("  or a .env file in the current directory (DATA=, USER=, PASS=, PORT=, CSS=).")
 		fmt.Println("  Omitting username and password starts the server in no-auth mode.")
 		os.Exit(1)
 	}

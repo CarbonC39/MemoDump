@@ -298,7 +298,33 @@
     <!-- Folder Picker Modal -->
     <div v-if="folderPicker.visible" class="modal-overlay" @click.self="closeFolderPicker">
       <div class="folder-picker-modal">
-        <h3>Move to Folder</h3>
+        <div class="folder-picker-head">
+          <h3>Move to Folder</h3>
+          <button class="btn-new-folder" @click="startCreateFolderInPicker" title="New folder">
+            <span class="material-icons-outlined">create_new_folder</span>
+            New Folder
+          </button>
+        </div>
+        <div v-if="folderPicker.newFolderActive" class="folder-picker-new-row">
+          <span class="material-icons-outlined">create_new_folder</span>
+          <span class="folder-picker-new-parent">
+            {{ folderPicker.selected ? folderPicker.selected + '/' : '' }}
+          </span>
+          <input
+            ref="newFolderInputRef"
+            v-model="folderPicker.newFolderName"
+            class="folder-picker-new-input"
+            placeholder="Folder name"
+            @keydown.enter.prevent="submitNewFolderInPicker"
+            @keydown.esc.prevent="cancelNewFolderInPicker"
+          />
+          <button class="fa-btn-sm" @click="submitNewFolderInPicker" title="Create">
+            <span class="material-icons-outlined">check</span>
+          </button>
+          <button class="fa-btn-sm" @click="cancelNewFolderInPicker" title="Cancel">
+            <span class="material-icons-outlined">close</span>
+          </button>
+        </div>
         <div class="folder-picker-list">
           <div
             class="folder-picker-item"
@@ -338,6 +364,18 @@
         <div class="prompt-actions">
           <button class="btn btn-ghost" @click="cancelPrompt">Cancel</button>
           <button class="btn btn-primary" @click="submitPrompt">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Confirm Modal -->
+    <div v-if="confirmDialog.visible" class="modal-overlay" @click.self="cancelConfirm">
+      <div class="prompt-modal">
+        <h3>{{ confirmDialog.title }}</h3>
+        <p class="confirm-message" v-if="confirmDialog.message">{{ confirmDialog.message }}</p>
+        <div class="prompt-actions">
+          <button class="btn btn-ghost" @click="cancelConfirm">Cancel</button>
+          <button class="btn" :class="confirmDialog.danger ? 'btn-danger' : 'btn-primary'" @click="acceptConfirm">{{ confirmDialog.okLabel }}</button>
         </div>
       </div>
     </div>
@@ -462,8 +500,9 @@ const contextMenu = reactive({
 const copyDialog = reactive({ visible: false, content: '' })
 
 // Folder Picker Modal State
-const folderPicker = reactive({ visible: false, selected: '' })
+const folderPicker = reactive({ visible: false, selected: '', newFolderActive: false, newFolderName: '' })
 let folderPickerResolve = null
+const newFolderInputRef = ref(null)
 
 // Draft restored banner
 const showDraftRestoredBanner = ref(false)
@@ -509,7 +548,11 @@ function stripMarkdown(text) {
     .replace(/!\[.*?\]\(.*?\)/g, '')          // images
     .replace(/\[([^\]]+)\]\(.*?\)/g, '$1')    // links — keep link text, drop URL
     .replace(/^\s*[-*+]\s+\[[ xX]\]\s*/gm, '') // task list items: - [ ] / - [x]
-    .replace(/[*_~`]/g, '')                   // bold, italic, strikethrough, inline code
+    // Underscore emphasis: only strip when delimiters are at word boundaries,
+    // so URLs/identifiers like foo_bar or example.com/a_b keep their underscores.
+    .replace(/(^|[^\w])__(\S(?:[^_\n]*?\S)?)__(?=[^\w]|$)/g, '$1$2')
+    .replace(/(^|[^\w])_(\S(?:[^_\n]*?\S)?)_(?=[^\w]|$)/g, '$1$2')
+    .replace(/[*~`]/g, '')                    // bold/italic asterisks, strikethrough, inline code
     .replace(/^\s*>\s*/gm, '')                // blockquote markers
     .replace(/^\s*[-+*]\s+/gm, '')            // unordered list bullets
     .replace(/^\s*\d+\.\s+/gm, '')            // ordered list
@@ -672,7 +715,12 @@ async function menuDeleteNote() {
   const note = contextMenu.note
   closeContextMenu()
   if (!note) return
-  if (!confirm('Are you sure you want to delete this note?')) return
+  if (!(await showConfirm({
+    title: 'Delete note?',
+    message: 'This will permanently remove the note.',
+    okLabel: 'Delete',
+    danger: true,
+  }))) return
   try {
     await apiClient.deleteNote(note.path)
     isDirty.value = false
@@ -722,18 +770,50 @@ async function menuMoveNote() {
 
 function showFolderPicker(defaultFolder = '') {
   folderPicker.selected = defaultFolder
+  folderPicker.newFolderActive = false
+  folderPicker.newFolderName = ''
   folderPicker.visible = true
   return new Promise(resolve => { folderPickerResolve = resolve })
 }
 
 function closeFolderPicker() {
   folderPicker.visible = false
+  folderPicker.newFolderActive = false
   if (folderPickerResolve) { folderPickerResolve(null); folderPickerResolve = null }
 }
 
 function confirmFolderPicker() {
   folderPicker.visible = false
+  folderPicker.newFolderActive = false
   if (folderPickerResolve) { folderPickerResolve(folderPicker.selected); folderPickerResolve = null }
+}
+
+function startCreateFolderInPicker() {
+  folderPicker.newFolderActive = true
+  folderPicker.newFolderName = ''
+  nextTick(() => { if (newFolderInputRef.value) newFolderInputRef.value.focus() })
+}
+
+function cancelNewFolderInPicker() {
+  folderPicker.newFolderActive = false
+  folderPicker.newFolderName = ''
+}
+
+async function submitNewFolderInPicker() {
+  const name = folderPicker.newFolderName.trim()
+  if (!name) { cancelNewFolderInPicker(); return }
+  const parent = folderPicker.selected
+  const path = parent ? parent + '/' + name : name
+  try {
+    await apiClient.createFolder(path)
+    const res = await apiClient.listFolders()
+    folders.value = res.data || []
+    folderPicker.selected = path
+    folderPicker.newFolderActive = false
+    folderPicker.newFolderName = ''
+  } catch (e) {
+    alert('Failed to create folder')
+  }
 }
 
 function toggleSection(section) {
@@ -1033,7 +1113,12 @@ async function saveNote() {
 }
 
 async function deleteCurrentNote() {
-  if (!confirm('Delete this note?')) return
+  if (!(await showConfirm({
+    title: 'Delete note?',
+    message: 'This will permanently remove the note.',
+    okLabel: 'Delete',
+    danger: true,
+  }))) return
   try {
     await apiClient.deleteNote(editingNote.value.path)
     isDirty.value = false
@@ -1110,6 +1195,35 @@ function cancelPrompt() {
   }
 }
 
+// ===== Confirm Modal =====
+const confirmDialog = reactive({
+  visible: false,
+  title: '',
+  message: '',
+  okLabel: 'Confirm',
+  danger: false,
+})
+let confirmResolve = null
+
+function showConfirm({ title = 'Confirm', message = '', okLabel = 'Confirm', danger = false } = {}) {
+  confirmDialog.title = title
+  confirmDialog.message = message
+  confirmDialog.okLabel = okLabel
+  confirmDialog.danger = danger
+  confirmDialog.visible = true
+  return new Promise(resolve => { confirmResolve = resolve })
+}
+
+function acceptConfirm() {
+  confirmDialog.visible = false
+  if (confirmResolve) { confirmResolve(true); confirmResolve = null }
+}
+
+function cancelConfirm() {
+  confirmDialog.visible = false
+  if (confirmResolve) { confirmResolve(false); confirmResolve = null }
+}
+
 async function promptNewFolder(parentPath) {
   const name = await showPrompt('Folder name:')
   if (!name) return
@@ -1139,7 +1253,12 @@ async function promptRenameFolder(folderPath) {
 }
 
 async function doDeleteFolder(folderPath) {
-  if (!confirm('Delete folder and all contents?')) return
+  if (!(await showConfirm({
+    title: 'Delete folder?',
+    message: 'This will permanently remove the folder and all its contents.',
+    okLabel: 'Delete',
+    danger: true,
+  }))) return
   try {
     await apiClient.deleteFolder(folderPath)
     // Reset currentFolder if it was inside the deleted folder
@@ -1934,10 +2053,72 @@ async function uploadFiles(files) {
   flex-direction: column;
 }
 .folder-picker-modal h3 {
-  margin-bottom: 12px;
+  margin-bottom: 0;
   font-size: 16px;
   font-weight: 600;
   flex-shrink: 0;
+}
+.folder-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.btn-new-folder {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--primary-dark);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.btn-new-folder:hover {
+  background: var(--primary-bg);
+  border-color: var(--primary);
+}
+.btn-new-folder .material-icons-outlined {
+  font-size: 16px;
+  color: var(--primary);
+}
+.folder-picker-new-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px dashed var(--primary);
+  border-radius: var(--radius);
+  background: var(--primary-bg);
+}
+.folder-picker-new-row .material-icons-outlined {
+  font-size: 16px;
+  color: var(--primary);
+}
+.folder-picker-new-parent {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+.folder-picker-new-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  padding: 2px 0;
 }
 .folder-picker-list {
   overflow-y: auto;
@@ -1998,6 +2179,20 @@ async function uploadFiles(files) {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 20px;
+}
+.confirm-message {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-top: -6px;
+}
+.prompt-modal .btn-danger {
+  background: var(--danger);
+  color: #fff;
+}
+.prompt-modal .btn-danger:hover {
+  background: var(--danger);
+  filter: brightness(0.92);
 }
 
 /* Mobile overlay */

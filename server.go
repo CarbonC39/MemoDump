@@ -14,6 +14,7 @@ var (
 	password string
 	port     int
 	noAuth   bool
+	cssFile  string
 )
 
 // parseEnvFile reads KEY=VALUE pairs from a .env file. Missing file is silently ignored.
@@ -63,5 +64,22 @@ func buildAPIMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/ping", authMiddleware(handlePing))
 	mux.HandleFunc("POST /api/upload", authMiddleware(handleUploadNote))
 	mux.HandleFunc("GET /api/config", handleConfig)
+	mux.HandleFunc("GET /custom.css", handleCustomCSS)
 	return mux
+}
+
+// handleCustomCSS serves the user-supplied stylesheet (via --css flag).
+// Always 200 with text/css so the frontend's unconditional <link> tag
+// doesn't log a 404 when no CSS is configured.
+func handleCustomCSS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	if cssFile == "" {
+		return
+	}
+	data, err := os.ReadFile(cssFile)
+	if err != nil {
+		return
+	}
+	w.Write(data)
 }
