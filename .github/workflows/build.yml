@@ -103,7 +103,14 @@ jobs:
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
 
-      # `wails build` runs the frontend install/build itself (see wails.json).
+      # Build frontend first — Wails bindings generation compiles Go code,
+      # which embeds frontend/dist and fails if it doesn't exist yet.
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
       - name: Build desktop app (Linux / Windows)
         if: runner.os != 'macOS'
         run: wails build -tags production -ldflags "-s -w"
