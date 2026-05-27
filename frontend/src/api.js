@@ -1,5 +1,6 @@
 import axios from 'axios'
 import router from './router'
+import localApi from './localApi'
 
 const api = axios.create({
     baseURL: '/api',
@@ -22,7 +23,7 @@ api.interceptors.response.use(
     }
 )
 
-export default {
+const remoteApi = {
     login(username, password) {
         return api.post('/login', { username, password })
     },
@@ -82,3 +83,7 @@ export default {
         })
     },
 }
+
+// Select backend: localApi (IndexedDB, no server) when built with VITE_LOCAL=1,
+// otherwise the axios client that talks to the Go server.
+export default import.meta.env.VITE_LOCAL === '1' ? localApi : remoteApi
