@@ -1,4 +1,5 @@
 import axios from 'axios'
+import router from './router'
 
 const api = axios.create({
     baseURL: '/api',
@@ -9,9 +10,12 @@ api.interceptors.response.use(
     res => res,
     err => {
         if (err.response && err.response.status === 401) {
-            // Hash-routing: check hash, not pathname. Don't redirect when already on login.
-            if (!window.location.hash.startsWith('#/login')) {
-                window.location.href = '/#/login'
+            // Navigate via the router so the redirect honours the active history
+            // mode (clean URLs in the browser, hash under Wails). Guarding on the
+            // route name prevents the redirect loop that a hardcoded path caused.
+            const current = router.currentRoute.value
+            if (current.name !== 'Login') {
+                router.replace({ name: 'Login', query: { redirect: current.fullPath } })
             }
         }
         return Promise.reject(err)

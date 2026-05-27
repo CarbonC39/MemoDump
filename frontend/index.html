@@ -23,12 +23,17 @@
   <div id="app"></div>
   <script type="module" src="/src/main.js"></script>
   <script>
-    // Register service worker for PWA
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').catch(() => {})
-      })
-    }
+    // Register service worker for PWA — but NOT inside the Wails desktop
+    // WebView, where a SW is pointless and can intercept/cache the app shell
+    // and break asset loading on relaunch.
+    (function () {
+      var isWails = location.protocol === 'wails:' || location.hostname === 'wails.localhost'
+      if (!isWails && 'serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js').catch(function () {})
+        })
+      }
+    })()
   </script>
 </body>
 

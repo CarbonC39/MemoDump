@@ -111,9 +111,10 @@
           <span class="material-icons-outlined">menu</span>
         </button>
 
-        <!-- Back button: always visible when editing (desktop + PWA) -->
-        <button v-if="editingNote" class="btn btn-icon btn-ghost editor-back-btn" @click="goBack" title="Back">
-          <span class="material-icons-outlined">arrow_back</span>
+        <!-- Back button: always visible when editing (desktop + PWA).
+             With no previous view to return to, it becomes a Home button → All Notes. -->
+        <button v-if="editingNote" class="btn btn-icon btn-ghost editor-back-btn" @click="goBack" :title="hasPrevPage ? 'Back' : 'All Notes'">
+          <span class="material-icons-outlined">{{ hasPrevPage ? 'arrow_back' : 'home' }}</span>
         </button>
 
         <!-- Editing: horizontally scrollable metadata (title · folder · tags) -->
@@ -153,8 +154,25 @@
           </span>
         </div>
 
-        <!-- Right: new note shortcut when browsing waterfall -->
+        <!-- Right: sort order + new note shortcut when browsing waterfall -->
         <div class="header-right" v-if="!editingNote && !searchOpen">
+          <div class="sort-control">
+            <button class="btn btn-icon header-sort-btn" :class="{ active: sortMenuOpen }" @click.stop="sortMenuOpen = !sortMenuOpen" title="Sort order">
+              <span class="material-icons-outlined">sort</span>
+            </button>
+            <div v-if="sortMenuOpen" class="sort-overlay" @click="sortMenuOpen = false"></div>
+            <div v-if="sortMenuOpen" class="sort-menu">
+              <div class="sort-menu-item" :class="{ active: sortMode === 'modified-desc' }" @click="setSort('modified-desc')">
+                <span class="material-icons-outlined sort-check">check</span><span>Recently modified</span>
+              </div>
+              <div class="sort-menu-item" :class="{ active: sortMode === 'modified-asc' }" @click="setSort('modified-asc')">
+                <span class="material-icons-outlined sort-check">check</span><span>Oldest modified</span>
+              </div>
+              <div class="sort-menu-item" :class="{ active: sortMode === 'title-asc' }" @click="setSort('title-asc')">
+                <span class="material-icons-outlined sort-check">check</span><span>Title (A–Z)</span>
+              </div>
+            </div>
+          </div>
           <button class="btn btn-icon header-new-btn" @click="createNewNoteIn(currentFolder)" title="New note">
             <span class="material-icons-outlined">add</span>
           </button>
@@ -210,7 +228,8 @@
                   @mouseenter="hoveredNotePath = note.path" 
                   @mouseleave="hoveredNotePath = null"
                   @dragstart.stop v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
-                  {{ expandedCards.has(note.path) && fullContentCache[note.path] ? fullContentCache[note.path] : note.plainPreview }}
+                  <template v-if="cardText(note)">{{ cardText(note) }}</template>
+                  <span v-else class="card-empty">Empty note</span>
                 </div>
                 <div class="card-expand-bar" v-if="overlongStates[note.path]" @click.stop="toggleExpand(note.path)">
                   <span class="material-icons-outlined">
@@ -243,7 +262,7 @@
             <p>No notes yet. Click <strong>New Note</strong> to create one.</p>
           </div>
           <div v-else class="waterfall-grid">
-            <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(displayNotes)" :key="ci">
+            <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(sortedDisplayNotes)" :key="ci">
               <div v-for="note in col" :key="note.path" class="waterfall-card"
                 :draggable="hoveredNotePath !== note.path" @dragstart="onNoteDragStart($event, note)">
                 <div class="card-header" v-if="note.hasCustomName">
@@ -259,7 +278,8 @@
                   @mouseenter="hoveredNotePath = note.path" 
                   @mouseleave="hoveredNotePath = null"
                   @dragstart.stop v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
-                  {{ expandedCards.has(note.path) && fullContentCache[note.path] ? fullContentCache[note.path] : note.plainPreview }}
+                  <template v-if="cardText(note)">{{ cardText(note) }}</template>
+                  <span v-else class="card-empty">Empty note</span>
                 </div>
                 <div class="card-expand-bar" v-if="overlongStates[note.path]" @click.stop="toggleExpand(note.path)">
                   <span class="material-icons-outlined">
@@ -510,8 +530,47 @@ const showDraftRestoredBanner = ref(false)
 // View context captured before entering the editor, used by the back button.
 const prevView = reactive({ folder: '', search: false })
 
+// True when there is a prior view (folder/search) to return to; otherwise the
+// back button acts as a Home button that goes to All Notes.
+const hasPrevPage = computed(() => prevView.search || !!prevView.folder)
+
 // Display notes
 const displayNotes = ref([])
+
+// ===== Waterfall sort order =====
+const sortMenuOpen = ref(false)
+const sortMode = ref('modified-desc')
+try {
+  const saved = localStorage.getItem('memodump_sort')
+  if (saved) sortMode.value = saved
+} catch (_) {}
+
+function setSort(mode) {
+  sortMode.value = mode
+  sortMenuOpen.value = false
+  try { localStorage.setItem('memodump_sort', mode) } catch (_) {}
+}
+
+const sortedDisplayNotes = computed(() => {
+  const arr = displayNotes.value.slice()
+  if (sortMode.value === 'modified-asc') {
+    arr.sort((a, b) => (a.modTime || 0) - (b.modTime || 0))
+  } else if (sortMode.value === 'title-asc') {
+    arr.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' }))
+  } else {
+    arr.sort((a, b) => (b.modTime || 0) - (a.modTime || 0))
+  }
+  return arr
+})
+
+// Resolve the text shown in a waterfall card (expanded full content when
+// available, otherwise the preview). Empty string → empty-note placeholder.
+function cardText(note) {
+  if (expandedCards.value.has(note.path) && fullContentCache[note.path]) {
+    return fullContentCache[note.path]
+  }
+  return note.plainPreview
+}
 
 const flatFolders = computed(() => {
   const result = []
@@ -869,6 +928,7 @@ function handleGlobalKeydown(e) {
   }
   if (e.key === 'Escape') {
     closeContextMenu()
+    sortMenuOpen.value = false
   }
 }
 
@@ -973,7 +1033,7 @@ async function loadAll() {
       displayNotes.value = allNotes.value
     }
   } catch (e) {
-    if (e.response?.status === 401) router.push('/login')
+    // 401 is handled globally by the api interceptor (redirects to login).
   }
 }
 
@@ -1913,7 +1973,7 @@ async function uploadFiles(files) {
 .card-name {
   font-size: 14px;
   font-weight: 600;
-  color: var(--text);
+  color: #334155;
   margin-bottom: 0px;
   flex: 1;
   word-break: break-all;
@@ -1975,6 +2035,64 @@ async function uploadFiles(files) {
 }
 .card-footer { margin-top: 8px; }
 .card-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.card-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ======= SORT CONTROL ======= */
+.sort-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.header-sort-btn {
+  width: 28px;
+  height: 28px;
+  color: var(--text-secondary);
+  border-radius: var(--radius);
+}
+.header-sort-btn:hover,
+.header-sort-btn.active {
+  background: var(--primary-bg);
+  color: var(--primary-dark);
+}
+.header-sort-btn .material-icons-outlined { font-size: 20px; }
+.sort-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+.sort-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: #fff;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  border-radius: 8px;
+  padding: 4px 0;
+  min-width: 184px;
+  z-index: 1001;
+}
+.sort-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px 9px 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sort-menu-item:hover { background: var(--primary-bg); }
+.sort-menu-item.active { color: var(--primary-dark); font-weight: 500; }
+.sort-check {
+  font-size: 16px;
+  opacity: 0;
+  color: var(--primary);
+}
+.sort-menu-item.active .sort-check { opacity: 1; }
 
 /* Context Menu */
 .context-menu-overlay {
