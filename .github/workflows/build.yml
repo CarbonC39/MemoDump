@@ -168,56 +168,67 @@ jobs:
         env:
           CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
         run: |
+          set -euo pipefail
+
           TAG="${{ github.ref_name }}"
           OWNER="CarbonC"
           REPO="MemoDump"
           API="https://codeberg.org/api/v1/repos/$OWNER/$REPO"
 
-          # Get GitHub release body for reuse
           BODY=$(gh release view "$TAG" --json body -q '.body')
 
-          # Check if release already exists on Codeberg
-          EXISTING=$(curl -s -H "accept: application/json" \
+          # Idempotent create-or-get release
+          EXISTING=$(curl -sS --retry 3 --retry-delay 5 -H "accept: application/json" \
             -H "Authorization: token $CODEBERG_TOKEN" \
             "$API/releases/tags/$TAG")
           EXISTING_ID=$(echo "$EXISTING" | jq -r '.id // empty')
 
           if [ -n "$EXISTING_ID" ]; then
-            echo "Release exists on Codeberg (id=$EXISTING_ID), updating..."
-            curl -s -X PATCH "$API/releases/$EXISTING_ID" \
-              -H "accept: application/json" \
-              -H "Authorization: token $CODEBERG_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "$(jq -n --arg body "$BODY" '{body: $body}')"
+            echo "Release exists on Codeberg (id=$EXISTING_ID)"
           else
             echo "Creating release on Codeberg..."
-            RESPONSE=$(curl -s -X POST "$API/releases" \
+            RESPONSE=$(curl -sS --retry 3 --retry-delay 5 -X POST "$API/releases" \
               -H "accept: application/json" \
               -H "Authorization: token $CODEBERG_TOKEN" \
               -H "Content-Type: application/json" \
               -d "$(jq -n --arg tag "$TAG" --arg name "$TAG" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
             EXISTING_ID=$(echo "$RESPONSE" | jq -r '.id')
+            echo "Created release id=$EXISTING_ID"
           fi
 
-          echo "Release id=$EXISTING_ID"
-
-          # Upload / replace assets
+          # Upload assets with retry and rate-limit awareness
           for f in dist/*; do
             fname=$(basename "$f")
-            echo "Uploading $fname..."
-            # Delete existing asset with same name if any
-            EXISTING_ASSETS=$(curl -s -H "accept: application/json" \
+            fsize=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo "?")
+            echo "Uploading $fname ($fsize bytes)..."
+
+            # Remove stale asset with same name
+            EXISTING_ASSETS=$(curl -sS --retry 3 --retry-delay 5 -H "accept: application/json" \
               -H "Authorization: token $CODEBERG_TOKEN" \
               "$API/releases/$EXISTING_ID/assets")
             OLD_ID=$(echo "$EXISTING_ASSETS" | jq -r ".[] | select(.name==\"$fname\") | .id // empty")
             if [ -n "$OLD_ID" ]; then
-              curl -s -X DELETE -H "Authorization: token $CODEBERG_TOKEN" \
-                "$API/releases/$EXISTING_ID/assets/$OLD_ID"
+              HTTP=$(curl -sS -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 5 \
+                -X DELETE -H "Authorization: token $CODEBERG_TOKEN" \
+                "$API/releases/$EXISTING_ID/assets/$OLD_ID")
+              echo "  Deleted old asset (HTTP $HTTP)"
             fi
-            curl -s -X POST "$API/releases/$EXISTING_ID/assets?name=$fname" \
+
+            # Upload with retries; Codeberg can 500 on large files, backoff helps
+            HTTP=$(curl -sS -o /dev/null -w "%{http_code}" --retry 5 --retry-delay 10 \
+              --retry-max-time 120 -X POST \
               -H "accept: application/json" \
               -H "Authorization: token $CODEBERG_TOKEN" \
-              -F "attachment=@$f"
+              -F "attachment=@$f" \
+              "$API/releases/$EXISTING_ID/assets?name=$fname")
+            if [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ]; then
+              echo "  OK (HTTP $HTTP)"
+            else
+              echo "  FAILED (HTTP $HTTP)"
+              exit 1
+            fi
+
+            sleep 1
           done
 
           echo "Codeberg release synced: https://codeberg.org/$OWNER/$REPO/releases/tag/$TAG"
