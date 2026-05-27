@@ -176,7 +176,7 @@ jobs:
           REPO="MemoDump"
           API="https://codeberg.org/api/v1/repos/$OWNER/$REPO"
 
-          BODY=$(gh release view "$TAG" --json body -q '.body')
+          BODY=$(gh release view "$TAG" --repo "${{ github.repository }}" --json body -q '.body')
 
           # Idempotent create-or-get release
           EXISTING=$(curl -sS --retry 3 --retry-delay 5 -H "accept: application/json" \
