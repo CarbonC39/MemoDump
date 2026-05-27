@@ -95,6 +95,10 @@
           <span class="material-icons-outlined">logout</span>
           Sign Out
         </button>
+        <div v-if="isLocalBuild" class="local-hint" title="Your notes are kept in this browser's local storage — nothing is uploaded to a server.">
+          <span class="material-icons-outlined">cloud_off</span>
+          <span>Saved in this browser</span>
+        </div>
       </div>
     </aside>
 
@@ -452,6 +456,8 @@ const route = useRoute()
 
 // Wails desktop detection — window.go is injected by the Wails runtime.
 const isWailsApp = typeof window !== 'undefined' && typeof window.go !== 'undefined'
+// Browser-local build (VITE_LOCAL=1): notes live in IndexedDB, not on a server.
+const isLocalBuild = import.meta.env.VITE_LOCAL === '1'
 const wailsDataDir = ref('')
 const serverNoAuth = ref(false)
 
@@ -1657,6 +1663,21 @@ async function uploadFiles(files) {
   padding: 8px;
   border-top: 1px solid var(--border-light);
   flex-shrink: 0;
+}
+/* Local build hint — informational, not alarming */
+.local-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+.local-hint .material-icons-outlined {
+  font-size: 16px;
+  color: var(--text-muted);
 }
 
 /* ======= MAIN CONTENT ======= */

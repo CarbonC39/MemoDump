@@ -15,7 +15,7 @@
   --text-muted: #94A3B8;
   --border: #E2E8F0;
   --border-light: #F1F5F9;
-  --danger: #EF4444;
+  --danger: #E25555;
   --danger-light: #FEE2E2;
   --success: #22C55E;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
@@ -146,7 +146,7 @@ a {
   font-weight: 800;
   margin: 1em 0 0.5em;
   line-height: 1.3;
-  color: #2B3A5C;
+  color: #3B6BD4;
 }
 
 .milkdown .editor h2 {
@@ -155,7 +155,7 @@ a {
   font-weight: 700;
   margin: 0.8em 0 0.4em;
   line-height: 1.35;
-  color: #2B3A5C;
+  color: #3B6BD4;
 }
 
 .milkdown .editor h3 {
@@ -164,7 +164,7 @@ a {
   font-weight: 700;
   margin: 0.6em 0 0.3em;
   line-height: 1.4;
-  color: #4A5572;
+  color: #5681CE;
 }
 
 .milkdown .editor h4,
@@ -175,7 +175,7 @@ a {
   font-weight: 600;
   margin: 0.5em 0 0.25em;
   line-height: 1.5;
-  color: #4A5572;
+  color: #5681CE;
 }
 
 .milkdown .editor p {
