@@ -167,6 +167,7 @@ jobs:
       - name: Sync release to Codeberg
         env:
           CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
