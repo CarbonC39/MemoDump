@@ -1,0 +1,157 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [public, main]
+    tags: ['v*']
+  pull_request:
+    branches: [public, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25"
+  NODE_VERSION: "20"
+  WAILS_VERSION: "v2.12.0"
+
+jobs:
+  # ---- Server CLI: cross-compiled on Linux (cheap, runs on every push/PR) ----
+  build-cli:
+    name: CLI (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64,           output: memodump-server-linux-amd64       }
+          - { goos: linux,   goarch: arm64,           output: memodump-server-linux-arm64       }
+          - { goos: linux,   goarch: arm,   goarm: "7", output: memodump-server-linux-arm       }
+          - { goos: windows, goarch: amd64,           output: memodump-server-windows-amd64.exe }
+          - { goos: windows, goarch: "386",           output: memodump-server-windows-386.exe   }
+          - { goos: darwin,  goarch: amd64,           output: memodump-server-darwin-amd64      }
+          - { goos: darwin,  goarch: arm64,           output: memodump-server-darwin-arm64      }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: "0"
+        run: go build -ldflags="-s -w" -o "${{ matrix.output }}" .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output }}
+          path: ${{ matrix.output }}
+          retention-days: 7
+
+  # ---- Desktop (Wails): native runners. Gated to tags / manual dispatch because
+  #      macOS runner minutes bill at 10x — we don't want every push to spend them. ----
+  build-desktop:
+    name: Desktop (${{ matrix.label }})
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, label: windows-amd64,   asset: MemoDump-desktop-windows-amd64.exe }
+          - { os: macos-latest,   label: macos-universal,  asset: MemoDump-desktop-macos-universal.zip }
+          - { os: ubuntu-22.04,    label: linux-amd64,     asset: MemoDump-desktop-linux-amd64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Wails on Linux needs GTK3 + WebKit2GTK 4.0 — ubuntu-22.04 ships the 4.0 dev
+      # package (24.04 only has 4.1, which needs a different build tag).
+      - name: Install Linux WebKit/GTK deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+
+      # `wails build` runs the frontend install/build itself (see wails.json).
+      - name: Build desktop app (Linux / Windows)
+        if: runner.os != 'macOS'
+        run: wails build -tags production -ldflags "-s -w"
+
+      - name: Build desktop app (macOS universal)
+        if: runner.os == 'macOS'
+        run: wails build -tags production -ldflags "-s -w" -platform darwin/universal
+
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        run: Copy-Item build/bin/MemoDump.exe "${{ matrix.asset }}"
+
+      - name: Package binary (Linux)
+        if: runner.os == 'Linux'
+        run: cp build/bin/MemoDump "${{ matrix.asset }}"
+
+      # .app is a bundle (directory); ditto zips it preserving the bundle structure.
+      - name: Package app bundle (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent build/bin/MemoDump.app "${{ matrix.asset }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          retention-days: 7
+
+  # ---- Release: collect every artifact onto a GitHub Release for v* tags ----
+  release:
+    name: Release
+    needs: [build-cli, build-desktop]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

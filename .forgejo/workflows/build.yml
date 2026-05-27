@@ -1,11 +1,9 @@
 name: Build & Release
 
+# CI moved to GitHub Actions (.github/workflows/build.yml). This Forgejo workflow
+# is kept for reference / manual runs only and no longer triggers automatically,
+# so Codeberg pushes don't spend runner compute.
 on:
-  push:
-    branches: [public]
-    tags: ['v*']
-  pull_request:
-    branches: [public]
   workflow_dispatch:
 
 env:
