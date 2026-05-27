@@ -138,6 +138,13 @@ function sanitizeName(name) {
   return out.length > 200 ? out.slice(0, 200) : out
 }
 
+// Strip reactivity: callers (Vue) pass reactive Proxy arrays, which IndexedDB's
+// structured-clone cannot serialise ("Proxy object could not be cloned"). Map to
+// a fresh plain array of strings so every record we put() is clone-safe.
+function plainTags(tags) {
+  return Array.isArray(tags) ? tags.map(t => String(t)) : []
+}
+
 // ---- shaping ----
 function toMeta(rec) {
   const body = rec.content || ''
@@ -167,7 +174,7 @@ async function createNoteRec({ name, folder, content, tags }) {
     path = folder ? folder + '/' + filename : filename
   }
   const now = Date.now()
-  const rec = { path, content: content || '', tags: tags || [], modTime: now, created: now }
+  const rec = { path, content: content || '', tags: plainTags(tags), modTime: now, created: now }
   await write((notes, folders) => {
     notes.put(rec)
     ensureFolders(folders, folder)
@@ -220,7 +227,7 @@ const localApi = {
     if (!rec) return apiError(404, 'File not found')
 
     if (data.content != null) rec.content = data.content
-    rec.tags = data.tags || []
+    rec.tags = plainTags(data.tags)
     rec.modTime = Date.now()
 
     let targetPath = path
