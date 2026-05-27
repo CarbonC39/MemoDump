@@ -81,6 +81,26 @@ describe('note CRUD', () => {
   })
 })
 
+describe('reactive (Proxy) inputs', () => {
+  // Vue hands the adapter reactive arrays/objects, which are Proxies. IndexedDB
+  // put() runs structured-clone, which throws "Proxy object could not be cloned"
+  // on any Proxy. The adapter must normalise inputs to plain values before put.
+  it('creates a note whose tags are a Proxy without DataCloneError', async () => {
+    const reactiveTags = new Proxy(['a', 'b'], {})
+    const created = (await localApi.createNote({ name: 'rx', content: 'body', tags: reactiveTags })).data
+    expect(created.tags).toEqual(['a', 'b'])
+    // and it actually round-trips back out of the store
+    expect((await localApi.getNote('rx.md')).data.tags).toEqual(['a', 'b'])
+  })
+
+  it('updates a note with Proxy tags without DataCloneError', async () => {
+    await localApi.createNote({ name: 'u', content: 'x', tags: ['old'] })
+    const upd = (await localApi.updateNote('u.md', { content: 'x', tags: new Proxy(['new'], {}) })).data
+    expect(upd.tags).toEqual(['new'])
+    expect((await localApi.getNote('u.md')).data.tags).toEqual(['new'])
+  })
+})
+
 describe('listNotes scoping & sort', () => {
   it('lists only notes in the requested folder', async () => {
     await localApi.createNote({ name: 'root', content: 'r' })
