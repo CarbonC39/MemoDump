@@ -75,9 +75,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-latest, label: windows-amd64,   asset: MemoDump-desktop-windows-amd64.exe }
-          - { os: macos-latest,   label: macos-universal,  asset: MemoDump-desktop-macos-universal.zip }
-          - { os: ubuntu-22.04,    label: linux-amd64,     asset: MemoDump-desktop-linux-amd64 }
+          - { os: windows-latest, label: windows-amd64,    asset: MemoDump-desktop-windows-amd64.exe,        wails_tags: production }
+          - { os: macos-latest,   label: macos-universal,  asset: MemoDump-desktop-macos-universal.zip,      wails_tags: production }
+          # Two Linux builds: WebKit2GTK 4.0 for older distros (Ubuntu 20.04/22.04),
+          # 4.1 for newer ones (Debian 13, Ubuntu 24.04, recent Fedora). A 4.0 binary
+          # fails on a 4.1-only system with "libwebkit2gtk-4.0.so.37: cannot open ...".
+          - { os: ubuntu-22.04,    label: linux-amd64-webkit40, asset: MemoDump-desktop-linux-amd64-webkit40, wails_tags: production,            apt: libwebkit2gtk-4.0-dev }
+          - { os: ubuntu-22.04,    label: linux-amd64-webkit41, asset: MemoDump-desktop-linux-amd64-webkit41, wails_tags: production,webkit2_41, apt: libwebkit2gtk-4.1-dev }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -92,13 +96,13 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      # Wails on Linux needs GTK3 + WebKit2GTK 4.0 — ubuntu-22.04 ships the 4.0 dev
-      # package (24.04 only has 4.1, which needs a different build tag).
+      # Wails on Linux needs GTK3 + WebKit2GTK. The dev package (4.0 or 4.1) and the
+      # matching wails build tag come from the matrix; ubuntu-22.04 ships both.
       - name: Install Linux WebKit/GTK deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+          sudo apt-get install -y libgtk-3-dev ${{ matrix.apt }}
 
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
@@ -113,11 +117,11 @@ jobs:
 
       - name: Build desktop app (Linux / Windows)
         if: runner.os != 'macOS'
-        run: wails build -tags production -ldflags "-s -w"
+        run: wails build -tags "${{ matrix.wails_tags }}" -ldflags "-s -w"
 
       - name: Build desktop app (macOS universal)
         if: runner.os == 'macOS'
-        run: wails build -tags production -ldflags "-s -w" -platform darwin/universal
+        run: wails build -tags "${{ matrix.wails_tags }}" -ldflags "-s -w" -platform darwin/universal
 
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
