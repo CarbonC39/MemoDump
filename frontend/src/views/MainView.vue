@@ -172,6 +172,9 @@
               <div class="sort-menu-item" :class="{ active: sortMode === 'modified-asc' }" @click="setSort('modified-asc')">
                 <span class="material-icons-outlined sort-check">check</span><span>Oldest modified</span>
               </div>
+              <div class="sort-menu-item" :class="{ active: sortMode === 'title-asc' }" @click="setSort('title-asc')">
+                <span class="material-icons-outlined sort-check">check</span><span>Title (A–Z)</span>
+              </div>
             </div>
           </div>
           <button class="btn btn-icon header-new-btn" @click="createNewNoteIn(currentFolder)" title="New note">
@@ -558,6 +561,8 @@ const sortedDisplayNotes = computed(() => {
   const arr = displayNotes.value.slice()
   if (sortMode.value === 'modified-asc') {
     arr.sort((a, b) => (a.modTime || 0) - (b.modTime || 0))
+  } else if (sortMode.value === 'title-asc') {
+    arr.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' }))
   } else {
     arr.sort((a, b) => (b.modTime || 0) - (a.modTime || 0))
   }
@@ -1989,7 +1994,7 @@ async function uploadFiles(files) {
 .card-name {
   font-size: 14px;
   font-weight: 600;
-  color: #3B6BD4;
+  color: #334155;
   margin-bottom: 0px;
   flex: 1;
   word-break: break-all;
