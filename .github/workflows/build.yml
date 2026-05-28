@@ -164,6 +164,10 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
+          # Pin to the tag's own commit; the default branch may not yet contain
+          # this commit when Codeberg mirrors tag and branch separately, which
+          # makes generate-release-notes fail with "Invalid target_commitish".
+          target_commitish: ${{ github.sha }}
           files: dist/*
           fail_on_unmatched_files: true
           generate_release_notes: true
