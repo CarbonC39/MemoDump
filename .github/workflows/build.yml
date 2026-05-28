@@ -81,7 +81,7 @@ jobs:
           # was removed from the ubuntu-22.04 runner image — libwebkit2gtk-4.0-dev no
           # longer installs, so a 4.0 build dies at link with "cannot find -lwebkit2gtk-4.0".
           # 4.1 is also what current distros ship (Debian 13, Ubuntu 24.04+, recent Fedora).
-          - { os: ubuntu-22.04,    label: linux-amd64,     asset: MemoDump-desktop-linux-amd64,         wails_tags: production,webkit2_41, apt: libwebkit2gtk-4.1-dev }
+          - { os: ubuntu-22.04,    label: linux-amd64,     asset: MemoDump-desktop-linux-amd64,         wails_tags: "production,webkit2_41", apt: libwebkit2gtk-4.1-dev }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
