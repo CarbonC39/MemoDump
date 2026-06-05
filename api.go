@@ -41,6 +41,8 @@ func safePath(base string, userPath string) (string, error) {
 type NoteCacheEntry struct {
 	Note      Note
 	ModTime   int64
+	Size      int64
+	Body      string
 	BodyLower string
 }
 
@@ -64,28 +66,66 @@ type Folder struct {
 	Notes    []Note   `json:"notes,omitempty"`
 }
 
-var frontMatterRe = regexp.MustCompile(`(?s)\A---\n(.*?)\n---\n?`)
 var tagLineRe = regexp.MustCompile(`(?m)^tags:\s*\[([^\]]*)\]`)
 
+// parseFrontMatter splits leading YAML front matter from the body. Rather than
+// running a dot-all regex over the whole file (cost grows with body size), it
+// scans the header line by line. The closing fence must be a line that is exactly
+// "---", so a Markdown horizontal rule later in the document ("----", "--- text")
+// is not mistaken for the terminator. If no such fence exists, the whole content
+// is treated as the body and no front matter is parsed.
 func parseFrontMatter(content string) (tags []string, body string) {
-	matches := frontMatterRe.FindStringSubmatch(content)
-	if matches == nil {
+	// Front matter must begin at the very start with a "---\n" delimiter.
+	if !strings.HasPrefix(content, "---\n") {
 		return nil, content
 	}
-	fm := matches[1]
-	body = content[len(matches[0]):]
-
-	tagMatch := tagLineRe.FindStringSubmatch(fm)
-	if tagMatch != nil {
-		raw := tagMatch[1]
-		for _, t := range strings.Split(raw, ",") {
-			t = strings.TrimSpace(t)
-			if t != "" {
-				tags = append(tags, t)
-			}
+	rest := content[4:]
+	for pos := 0; ; {
+		nl := strings.IndexByte(rest[pos:], '\n')
+		line := rest[pos:]
+		if nl >= 0 {
+			line = rest[pos : pos+nl]
 		}
+		// Tolerate CRLF: a "---\r" line is still a valid fence.
+		if strings.TrimSuffix(line, "\r") == "---" {
+			fm := rest[:pos]
+			if nl >= 0 {
+				body = rest[pos+nl+1:]
+			}
+			if tagMatch := tagLineRe.FindStringSubmatch(fm); tagMatch != nil {
+				for _, t := range strings.Split(tagMatch[1], ",") {
+					if t = strings.TrimSpace(t); t != "" {
+						tags = append(tags, t)
+					}
+				}
+			}
+			return tags, body
+		}
+		if nl < 0 {
+			break // reached end without a closing fence
+		}
+		pos += nl + 1
 	}
-	return tags, body
+	return nil, content
+}
+
+// truncateRunes returns s clamped to at most max runes, never splitting a
+// multi-byte UTF-8 character mid-rune (a plain s[:max] byte slice can).
+func truncateRunes(s string, max int) string {
+	// Fast path: byte length is an upper bound on rune count, so len(s) <= max
+	// (bytes) guarantees at most max runes — no truncation needed. The byte/rune
+	// unit mismatch here is intentional, not a bug.
+	if len(s) <= max {
+		return s
+	}
+	count := 0
+	for i := range s {
+		if count == max {
+			return s[:i]
+		}
+		count++
+	}
+	return s
 }
 
 func buildFrontMatter(tags []string) string {
@@ -104,17 +144,19 @@ func readNote(fullPath string, basePath string, includeContent bool) (*Note, err
 		return nil, err
 	}
 	modTime := info.ModTime().UnixMilli()
+	size := info.Size()
 
+	// A cache entry is valid only when BOTH mtime and size match. Comparing size
+	// as well catches same-second rewrites that filesystems with coarse mtime
+	// granularity would otherwise hide, preventing stale reads.
 	if entry, ok := noteCache.Load(fullPath); ok {
 		cached := entry.(*NoteCacheEntry)
-		if cached.ModTime == modTime {
+		if cached.ModTime == modTime && cached.Size == size {
 			noteCopy := cached.Note
 			if includeContent {
-				data, err := os.ReadFile(fullPath)
-				if err == nil {
-					_, body := parseFrontMatter(string(data))
-					noteCopy.Content = body
-				}
+				// Body is cached, so a content read on a cache hit no longer
+				// re-reads/re-parses the file (and can't silently return empty).
+				noteCopy.Content = cached.Body
 			}
 			return &noteCopy, nil
 		}
@@ -140,14 +182,16 @@ func readNote(fullPath string, basePath string, includeContent bool) (*Note, err
 	}
 
 	preview := strings.TrimSpace(body)
-	if len(preview) > 1000 {
-		preview = preview[:1000] + "..."
+	if utf8.RuneCountInString(preview) > 1000 {
+		preview = truncateRunes(preview, 1000) + "..."
 	}
 	note.Preview = preview
 
 	noteCache.Store(fullPath, &NoteCacheEntry{
 		Note:      note,
 		ModTime:   modTime,
+		Size:      size,
+		Body:      body,
 		BodyLower: strings.ToLower(body),
 	})
 
@@ -235,8 +279,9 @@ func handleCreateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate filename
-	filename := req.Name
+	// Generate filename. Sanitize the user-supplied name first so it cannot
+	// contain path separators or traversal segments (e.g. "../../evil").
+	filename := sanitizeUploadName(req.Name)
 	if filename == "" {
 		filename = time.Now().Format("2006-01-02_150405")
 	}
@@ -254,7 +299,12 @@ func handleCreateNote(w http.ResponseWriter, r *http.Request) {
 		}
 		os.MkdirAll(dir, 0755)
 	}
-	fullPath := filepath.Join(dir, filename)
+	// Defense in depth: confirm the assembled path stays inside the data dir.
+	fullPath, err := safePath(dir, filename)
+	if err != nil {
+		http.Error(w, `{"error":"Path is illegal"}`, http.StatusBadRequest)
+		return
+	}
 
 	// Avoid overwriting
 	if _, err := os.Stat(fullPath); err == nil {
@@ -352,6 +402,9 @@ func handleUpdateNote(w http.ResponseWriter, r *http.Request) {
 		noteCache.Delete(fullPath)
 		os.Remove(fullPath)
 	}
+	// Invalidate the target's cache so the re-read below reflects this write even
+	// if the filesystem reports an unchanged mtime/size for the rewrite.
+	noteCache.Delete(targetPath)
 
 	note, _ := readNote(targetPath, dataDir, true)
 	writeJSON(w, http.StatusOK, note)
@@ -803,10 +856,7 @@ func sanitizeUploadName(name string) string {
 		}
 	}
 	result := strings.Trim(b.String(), " .")
-	if len(result) > 200 {
-		result = result[:200]
-	}
-	return result
+	return truncateRunes(result, 200)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

@@ -405,8 +405,9 @@
     <div v-if="copyDialog.visible" class="modal-overlay" @click.self="copyDialog.visible = false">
       <div class="prompt-modal">
         <h3>Copy Text</h3>
-        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">Long-press the text below to copy:</p>
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">Tap Copy, or long-press the text to copy manually:</p>
         <textarea
+          ref="copyDialogTextarea"
           class="input"
           :value="copyDialog.content"
           readonly
@@ -415,6 +416,7 @@
         />
         <div class="prompt-actions">
           <button class="btn btn-ghost" @click="copyDialog.visible = false">Close</button>
+          <button class="btn btn-primary" @click="copyFromDialog">Copy</button>
         </div>
       </div>
     </div>
@@ -521,6 +523,33 @@ const contextMenu = reactive({
 
 // Copy dialog — shown as iOS PWA fallback when clipboard API fails
 const copyDialog = reactive({ visible: false, content: '' })
+const copyDialogTextarea = ref(null)
+
+// Copy from the fallback dialog. This runs inside a fresh click gesture, so the
+// clipboard/execCommand calls work here even when the original (post-await)
+// attempt failed for lack of user activation.
+async function copyFromDialog() {
+  const content = copyDialog.content
+  const ta = copyDialogTextarea.value
+  if (ta) {
+    ta.focus({ preventScroll: true })
+    ta.setSelectionRange(0, ta.value.length)
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(content)
+      copyDialog.visible = false
+      return
+    }
+  } catch (_) {}
+  try {
+    if (document.execCommand('copy')) {
+      copyDialog.visible = false
+      return
+    }
+  } catch (_) {}
+  // Leave the dialog open with the text selected so the user can copy manually.
+}
 
 // Folder Picker Modal State
 const folderPicker = reactive({ visible: false, selected: '', newFolderActive: false, newFolderName: '' })
