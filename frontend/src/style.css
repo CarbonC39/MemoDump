@@ -28,12 +28,16 @@
   --header-height: 48px;
 
   /* Markdown accent colors — blue/pink/purple family */
-  --md-bold: #3B6BD4;
+  --md-blue: #5979bf;
+  --md-bold: var(--md-blue);
   --md-link: #9050BA;
   --md-code-fg: #6B54A8;
   --md-code-bg: #EDE9F8;
   --md-quote-border: #9B87C8;
   --md-quote-bg: #F4F0FA;
+
+  /* Waterfall card title */
+  --waterfall-title: #625d98;
 }
 
 * {
@@ -146,7 +150,7 @@ a {
   font-weight: 800;
   margin: 1em 0 0.5em;
   line-height: 1.3;
-  color: #3B6BD4;
+  color: var(--md-blue);
 }
 
 .milkdown .editor h2 {
@@ -155,7 +159,7 @@ a {
   font-weight: 700;
   margin: 0.8em 0 0.4em;
   line-height: 1.35;
-  color: #3B6BD4;
+  color: var(--md-blue);
 }
 
 .milkdown .editor h3 {
@@ -164,7 +168,7 @@ a {
   font-weight: 700;
   margin: 0.6em 0 0.3em;
   line-height: 1.4;
-  color: #5681CE;
+  color: var(--md-blue);
 }
 
 .milkdown .editor h4,
@@ -175,7 +179,7 @@ a {
   font-weight: 600;
   margin: 0.5em 0 0.25em;
   line-height: 1.5;
-  color: #5681CE;
+  color: var(--md-blue);
 }
 
 .milkdown .editor p {

@@ -2018,7 +2018,7 @@ async function uploadFiles(files) {
 .card-name {
   font-size: 14px;
   font-weight: 600;
-  color: #3B6BD4;
+  color: var(--waterfall-title);
   margin-bottom: 0px;
   flex: 1;
   word-break: break-all;
