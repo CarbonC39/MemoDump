@@ -195,24 +195,16 @@ onBeforeUnmount(() => {
   display: inline;
 }
 
-/* ===== Completed task: gray + strikethrough ===== */
-.crepe-editor :deep(.editor li[data-type="taskItem"][data-checked="true"]),
-.crepe-editor :deep(.editor li[data-checked="true"]),
-.crepe-editor :deep(.editor .task-list-item.checked),
-.crepe-editor :deep(.editor li[data-type="taskItem"]:has(> label input[type="checkbox"]:checked)),
-.crepe-editor :deep(.editor li.task-list-item:has(> label input[type="checkbox"]:checked)),
-.crepe-editor :deep(.editor li[data-type="taskItem"]:has(> input[type="checkbox"]:checked)),
-.crepe-editor :deep(.editor li.task-list-item:has(> input[type="checkbox"]:checked)) {
+/* ===== Completed task: gray + strikethrough =====
+   Crepe renders task items via its listItemBlockComponent, not the
+   `data-type`/`<input>` shape the old selectors here assumed:
+   <li class="list-item"><div class="label-wrapper"><span class="label checked|unchecked">...
+   so match on that real DOM instead. */
+.crepe-editor :deep(.editor li.list-item:has(> .label-wrapper .label.checked)) {
   color: var(--text-muted, #9aa0a6);
   text-decoration: line-through;
 }
-.crepe-editor :deep(.editor li[data-type="taskItem"][data-checked="true"] p),
-.crepe-editor :deep(.editor li[data-checked="true"] p),
-.crepe-editor :deep(.editor .task-list-item.checked p),
-.crepe-editor :deep(.editor li[data-type="taskItem"]:has(> label input[type="checkbox"]:checked) p),
-.crepe-editor :deep(.editor li.task-list-item:has(> label input[type="checkbox"]:checked) p),
-.crepe-editor :deep(.editor li[data-type="taskItem"]:has(> input[type="checkbox"]:checked) p),
-.crepe-editor :deep(.editor li.task-list-item:has(> input[type="checkbox"]:checked) p) {
+.crepe-editor :deep(.editor li.list-item:has(> .label-wrapper .label.checked) > .children) {
   color: inherit;
   text-decoration: inherit;
 }
