@@ -182,6 +182,9 @@
 
         <!-- Fixed right: save & delete — do NOT scroll -->
         <div class="header-right" v-else-if="editingNote">
+          <button class="btn btn-sm btn-icon btn-ghost" @click="toggleEditorMode" :title="editorMode === 'wysiwyg' ? 'Switch to raw markdown' : 'Switch to rich text'">
+            <span class="material-icons-outlined" style="font-size:16px">{{ editorMode === 'wysiwyg' ? 'code' : 'visibility' }}</span>
+          </button>
           <button class="save-btn" :class="{ dirty: isDirty }" @click="saveNote">
             <span class="save-dot" v-if="isDirty"></span>
             Save
@@ -251,10 +254,18 @@
         <!-- Editor -->
         <div v-else-if="editingNote" class="editor-wrap">
           <MilkdownEditor
+            v-if="editorMode === 'wysiwyg'"
             :key="editorKey"
             :initial-content="editingNote.content || ''"
             @update="onEditorUpdate"
           />
+          <textarea
+            v-else
+            class="raw-editor"
+            v-model="editContent"
+            @input="isDirty = true"
+            placeholder="Raw markdown..."
+          ></textarea>
         </div>
 
         <!-- Waterfall notes view -->
@@ -505,6 +516,22 @@ const tagInput = ref('')
 const editorKey = ref(0)
 // Dirty state: tracks whether the editor has unsaved changes
 const isDirty = ref(false)
+
+const editorMode = ref('wysiwyg') // 'wysiwyg' | 'raw'
+
+async function toggleEditorMode() {
+  // Wait a tick so any in-flight Milkdown `update` emit (which sets
+  // editContent synchronously on every keystroke) has been processed by Vue
+  // before we unmount the wysiwyg editor — otherwise the very last keystroke
+  // before the click could be dropped.
+  await nextTick()
+  const switchingToWysiwyg = editorMode.value === 'raw'
+  editorMode.value = editorMode.value === 'wysiwyg' ? 'raw' : 'wysiwyg'
+  if (switchingToWysiwyg) {
+    editingNote.value.content = editContent.value
+    editorKey.value++
+  }
+}
 
 // Title input width tracks the actual rendered text width (via a hidden
 // mirror span) instead of the HTML `size` attribute, which only approximates
@@ -1973,6 +2000,20 @@ async function uploadFiles(files) {
   min-height: 100%;
   display: flex;
   flex-direction: column;
+}
+.raw-editor {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 16px;
+  font-family: 'Roboto Mono', 'Consolas', 'Menlo', monospace;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text);
+  background: var(--bg-card);
 }
 
 /* Search results */
