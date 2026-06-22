@@ -218,7 +218,7 @@
           </div>
           <div class="waterfall-grid">
             <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(searchResults)" :key="ci">
-              <div v-for="note in col" :key="note.path" class="waterfall-card"
+              <div v-for="note in col" :key="note.path" class="waterfall-card" v-measure-card="note.path"
                 :draggable="hoveredNotePath !== note.path" @dragstart="onNoteDragStart($event, note)">
                 <div class="card-header" v-if="note.hasCustomName">
                   <div class="card-name">{{ note.name }}</div>
@@ -276,7 +276,7 @@
           </div>
           <div v-else class="waterfall-grid">
             <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(sortedDisplayNotes)" :key="ci">
-              <div v-for="note in col" :key="note.path" class="waterfall-card"
+              <div v-for="note in col" :key="note.path" class="waterfall-card" v-measure-card="note.path"
                 :draggable="hoveredNotePath !== note.path" @dragstart="onNoteDragStart($event, note)">
                 <div class="card-header" v-if="note.hasCustomName">
                   <div class="card-name">{{ note.name }}</div>
@@ -740,6 +740,36 @@ const vCheckOverflow = {
   }
 }
 
+const cardHeights = reactive({})
+
+// Measures each waterfall card's rendered height so splitIntoColumns can
+// balance columns by actual height instead of just round-robin count. Skips
+// updates while the card is expanded so expanding one card never triggers a
+// reflow of other columns (existing, intentional behavior).
+const vMeasureCard = {
+  mounted(el, binding) {
+    const path = binding.value
+    const measure = () => {
+      if (expandedCards.value.has(path)) return
+      const h = el.offsetHeight
+      if (h > 0 && cardHeights[path] !== h) {
+        cardHeights[path] = h
+      }
+    }
+    measure()
+    el._measureTimer = setTimeout(measure, 50)
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(measure)
+      ro.observe(el)
+      el._measureRo = ro
+    }
+  },
+  unmounted(el) {
+    if (el._measureRo) el._measureRo.disconnect()
+    if (el._measureTimer) clearTimeout(el._measureTimer)
+  }
+}
+
 async function toggleExpand(path) {
   const newSet = new Set(expandedCards.value)
   if (newSet.has(path)) {
@@ -759,13 +789,28 @@ async function toggleExpand(path) {
   expandedCards.value = newSet
 }
 
-// Distribute notes into N equal columns (round-robin) so each column is
-// an independent flex container — expansion of one card never reflowes
-// cards in other columns.
+// Distribute notes into N columns, greedily assigning each note to the
+// currently-shortest column using measured heights (cardHeights), so all
+// columns end up roughly equal in total height instead of equal in count.
+// Falls back to a text-length estimate for notes that haven't been measured
+// yet (e.g. first render, before any ResizeObserver has fired).
+function estimateHeight(note) {
+  const textLen = (note.plainPreview || '').length + (note.hasCustomName ? note.name.length : 0)
+  return 80 + textLen * 0.6 // rough: card padding/header + ~0.6px per char of preview
+}
+
 function splitIntoColumns(notes) {
   const n = columnCount.value
   const cols = Array.from({ length: n }, () => [])
-  notes.forEach((note, i) => cols[i % n].push(note))
+  const colHeights = Array.from({ length: n }, () => 0)
+  notes.forEach((note) => {
+    let shortest = 0
+    for (let i = 1; i < n; i++) {
+      if (colHeights[i] < colHeights[shortest]) shortest = i
+    }
+    cols[shortest].push(note)
+    colHeights[shortest] += cardHeights[note.path] || estimateHeight(note)
+  })
   return cols
 }
 
