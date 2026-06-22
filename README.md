@@ -1,6 +1,10 @@
 # MemoDump
 
 <p align="center">
+  English | <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
   <img src="frontend/public/memodump.svg" alt="MemoDump logo" width=150/>
 </p>
 
@@ -9,9 +13,17 @@
   <img alt="License" src="https://img.shields.io/badge/License-MIT-green" />
   <img alt="PWA" src="https://img.shields.io/badge/PWA-ready-5A0FC8?logo=pwa&logoColor=white" />
   <img alt="Wails" src="https://img.shields.io/badge/Desktop-Wails-red?logo=go" />
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-ghcr.io-2496ED?logo=docker&logoColor=white" />
 </p>
 
-A lightweight, single-binary Markdown notes app. Run it as a self-hosted web server or as a native desktop application (via [Wails](https://wails.io/)).
+<p align="center">
+  <a href="https://memodump.carbonc.cc/">Website</a> ·
+  <a href="https://memodump.vercel.app/">Live Demo</a>
+</p>
+
+A lightweight, single-binary Markdown notes app. Run it as a self-hosted web server, a native desktop application (via [Wails](https://wails.io/)), or a Docker container.
+
+> The [live demo](https://memodump.vercel.app/) runs in no-auth mode against ephemeral storage for trying out the editor — don't store anything you care about there.
 
 ## Features
 
@@ -112,6 +124,26 @@ The Wails build wraps the same backend in a native window — no browser or open
 
 ---
 
+## Docker
+
+Pre-built images are published to GitHub Container Registry on every tagged release: `ghcr.io/carbonc/memodump`. The image runs the headless CLI server only (the Wails desktop build doesn't apply in a container).
+
+```sh
+# No authentication
+docker run -d -p 8080:8080 -v ./notes:/data ghcr.io/carbonc/memodump:latest
+
+# With credentials and a custom port
+docker run -d -p 9090:9090 -v ./notes:/data \
+  -e MEMODUMP_USER=alice -e MEMODUMP_PASS=secret -e MEMODUMP_PORT=9090 \
+  ghcr.io/carbonc/memodump:latest
+```
+
+The data volume mounts to `/data` (set via `MEMODUMP_DATA=/data` inside the image). Available tags: `latest`, `vX.Y.Z`, `vX.Y`. All [CLI environment variables](#configuration-sources) work the same way inside the container.
+
+Build the image locally with `docker build -t memodump .` (see `Dockerfile`).
+
+---
+
 ## Building
 
 ### Prerequisites
@@ -175,31 +207,38 @@ memodump/
 │   └── src/
 │       ├── views/MainView.vue
 │       └── style.css
-└── .forgejo/workflows/build.yml
+├── Dockerfile        # Headless CLI server image (multi-stage: frontend → go build → distroless)
+└── .github/workflows/build.yml   # CI/CD (primary) — see below
 ```
 
 ---
 
-## CI / CD (Forgejo Actions on Codeberg)
+## CI / CD
 
-The workflow (`.forgejo/workflows/build.yml`) runs on every push/PR to `public` and on `v*` tags.
+CI runs on **GitHub Actions** (`.github/workflows/build.yml`), triggered on every push/PR to `public`/`main` and on `v*` tags. A Forgejo Actions workflow (`.forgejo/workflows/build.yml`) is kept on Codeberg for manual/reference runs only and no longer triggers automatically.
 
-### `build` — CLI cross-compilation
+### `build-cli` — CLI cross-compilation
 
-Builds on `ubuntu-latest` for all targets:
+Runs on every push/PR (cheap, Linux-hosted cross-compilation):
 
 | Target | Output |
 |--------|--------|
-| Linux amd64 | `memodump-linux-amd64` |
-| Linux arm64 | `memodump-linux-arm64` |
-| Linux arm | `memodump-linux-arm` |
-| Windows amd64 | `memodump-windows-amd64.exe` |
-| Windows 386 | `memodump-windows-386.exe` |
-| macOS amd64 | `memodump-darwin-amd64` |
-| macOS arm64 | `memodump-darwin-arm64` |
+| Linux amd64 | `memodump-server-linux-amd64` |
+| Linux arm64 | `memodump-server-linux-arm64` |
+| Linux arm | `memodump-server-linux-arm` |
+| Windows amd64 | `memodump-server-windows-amd64.exe` |
+| Windows 386 | `memodump-server-windows-386.exe` |
+| macOS amd64 | `memodump-server-darwin-amd64` |
+| macOS arm64 | `memodump-server-darwin-arm64` |
 
-### `release` — Codeberg Release
+### `build-desktop` — Wails desktop builds
 
-Triggered only on `v*` tags. Uploads all artifacts to a Codeberg release via the Forgejo API.
+Gated to `v*` tags / manual dispatch (native macOS/Windows/Linux runners bill more, so they don't run on every push): Windows amd64, macOS universal, Linux amd64.
 
-> **Desktop builds** (Wails) require native macOS/Windows runners and are not included in the automated workflow. Build locally with `wails build`.
+### `docker` — Docker image
+
+Also gated to `v*` tags / manual dispatch. Builds `linux/amd64` + `linux/arm64` and pushes to `ghcr.io/carbonc/memodump`, tagged `latest`, `vX.Y.Z`, and `vX.Y`.
+
+### `release` — GitHub Release + Codeberg sync
+
+Triggered only on `v*` tags. Collects every build artifact onto a GitHub Release, then mirrors the release (and its assets) to Codeberg via the Forgejo API.
