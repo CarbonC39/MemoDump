@@ -5,11 +5,41 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { Crepe } from '@milkdown/crepe'
+import { $prose } from '@milkdown/utils'
+import { Plugin, PluginKey } from '@milkdown/prose/state'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/frame.css'
 
 const props = defineProps({
   initialContent: { type: String, default: '' },
+})
+
+// Milkdown's task-list `checked` attr lives on the list_item node, separate
+// from its text content. If a checked item's text is fully cleared and new
+// text typed in, the node is reused and `checked` survives untouched. Force
+// `checked` back to null the moment an item's content becomes empty, so a
+// freshly emptied line never silently "inherits" a previous done state.
+const resetEmptiedTaskItemPlugin = $prose(() => {
+  return new Plugin({
+    key: new PluginKey('reset-emptied-task-item'),
+    appendTransaction(transactions, _oldState, newState) {
+      if (!transactions.some((tr) => tr.docChanged)) return null
+      let tr = null
+      newState.doc.descendants((node, pos) => {
+        if (
+          node.type.name === 'list_item' &&
+          node.attrs.checked != null &&
+          node.textContent.length === 0
+        ) {
+          tr = (tr || newState.tr).setNodeMarkup(pos, undefined, {
+            ...node.attrs,
+            checked: null,
+          })
+        }
+      })
+      return tr
+    },
+  })
 })
 
 const emit = defineEmits(['update'])
@@ -50,6 +80,7 @@ onMounted(async () => {
       }
     }
   })
+  crepeInstance.editor.use(resetEmptiedTaskItemPlugin)
 
   crepeInstance.on((listener) => {
     listener.markdownUpdated((_, markdown) => {
