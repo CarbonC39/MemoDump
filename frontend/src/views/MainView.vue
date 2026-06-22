@@ -127,10 +127,11 @@
             ref="titleInputRef"
             class="header-title-input"
             v-model="editName"
-            :size="Math.max(10, (editName || 'Untitled').length + 2)"
+            :style="{ width: titleInputWidth + 'px' }"
             placeholder="Untitled"
             @input="isDirty = true"
           />
+          <span ref="titleMirrorRef" class="header-title-mirror" aria-hidden="true">{{ editName || 'Untitled' }}</span>
           <span class="header-meta-sep">·</span>
           <button class="note-folder-btn" @click="pickEditFolder">
             <span class="material-icons-outlined">{{ editFolder ? 'folder' : 'home' }}</span>
@@ -444,7 +445,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, reactive, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, reactive, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import apiClient from '../api'
 import MilkdownEditor from '../components/MilkdownEditor.vue'
@@ -504,6 +505,20 @@ const tagInput = ref('')
 const editorKey = ref(0)
 // Dirty state: tracks whether the editor has unsaved changes
 const isDirty = ref(false)
+
+// Title input width tracks the actual rendered text width (via a hidden
+// mirror span) instead of the HTML `size` attribute, which only approximates
+// width by character count and drifts badly with a proportional font.
+const titleMirrorRef = ref(null)
+const titleInputWidth = ref(80)
+
+function updateTitleInputWidth() {
+  if (!titleMirrorRef.value) return
+  // +12px so the caret has room past the last character
+  titleInputWidth.value = Math.max(60, titleMirrorRef.value.scrollWidth + 12)
+}
+
+watch(editName, () => nextTick(updateTitleInputWidth), { immediate: true })
 
 let keepaliveInterval = null
 let searchDebounceTimer = null
@@ -1854,6 +1869,17 @@ async function uploadFiles(files) {
   font-family: inherit;
   caret-color: var(--primary);
   min-width: 60px;
+  transition: width 0.1s ease;
+}
+.header-title-mirror {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 4px 4px;
+  pointer-events: none;
 }
 .header-title-input::placeholder {
   color: var(--text-muted);
