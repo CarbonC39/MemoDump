@@ -991,6 +991,71 @@ function handleBeforeUnload(e) {
   }
 }
 
+// ======= AUTOSAVE (iOS PWA data-loss prevention) =======
+// iOS Safari/PWA frequently suspends or evicts a backgrounded tab without
+// ever firing beforeunload, so manual-save-only loses unsaved edits. Save
+// debounced shortly after each edit, and immediately when the tab is hidden
+// or about to be torn down.
+let autosaveTimer = null
+let autosaving = false
+
+function scheduleAutosave() {
+  if (autosaveTimer) clearTimeout(autosaveTimer)
+  autosaveTimer = setTimeout(() => {
+    if (isDirty.value && editingNote.value && !autosaving) {
+      runAutosave()
+    }
+  }, 3000)
+}
+
+async function runAutosave() {
+  autosaving = true
+  try {
+    await saveNote()
+  } finally {
+    autosaving = false
+  }
+}
+
+watch(isDirty, (dirty) => {
+  if (dirty) scheduleAutosave()
+})
+
+function persistDraftToLocalStorage() {
+  try {
+    localStorage.setItem('memodump_draft', JSON.stringify({
+      content: editContent.value,
+      name: editName.value,
+      tags: editTags.value,
+      folder: editFolder.value,
+      path: editingNote.value?.path || '',
+    }))
+  } catch (_) {}
+}
+
+async function flushSaveOrFallback() {
+  if (!isDirty.value || !editingNote.value || autosaving) return
+  autosaving = true
+  try {
+    await saveNote({ silent: true })
+  } catch (_) {
+    // Network unavailable (e.g. backgrounded PWA with no connectivity) —
+    // fall back to the same localStorage draft mechanism already used for
+    // the 401/session-expiry case, so the next launch can restore it.
+    persistDraftToLocalStorage()
+  } finally {
+    autosaving = false
+  }
+}
+
+function handleVisibilityChange() {
+  if (document.hidden) flushSaveOrFallback()
+}
+
+function handlePageHide() {
+  flushSaveOrFallback()
+}
+
 function handleGlobalKeydown(e) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
     e.preventDefault()
@@ -1054,6 +1119,8 @@ onMounted(async () => {
   window.addEventListener('resize', updateColumnCount)
   window.addEventListener('keydown', handleGlobalKeydown)
   window.addEventListener('beforeunload', handleBeforeUnload)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  window.addEventListener('pagehide', handlePageHide)
   // Ping every 15 minutes to keep session alive while app is open
   keepaliveInterval = setInterval(() => {
     apiClient.ping().catch(() => {})
@@ -1086,8 +1153,11 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', updateColumnCount)
   window.removeEventListener('keydown', handleGlobalKeydown)
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  window.removeEventListener('pagehide', handlePageHide)
   if (keepaliveInterval) clearInterval(keepaliveInterval)
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+  if (autosaveTimer) clearTimeout(autosaveTimer)
 })
 
 async function loadAll() {
@@ -1188,7 +1258,7 @@ function addTag() {
   tagInput.value = ''
 }
 
-async function saveNote() {
+async function saveNote({ silent = false } = {}) {
   try {
     let resultNode;
     if (editingNote.value.path) {
@@ -1240,6 +1310,7 @@ async function saveNote() {
       // The api interceptor will redirect to /login automatically
       return
     }
+    if (silent) throw e
     alert('Save failed: ' + (e.response?.data?.error || e.message))
   }
 }
