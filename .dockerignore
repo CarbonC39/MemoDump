@@ -1,0 +1,10 @@
+.git
+.github
+.forgejo
+build
+frontend/node_modules
+frontend/dist
+node_modules
+*.exe
+memodump
+docs
