@@ -277,8 +277,6 @@ a {
 
 /* HR */
 .milkdown .editor hr {
-  border: none;
-  border-top: 1px solid var(--border);
   margin: 1em 0;
 }
 

@@ -292,9 +292,11 @@ onBeforeUnmount(() => {
   border-left-color: #6495ED;
 }
 
-/* ===== Fix horizontal rule spacing ===== */
+/* ===== Fix horizontal rule: one solid blue line, not a translucent double line ===== */
 .crepe-editor :deep(.editor hr) {
   margin: 1em 0;
+  background-color: var(--md-blue, #5979bf) !important;
+  background-clip: content-box !important;
 }
 
 /* ===== Fix heading font sizes ===== */
