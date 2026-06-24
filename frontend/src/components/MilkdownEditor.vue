@@ -28,7 +28,7 @@ const resetEmptiedTaskItemPlugin = $prose(() => {
       newState.doc.descendants((node, pos) => {
         if (
           node.type.name === 'list_item' &&
-          node.attrs.checked != null &&
+          node.attrs.checked === true &&
           node.textContent.length === 0
         ) {
           tr = (tr || newState.tr).setNodeMarkup(pos, undefined, {
