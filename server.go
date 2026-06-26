@@ -84,6 +84,7 @@ func buildAPIMux() *http.ServeMux {
 	mux.HandleFunc("PUT /api/notes/{path...}", authMiddleware(handleUpdateNote))
 	mux.HandleFunc("DELETE /api/notes/{path...}", authMiddleware(handleDeleteNote))
 	mux.HandleFunc("PUT /api/move/{path...}", authMiddleware(handleMoveNote))
+	mux.HandleFunc("POST /api/duplicate/{path...}", authMiddleware(handleDuplicateNote))
 	mux.HandleFunc("GET /api/folders", authMiddleware(handleListFolders))
 	mux.HandleFunc("POST /api/folders", authMiddleware(handleCreateFolder))
 	mux.HandleFunc("PUT /api/folders/{path...}", authMiddleware(handleRenameFolder))

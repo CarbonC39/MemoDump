@@ -523,6 +523,50 @@ func handleMoveNote(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, note)
 }
 
+// handleDuplicateNote creates a copy of a note in the same folder. The raw file
+// bytes are copied verbatim so YAML front matter and tags survive byte-for-byte.
+// The copy is named "<base> (copy).md", de-colliding as "(copy 2)", "(copy 3)"...
+func handleDuplicateNote(w http.ResponseWriter, r *http.Request) {
+	notePath := r.PathValue("path")
+	fullPath, err := safePath(dataDir, notePath)
+	if err != nil {
+		http.Error(w, `{"error":"Path is illegal"}`, http.StatusBadRequest)
+		return
+	}
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		http.Error(w, `{"error":"File not found"}`, http.StatusNotFound)
+		return
+	}
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		http.Error(w, `{"error":"Failed to read note"}`, http.StatusInternalServerError)
+		return
+	}
+
+	dir := filepath.Dir(fullPath)
+	base := strings.TrimSuffix(filepath.Base(fullPath), ".md")
+	candidate := base + " (copy).md"
+	n := 2
+	for {
+		destPath, err := safePath(dir, candidate)
+		if err != nil {
+			http.Error(w, `{"error":"Path is illegal"}`, http.StatusBadRequest)
+			return
+		}
+		if _, err := os.Stat(destPath); os.IsNotExist(err) {
+			if err := os.WriteFile(destPath, data, 0644); err != nil {
+				http.Error(w, `{"error":"Failed to save note"}`, http.StatusInternalServerError)
+				return
+			}
+			note, _ := readNote(destPath, dataDir, true)
+			writeJSON(w, http.StatusCreated, note)
+			return
+		}
+		candidate = fmt.Sprintf("%s (copy %d).md", base, n)
+		n++
+	}
+}
+
 // handleListFolders returns folder tree
 func handleListFolders(w http.ResponseWriter, r *http.Request) {
 	tree := buildFolderTree(dataDir, dataDir)
