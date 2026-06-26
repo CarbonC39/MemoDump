@@ -49,6 +49,9 @@ const remoteApi = {
     moveNote(path, destination) {
         return api.put(`/move/${path}`, { destination })
     },
+    duplicateNote(path) {
+        return api.post(`/duplicate/${path}`)
+    },
     moveFolder(path, destination) {
         return api.put(`/move/folder/${path}`, { destination })
     },
