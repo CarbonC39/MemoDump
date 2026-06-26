@@ -2,8 +2,10 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -25,21 +27,48 @@ func parseEnvFile(path string) map[string]string {
 		return result
 	}
 	defer f.Close()
+
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+
 		idx := strings.IndexByte(line, '=')
 		if idx < 0 {
 			continue
 		}
+
 		key := strings.TrimSpace(line[:idx])
-		val := strings.TrimSpace(line[idx+1:])
-		if key != "" {
-			result[key] = val
+		if key == "" {
+			continue
 		}
+
+		val := strings.TrimSpace(line[idx+1:])
+		if len(val) > 0 {
+			if (val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'') {
+				if unquoted, err := strconv.Unquote(val); err == nil {
+					val = unquoted
+				} else if val[0] == '\'' {
+					val = strings.Trim(val, "'")
+				}
+			} else {
+				// Strip an inline comment, but only when the '#' follows
+				// whitespace, so values like passwords or "#fff" survive.
+				for i := 1; i < len(val); i++ {
+					if val[i] == '#' && (val[i-1] == ' ' || val[i-1] == '\t') {
+						val = strings.TrimSpace(val[:i])
+						break
+					}
+				}
+			}
+		}
+		result[key] = val
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "error reading env file %s: %v\n", path, err)
 	}
 	return result
 }
@@ -70,7 +99,8 @@ func buildAPIMux() *http.ServeMux {
 
 // handleCustomCSS serves the user-supplied stylesheet (via --css flag).
 // Always 200 with text/css so the frontend's unconditional <link> tag
-// doesn't log a 404 when no CSS is configured.
+// doesn't log a 404 when no CSS is configured. Cache-Control: no-cache lets the
+// browser store it but forces revalidation, so edits show up on the next reload.
 func handleCustomCSS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")

@@ -22,7 +22,7 @@
             <span class="material-icons-outlined">search</span>
             <span class="nav-text">{{ t('sidebar.search') }}</span>
           </div>
-          
+
           <div class="nav-item" :class="{ active: !searchOpen && !currentFolder && !editingNote }" @click="handleAllClick()">
             <span class="material-icons-outlined">sticky_note_2</span>
             <span class="nav-text">{{ t('sidebar.allNotes') }}</span>
@@ -233,8 +233,8 @@
                 <button v-else class="btn btn-icon btn-ghost btn-sm card-menu-btn" style="position: absolute; top: 12px; right: 14px; margin: 0; z-index: 2" @click.stop="openContextMenuBtn($event, note)">
                   <span class="material-icons-outlined">more_vert</span>
                 </button>
-                <div class="card-preview" draggable="false" 
-                  @mouseenter="hoveredNotePath = note.path" 
+                <div class="card-preview" draggable="false"
+                  @mouseenter="hoveredNotePath = note.path"
                   @mouseleave="hoveredNotePath = null"
                   @dragstart.stop v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
                   <template v-if="cardText(note)">{{ cardText(note) }}</template>
@@ -291,8 +291,8 @@
                 <button v-else class="btn btn-icon btn-ghost btn-sm card-menu-btn" style="position: absolute; top: 12px; right: 14px; margin: 0; z-index: 2" @click.stop="openContextMenuBtn($event, note)">
                   <span class="material-icons-outlined">more_vert</span>
                 </button>
-                <div class="card-preview" draggable="false" 
-                  @mouseenter="hoveredNotePath = note.path" 
+                <div class="card-preview" draggable="false"
+                  @mouseenter="hoveredNotePath = note.path"
                   @mouseleave="hoveredNotePath = null"
                   @dragstart.stop v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
                   <template v-if="cardText(note)">{{ cardText(note) }}</template>
@@ -722,36 +722,42 @@ function enrichNotes(notes) {
 
 const overlongStates = reactive({})
 
+// Shared scaffolding for the card-measuring directives below: run `measure` now,
+// once more after layout settles, and on every resize, then clean up on unmount.
+// Each directive passes a unique key so its timer/observer don't collide on el.
+function observeMeasure(el, measure, key) {
+  measure()
+  el[`_${key}Timer`] = setTimeout(measure, 50) // slight delay for layout
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    el[`_${key}Ro`] = ro
+  }
+}
+function disconnectMeasure(el, key) {
+  if (el[`_${key}Ro`]) el[`_${key}Ro`].disconnect()
+  if (el[`_${key}Timer`]) clearTimeout(el[`_${key}Timer`])
+}
+
+// Flags a card whose preview overflows ~6 lines so the expand bar can show.
 const vCheckOverflow = {
   mounted(el, binding) {
-    const path = binding.value;
+    const path = binding.value
     const check = () => {
       // 6 lines at 1.6 line-height & 13px font-size = ~124.8px
-      const isOver = el.scrollHeight > 126;
-      if (overlongStates[path] !== isOver) {
-        overlongStates[path] = isOver;
-      }
-    };
-    check();
-    el._overflowTimer = setTimeout(check, 50); // slight delay for layout
-    if (window.ResizeObserver) {
-      const ro = new ResizeObserver(check);
-      ro.observe(el);
-      el._ro = ro;
+      const isOver = el.scrollHeight > 126
+      if (overlongStates[path] !== isOver) overlongStates[path] = isOver
     }
+    observeMeasure(el, check, 'overflow')
   },
   updated(el, binding) {
-    const path = binding.value;
-    const isOver = el.scrollHeight > 126;
-    if (overlongStates[path] !== isOver) {
-      overlongStates[path] = isOver;
-    }
+    const path = binding.value
+    const isOver = el.scrollHeight > 126
+    if (overlongStates[path] !== isOver) overlongStates[path] = isOver
   },
   unmounted(el, binding) {
-    if (el._ro) el._ro.disconnect();
-    if (el._overflowTimer) clearTimeout(el._overflowTimer);
-    const path = binding.value;
-    delete overlongStates[path];
+    disconnectMeasure(el, 'overflow')
+    delete overlongStates[binding.value]
   }
 }
 
@@ -767,21 +773,12 @@ const vMeasureCard = {
     const measure = () => {
       if (expandedCards.value.has(path)) return
       const h = el.offsetHeight
-      if (h > 0 && cardHeights[path] !== h) {
-        cardHeights[path] = h
-      }
+      if (h > 0 && cardHeights[path] !== h) cardHeights[path] = h
     }
-    measure()
-    el._measureTimer = setTimeout(measure, 50)
-    if (window.ResizeObserver) {
-      const ro = new ResizeObserver(measure)
-      ro.observe(el)
-      el._measureRo = ro
-    }
+    observeMeasure(el, measure, 'measure')
   },
   unmounted(el) {
-    if (el._measureRo) el._measureRo.disconnect()
-    if (el._measureTimer) clearTimeout(el._measureTimer)
+    disconnectMeasure(el, 'measure')
   }
 }
 
@@ -1764,9 +1761,9 @@ async function uploadFiles(files) {
   color: var(--text-secondary);
   background: none;
 }
-.sidebar-action.logout:hover { 
-  background: var(--danger-light); 
-  color: var(--danger); 
+.sidebar-action.logout:hover {
+  background: var(--danger-light);
+  color: var(--danger);
 }
 .sidebar-action.logout .material-icons-outlined { color: inherit; }
 

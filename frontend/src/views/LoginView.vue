@@ -39,17 +39,28 @@ const pass = ref('')
 const error = ref('')
 const loading = ref(false)
 
+function getSafeRedirect(target) {
+  if (!target || typeof target !== 'string') return '/'
+  if (target.startsWith('/') && !target.startsWith('//')) {
+    return target
+  }
+
+  return '/'
+}
+
 async function doLogin() {
   if (!user.value || !pass.value) {
     error.value = t('login.enterCredentials')
     return
   }
+
   loading.value = true
   error.value = ''
+
   try {
     await api.login(user.value, pass.value)
-    const redirect = (route.query.redirect && typeof route.query.redirect === 'string') ? route.query.redirect : '/'
-    router.push(redirect)
+    const redirectPath = getSafeRedirect(route.query.redirect)
+    router.push(redirectPath)
   } catch (e) {
     error.value = e.response?.data?.error || t('login.loginFailed')
   } finally {

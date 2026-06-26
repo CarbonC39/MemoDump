@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -18,32 +17,44 @@ import (
 
 const maxBodySize = 10 << 20 // 10 MB
 
-// safePath prevents directory traversal attacks
+// safePath prevents directory traversal attacks by confining the resolved path
+// to base. base is expected to be absolute (dataDir is made absolute at startup),
+// so the returned path is absolute too.
+//
+// Symlinks are deliberately not resolved here: filepath.EvalSymlinks fails for
+// paths that don't exist yet (every note/folder creation hits that case), and it
+// would also reject a perfectly valid data dir that itself sits behind a symlink
+// (e.g. macOS /tmp -> /private/tmp). The API never creates symlinks, so the only
+// way one could appear inside the data dir is via direct filesystem access, which
+// is already a trusted boundary. A lexical containment check is what matters for
+// blocking "../" traversal.
 func safePath(base string, userPath string) (string, error) {
-	cleanPath := filepath.Clean(filepath.FromSlash(userPath))
-	fullPath := filepath.Join(base, cleanPath)
-
 	absBase, err := filepath.Abs(base)
 	if err != nil {
-		return "", err
-	}
-	absFull, err := filepath.Abs(fullPath)
-	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to resolve base path: %w", err)
 	}
 
-	if !strings.HasPrefix(absFull+string(filepath.Separator), absBase+string(filepath.Separator)) && absFull != absBase {
-		return "", fmt.Errorf("path out of bounds")
+	// filepath.Join cleans the result and neutralizes a leading "/" in userPath.
+	absFull := filepath.Join(absBase, filepath.FromSlash(userPath))
+
+	rel, err := filepath.Rel(absBase, absFull)
+	if err != nil {
+		return "", fmt.Errorf("path out of bounds: %s", userPath)
 	}
-	return fullPath, nil
+	// rel == ".." means the parent; a "../" prefix means it escaped base. The
+	// trailing separator avoids a false positive on a real file named "..foo".
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path out of bounds: %s", userPath)
+	}
+
+	return absFull, nil
 }
 
 type NoteCacheEntry struct {
-	Note      Note
-	ModTime   int64
-	Size      int64
-	Body      string
-	BodyLower string
+	Note    Note
+	ModTime int64
+	Size    int64
+	Body    string
 }
 
 var noteCache sync.Map
@@ -66,93 +77,124 @@ type Folder struct {
 	Notes    []Note   `json:"notes,omitempty"`
 }
 
-var tagLineRe = regexp.MustCompile(`(?m)^tags:\s*\[([^\]]*)\]`)
-
-// parseFrontMatter splits leading YAML front matter from the body. Rather than
-// running a dot-all regex over the whole file (cost grows with body size), it
-// scans the header line by line. The closing fence must be a line that is exactly
-// "---", so a Markdown horizontal rule later in the document ("----", "--- text")
-// is not mistaken for the terminator. If no such fence exists, the whole content
-// is treated as the body and no front matter is parsed.
+// parseFrontMatter splits leading YAML front matter from the body. It scans the
+// header line by line (cost independent of body size); the closing fence must be a
+// line that is exactly "---", so a Markdown horizontal rule later in the document
+// is not mistaken for the terminator. If no such fence exists the whole content is
+// treated as the body. CRLF line endings are tolerated.
 func parseFrontMatter(content string) (tags []string, body string) {
-	// Front matter must begin at the very start with a "---\n" delimiter.
-	if !strings.HasPrefix(content, "---\n") {
+	if !strings.HasPrefix(content, "---\n") && !strings.HasPrefix(content, "---\r\n") {
 		return nil, content
 	}
-	rest := content[4:]
-	for pos := 0; ; {
-		nl := strings.IndexByte(rest[pos:], '\n')
-		line := rest[pos:]
-		if nl >= 0 {
-			line = rest[pos : pos+nl]
+
+	var fmLines []string
+	var hasClosingFence bool
+	var bodyStartIndex int
+
+	currentPos := 0
+	isFirst := true
+
+	for line := range strings.Lines(content) {
+		lineLen := len(line)
+		// skip the first "---"
+		if isFirst {
+			isFirst = false
+			currentPos += lineLen
+			continue
 		}
-		// Tolerate CRLF: a "---\r" line is still a valid fence.
-		if strings.TrimSuffix(line, "\r") == "---" {
-			fm := rest[:pos]
-			if nl >= 0 {
-				body = rest[pos+nl+1:]
-			}
-			if tagMatch := tagLineRe.FindStringSubmatch(fm); tagMatch != nil {
-				for _, t := range strings.Split(tagMatch[1], ",") {
-					if t = strings.TrimSpace(t); t != "" {
-						tags = append(tags, t)
-					}
-				}
-			}
-			return tags, body
+
+		trimmed := strings.TrimRight(line, "\r\n")
+		if trimmed == "---" {
+			hasClosingFence = true
+			bodyStartIndex = currentPos + lineLen
+			break
 		}
-		if nl < 0 {
-			break // reached end without a closing fence
-		}
-		pos += nl + 1
+		fmLines = append(fmLines, trimmed)
+		currentPos += lineLen
 	}
-	return nil, content
+
+	if !hasClosingFence {
+		return nil, content
+	}
+
+	body = content[bodyStartIndex:]
+
+	for _, line := range fmLines {
+		if !strings.HasPrefix(line, "tags:") {
+			continue
+		}
+
+		val := strings.TrimSpace(line[5:])
+		val = strings.TrimPrefix(val, "[")
+		val = strings.TrimSuffix(val, "]")
+
+		for tag := range strings.SplitSeq(val, ",") {
+			// Strip a surrounding quote pair written by buildFrontMatter; older
+			// files with unquoted tags are unaffected.
+			tag = strings.Trim(strings.TrimSpace(tag), `"'`)
+			if tag != "" {
+				tags = append(tags, tag)
+			}
+		}
+		break
+	}
+	return tags, body
 }
 
 // truncateRunes returns s clamped to at most max runes, never splitting a
 // multi-byte UTF-8 character mid-rune (a plain s[:max] byte slice can).
-func truncateRunes(s string, max int) string {
-	// Fast path: byte length is an upper bound on rune count, so len(s) <= max
-	// (bytes) guarantees at most max runes — no truncation needed. The byte/rune
-	// unit mismatch here is intentional, not a bug.
-	if len(s) <= max {
-		return s
+func truncateRunes(s string, max int) (string, bool) {
+	if max <= 0 {
+		return "", false
+	}
+	if utf8.RuneCountInString(s) <= max {
+		return s, false
 	}
 	count := 0
-	for i := range s {
+	for byteIdx := range s {
 		if count == max {
-			return s[:i]
+			return s[:byteIdx], true
 		}
 		count++
 	}
-	return s
+	return s, false
 }
 
 func buildFrontMatter(tags []string) string {
 	if len(tags) == 0 {
 		return ""
 	}
-	quoted := make([]string, len(tags))
-	copy(quoted, tags)
-	return fmt.Sprintf("---\ntags: [%s]\n---\n", strings.Join(quoted, ", "))
+	var sb strings.Builder
+	sb.WriteString("---\ntags: [")
+	for i, tag := range tags {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		fmt.Fprintf(&sb, "%q", tag)
+	}
+	sb.WriteString("]\n---\n")
+	return sb.String()
 }
 
 func readNote(fullPath string, basePath string, includeContent bool) (*Note, error) {
 	info, err := os.Stat(fullPath)
 	if err != nil {
-		noteCache.Delete(fullPath)
+		if os.IsNotExist(err) {
+			noteCache.Delete(fullPath)
+		}
 		return nil, err
 	}
 	modTime := info.ModTime().UnixMilli()
 	size := info.Size()
 
-	// A cache entry is valid only when BOTH mtime and size match. Comparing size
-	// as well catches same-second rewrites that filesystems with coarse mtime
-	// granularity would otherwise hide, preventing stale reads.
 	if entry, ok := noteCache.Load(fullPath); ok {
 		cached := entry.(*NoteCacheEntry)
 		if cached.ModTime == modTime && cached.Size == size {
 			noteCopy := cached.Note
+			// Defensive copy so a caller mutating Tags can't corrupt the cache.
+			if len(cached.Note.Tags) > 0 {
+				noteCopy.Tags = append([]string(nil), cached.Note.Tags...)
+			}
 			if includeContent {
 				// Body is cached, so a content read on a cache hit no longer
 				// re-reads/re-parses the file (and can't silently return empty).
@@ -162,12 +204,17 @@ func readNote(fullPath string, basePath string, includeContent bool) (*Note, err
 		}
 	}
 
-	relPath, _ := filepath.Rel(basePath, fullPath)
+	relPath, err := filepath.Rel(basePath, fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get relative path: %w", err)
+	}
 	relPath = filepath.ToSlash(relPath)
 
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
-		noteCache.Delete(fullPath)
+		if os.IsNotExist(err) {
+			noteCache.Delete(fullPath)
+		}
 		return nil, err
 	}
 
@@ -181,18 +228,17 @@ func readNote(fullPath string, basePath string, includeContent bool) (*Note, err
 		ModTime: modTime,
 	}
 
-	preview := strings.TrimSpace(body)
-	if utf8.RuneCountInString(preview) > 1000 {
-		preview = truncateRunes(preview, 1000) + "..."
+	preview, truncated := truncateRunes(strings.TrimSpace(body), 1000)
+	if truncated {
+		preview += "..."
 	}
 	note.Preview = preview
 
 	noteCache.Store(fullPath, &NoteCacheEntry{
-		Note:      note,
-		ModTime:   modTime,
-		Size:      size,
-		Body:      body,
-		BodyLower: strings.ToLower(body),
+		Note:    note,
+		ModTime: modTime,
+		Size:    size,
+		Body:    body,
 	})
 
 	noteCopy := note
@@ -614,7 +660,12 @@ func handleDeleteFolder(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleSearch searches notes by content or tag
+// handleSearch searches notes by content or tag.
+//
+// The cache stores only the body; we lowercase it on demand here instead of
+// keeping a second lowercased copy per note. Search is infrequent relative to
+// reads, so trading a little CPU per query for roughly half the cache memory is
+// a good deal.
 func handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.ToLower(r.URL.Query().Get("q"))
 	tag := strings.ToLower(r.URL.Query().Get("tag"))
@@ -625,24 +676,21 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
+		// readNote populates the cache (including Body) on a miss, so the
+		// subsequent Load is guaranteed to hit for a successfully read note.
 		note, checkErr := readNote(path, dataDir, false)
 		if checkErr != nil {
 			return nil
 		}
 
-		var bodyLower string
-		if entry, ok := noteCache.Load(path); ok {
-			bodyLower = entry.(*NoteCacheEntry).BodyLower
-		} else {
-			note, checkErr = readNote(path, dataDir, true)
-			if checkErr != nil {
-				return nil
+		// AND logic: both conditions must match when both are specified.
+		matchQuery := query == ""
+		if !matchQuery {
+			if entry, ok := noteCache.Load(path); ok {
+				matchQuery = strings.Contains(strings.ToLower(entry.(*NoteCacheEntry).Body), query)
 			}
-			bodyLower = strings.ToLower(note.Content)
 		}
 
-		// AND logic: both conditions must match when both are specified.
-		matchQuery := query == "" || strings.Contains(bodyLower, query)
 		matchTag := tag == ""
 		if !matchTag {
 			for _, t := range note.Tags {
@@ -746,68 +794,75 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 func handleUploadNote(w http.ResponseWriter, r *http.Request) {
 	const uploadLimit = 1 << 20 // 1 MB
 
+	writeError := func(status int, msg string) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, uploadLimit+4096)
 	if err := r.ParseMultipartForm(uploadLimit); err != nil {
-		http.Error(w, `{"error":"File too large or invalid request (max 1 MB)"}`, http.StatusRequestEntityTooLarge)
+		writeError(http.StatusRequestEntityTooLarge, "File too large or invalid request (max 1 MB)")
 		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, `{"error":"No file provided"}`, http.StatusBadRequest)
+		writeError(http.StatusBadRequest, "No file provided")
 		return
 	}
 	defer file.Close()
 
-	// Validate extension
-	origName := filepath.Base(header.Filename)
+	origName := header.Filename
+	if idx := strings.LastIndexAny(origName, `/\`); idx != -1 {
+		origName = origName[idx+1:]
+	}
+
 	ext := strings.ToLower(filepath.Ext(origName))
 	if ext != ".md" && ext != ".txt" {
-		http.Error(w, `{"error":"Only .md and .txt files are accepted"}`, http.StatusBadRequest)
+		writeError(http.StatusBadRequest, "Only .md and .txt files are accepted")
 		return
 	}
 
-	// Enforce size limit via header first, then hard-cap via LimitReader
 	if header.Size > uploadLimit {
-		http.Error(w, `{"error":"File too large (max 1 MB)"}`, http.StatusRequestEntityTooLarge)
+		writeError(http.StatusRequestEntityTooLarge, "File too large (max 1 MB)")
 		return
 	}
+
 	content, err := io.ReadAll(io.LimitReader(file, uploadLimit+1))
 	if err != nil {
-		http.Error(w, `{"error":"Failed to read file"}`, http.StatusInternalServerError)
+		writeError(http.StatusInternalServerError, "Failed to read file")
 		return
 	}
 	if len(content) > uploadLimit {
-		http.Error(w, `{"error":"File too large (max 1 MB)"}`, http.StatusRequestEntityTooLarge)
+		writeError(http.StatusRequestEntityTooLarge, "File too large (max 1 MB)")
 		return
 	}
 
-	// Must be valid UTF-8 text
 	if !utf8.Valid(content) {
-		http.Error(w, `{"error":"File must be valid UTF-8 text"}`, http.StatusBadRequest)
+		writeError(http.StatusBadRequest, "File must be valid UTF-8 text")
 		return
 	}
-	// Reject null bytes (binary content masquerading as text)
 	if bytes.IndexByte(content, 0) >= 0 {
-		http.Error(w, `{"error":"File contains binary data"}`, http.StatusBadRequest)
+		writeError(http.StatusBadRequest, "File contains binary data")
 		return
 	}
 
-	// Sanitize note name derived from the filename
 	noteName := sanitizeUploadName(strings.TrimSuffix(origName, ext))
 
-	// Optional target folder
 	dir := dataDir
 	folder := r.FormValue("folder")
 	if folder != "" {
 		dir, err = safePath(dataDir, folder)
 		if err != nil {
-			http.Error(w, `{"error":"Invalid folder path"}`, http.StatusBadRequest)
+			writeError(http.StatusBadRequest, "Invalid folder path")
 			return
 		}
 	}
 
-	// Build filename (.txt files are saved as .md)
 	filename := noteName
 	if filename == "" {
 		filename = time.Now().Format("2006-01-02_150405")
@@ -815,22 +870,32 @@ func handleUploadNote(w http.ResponseWriter, r *http.Request) {
 	filename += ".md"
 	fullPath := filepath.Join(dir, filename)
 
-	// Avoid overwriting existing file
 	if _, err := os.Stat(fullPath); err == nil {
 		base := strings.TrimSuffix(filename, ".md")
-		filename = base + "_" + time.Now().Format("150405") + ".md"
+		filename = base + "_" + time.Now().Format("150405_000000") + ".md"
 		fullPath = filepath.Join(dir, filename)
 	}
 
-	// Atomic write: tmp → rename
-	tmpPath := fullPath + ".tmp"
-	if err := os.WriteFile(tmpPath, content, 0644); err != nil {
-		http.Error(w, `{"error":"Failed to save file"}`, http.StatusInternalServerError)
+	tmpFile, err := os.CreateTemp(dir, "upload_*.tmp")
+	if err != nil {
+		writeError(http.StatusInternalServerError, "Failed to create temporary file")
 		return
 	}
+	tmpPath := tmpFile.Name()
+
+	defer func() {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+	}()
+
+	if _, err := tmpFile.Write(content); err != nil {
+		writeError(http.StatusInternalServerError, "Failed to write data")
+		return
+	}
+	_ = tmpFile.Close() // Close before rename: Windows can't rename an open file.
+
 	if err := os.Rename(tmpPath, fullPath); err != nil {
-		os.Remove(tmpPath)
-		http.Error(w, `{"error":"Failed to save file"}`, http.StatusInternalServerError)
+		writeError(http.StatusInternalServerError, "Failed to save file")
 		return
 	}
 
@@ -838,11 +903,14 @@ func handleUploadNote(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, note)
 }
 
-// sanitizeUploadName strips path components and characters forbidden in filenames.
-// Unicode letters/digits (including CJK) are preserved; only control chars and
-// Windows-forbidden chars are replaced.
+var windowsReservedNames = map[string]bool{
+	"CON": true, "PRN": true, "AUX": true, "NUL": true,
+	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true, "COM6": true, "COM7": true, "COM8": true, "COM9": true,
+	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true, "LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+}
+
 func sanitizeUploadName(name string) string {
-	name = filepath.Base(name)
+	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
 	var b strings.Builder
 	for _, r := range name {
 		switch {
@@ -855,11 +923,22 @@ func sanitizeUploadName(name string) string {
 			b.WriteRune(r)
 		}
 	}
-	result := strings.Trim(b.String(), " .")
-	return truncateRunes(result, 200)
+
+	result, _ := truncateRunes(b.String(), 200)
+	result = strings.Trim(result, " .")
+	if result == "" {
+		return ""
+	}
+
+	ext := filepath.Ext(result)
+	baseWithoutExt := strings.ToUpper(strings.TrimSuffix(result, ext))
+	if windowsReservedNames[baseWithoutExt] {
+		result = "_" + result
+	}
+	return result
 }
 
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
+func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
