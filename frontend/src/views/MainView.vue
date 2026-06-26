@@ -446,6 +446,9 @@
       <div class="context-menu-item" @click="menuCopyContent">
         <span class="material-icons-outlined">content_copy</span> {{ t('actions.copyFullText') }}
       </div>
+      <div class="context-menu-item" @click="menuDuplicateNote">
+        <span class="material-icons-outlined">file_copy</span> Duplicate
+      </div>
       <div class="context-menu-item" @click="menuDownloadNote">
         <span class="material-icons-outlined">download</span> {{ t('actions.download') }}
       </div>
@@ -897,6 +900,16 @@ async function menuCopyContent() {
   } catch (e) {
     alert(t('errors.copyFailed'))
   }
+}
+
+async function menuDuplicateNote() {
+  const note = contextMenu.note
+  closeContextMenu()
+  if (!note) return
+  try {
+    await apiClient.duplicateNote(note.path)
+    await loadAll()
+  } catch (e) { alert('Duplicate failed') }
 }
 
 async function menuDeleteNote() {
