@@ -141,6 +141,37 @@ describe('moveNote', () => {
   })
 })
 
+describe('duplicateNote', () => {
+  it('creates a (copy) in the same folder with same content and tags', async () => {
+    const src = (await localApi.createNote({ name: 'orig', content: 'body', tags: ['a', 'b'] })).data
+    const dup = (await localApi.duplicateNote(src.path)).data
+    expect(dup.path).toBe('orig (copy).md')
+    expect(dup.content).toBe('body')
+    expect(dup.tags).toEqual(['a', 'b'])
+    // original is untouched
+    expect((await localApi.getNote('orig.md')).data.content).toBe('body')
+  })
+
+  it('de-collides with (copy 2), (copy 3)', async () => {
+    const src = (await localApi.createNote({ name: 'note', content: 'x' })).data
+    const d1 = (await localApi.duplicateNote(src.path)).data
+    const d2 = (await localApi.duplicateNote(src.path)).data
+    expect(d1.path).toBe('note (copy).md')
+    expect(d2.path).toBe('note (copy 2).md')
+  })
+
+  it('duplicates into the same subfolder', async () => {
+    await localApi.createFolder('docs')
+    const src = (await localApi.createNote({ name: 'infolder', folder: 'docs', content: 'hi' })).data
+    const dup = (await localApi.duplicateNote(src.path)).data
+    expect(dup.path).toBe('docs/infolder (copy).md')
+  })
+
+  it('404s for a missing source', async () => {
+    await expect(localApi.duplicateNote('nope.md')).rejects.toMatchObject({ response: { status: 404 } })
+  })
+})
+
 describe('folder tree', () => {
   it('nests children and notes, excludes root notes', async () => {
     await localApi.createNote({ name: 'rootnote', content: 'r' })

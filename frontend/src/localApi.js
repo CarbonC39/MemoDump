@@ -255,6 +255,28 @@ const localApi = {
     return { data: { status: 'ok' } }
   },
 
+  async duplicateNote(path) {
+    if (!path) return apiError(400, 'Path is illegal')
+    const src = await getNoteRec(path)
+    if (!src) return apiError(404, 'File not found')
+    const dir = dirname(path)
+    const base = noteName(path)
+    let filename = `${base} (copy).md`
+    let i = 2
+    while (await getNoteRec(dir ? dir + '/' + filename : filename)) {
+      filename = `${base} (copy ${i}).md`
+      i++
+    }
+    const newPath = dir ? dir + '/' + filename : filename
+    const now = Date.now()
+    const rec = { path: newPath, content: src.content || '', tags: plainTags(src.tags), modTime: now, created: now }
+    await write((notes, folders) => {
+      notes.put(rec)
+      ensureFolders(folders, dir)
+    })
+    return { data: toFull(rec) }
+  },
+
   async moveNote(path, destination) {
     const rec = await getNoteRec(path)
     if (!rec) return apiError(404, 'File not found')
