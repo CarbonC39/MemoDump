@@ -478,37 +478,15 @@ import MilkdownEditor from '../components/MilkdownEditor.vue'
 import FolderNode from '../components/FolderNode.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
 import { useI18n } from '../i18n'
+import { useAppInit } from '../composables/useAppInit'
 
 const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
 
-// Wails desktop detection — window.go is injected by the Wails runtime.
-const isWailsApp = typeof window !== 'undefined' && typeof window.go !== 'undefined'
-// Browser-local build (VITE_LOCAL=1): notes live in IndexedDB, not on a server.
-const isLocalBuild = import.meta.env.VITE_LOCAL === '1'
-const wailsDataDir = ref('')
-const serverNoAuth = ref(false)
+const { isWailsApp, isLocalBuild, wailsDataDir, serverNoAuth, mobileSidebar, openSections, toggleSection, initWails, changeDataDir, doLogout } = useAppInit()
 
-async function initWails() {
-  if (!isWailsApp) return
-  try {
-    wailsDataDir.value = await window.go.main.App.GetDataDir()
-  } catch (_) {}
-}
-
-async function changeDataDir() {
-  if (!isWailsApp) return
-  const changed = await window.go.main.App.ChangeDataDir()
-  if (changed) {
-    wailsDataDir.value = await window.go.main.App.GetDataDir()
-  }
-}
-
-// Sidebar state
-const mobileSidebar = ref(false)
 const showSettings = ref(false)
-const openSections = reactive({ search: false, all: false, storage: false })
 const searchOpen = ref(false)
 
 const titleInputRef = ref(null)
@@ -566,7 +544,6 @@ function updateTitleInputWidth() {
 
 watch(editName, () => nextTick(updateTitleInputWidth), { immediate: true })
 
-let keepaliveInterval = null
 let searchDebounceTimer = null
 
 // Card Expansion State
@@ -990,10 +967,6 @@ async function submitNewFolderInPicker() {
   }
 }
 
-function toggleSection(section) {
-  openSections[section] = !openSections[section]
-}
-
 async function handleAllClick() {
   if (!confirmLeave()) return
   editingNote.value = null
@@ -1191,17 +1164,11 @@ function applySettings() {
 
 onMounted(async () => {
   applySettings()
-  initWails()
-  try { serverNoAuth.value = (await apiClient.config()).data.noAuth } catch (_) {}
   window.addEventListener('resize', updateColumnCount)
   window.addEventListener('keydown', handleGlobalKeydown)
   window.addEventListener('beforeunload', handleBeforeUnload)
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('pagehide', handlePageHide)
-  // Ping every 15 minutes to keep session alive while app is open
-  keepaliveInterval = setInterval(() => {
-    apiClient.ping().catch(() => {})
-  }, 15 * 60 * 1000)
   await loadAll()
 
   // Restore draft saved before session-expiry redirect
@@ -1232,7 +1199,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   window.removeEventListener('pagehide', handlePageHide)
-  if (keepaliveInterval) clearInterval(keepaliveInterval)
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
   if (autosaveTimer) clearTimeout(autosaveTimer)
 })
@@ -1548,11 +1514,6 @@ async function doDeleteFolder(folderPath) {
     await loadAll()
     updateUrl()
   } catch (e) { alert(t('errors.failed')) }
-}
-
-async function doLogout() {
-  await apiClient.logout()
-  router.push('/login')
 }
 
 // ===== FOLDER PICKER FOR META PANEL =====
