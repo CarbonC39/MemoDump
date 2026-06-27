@@ -554,7 +554,14 @@ func handleDuplicateNote(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := os.Stat(destPath); os.IsNotExist(err) {
-			if err := os.WriteFile(destPath, data, 0644); err != nil {
+			// Atomic write: write to .tmp then rename, matching the save path.
+			tmpPath := destPath + ".tmp"
+			if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+				http.Error(w, `{"error":"Failed to save note"}`, http.StatusInternalServerError)
+				return
+			}
+			if err := os.Rename(tmpPath, destPath); err != nil {
+				os.Remove(tmpPath)
 				http.Error(w, `{"error":"Failed to save note"}`, http.StatusInternalServerError)
 				return
 			}
