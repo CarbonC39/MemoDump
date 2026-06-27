@@ -438,27 +438,9 @@
     </div>
 
     <!-- Context Menu -->
-    <div v-if="contextMenu.visible" class="context-menu-overlay" @click="closeContextMenu" @contextmenu.prevent="closeContextMenu"></div>
-    <div v-if="contextMenu.visible" class="context-menu" :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }">
-      <div class="context-menu-item" @click="menuEditNote">
-        <span class="material-icons-outlined">edit</span> {{ t('actions.edit') }}
-      </div>
-      <div class="context-menu-item" @click="menuCopyContent">
-        <span class="material-icons-outlined">content_copy</span> {{ t('actions.copyFullText') }}
-      </div>
-      <div class="context-menu-item" @click="menuDuplicateNote">
-        <span class="material-icons-outlined">file_copy</span> Duplicate
-      </div>
-      <div class="context-menu-item" @click="menuDownloadNote">
-        <span class="material-icons-outlined">download</span> {{ t('actions.download') }}
-      </div>
-      <div class="context-menu-item" @click="menuMoveNote">
-        <span class="material-icons-outlined">drive_file_move</span> {{ t('actions.move') }}
-      </div>
-      <div class="context-menu-item text-danger" @click="menuDeleteNote">
-        <span class="material-icons-outlined">delete_outline</span> {{ t('actions.delete') }}
-      </div>
-    </div>
+    <ContextMenu v-if="contextMenu.visible" :visible="contextMenu.visible" :x="contextMenu.x" :y="contextMenu.y"
+      @edit="menuEditNote" @copy="menuCopyContent" @duplicate="menuDuplicateNote"
+      @download="menuDownloadNote" @move="menuMoveNote" @delete="menuDeleteNote" @close="closeContextMenu" />
 
     <!-- Settings Panel -->
     <SettingsPanel
@@ -477,6 +459,7 @@ import { stripMarkdown, isTimestampName } from '../utils'
 import MilkdownEditor from '../components/MilkdownEditor.vue'
 import FolderNode from '../components/FolderNode.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
+import ContextMenu from '../components/ContextMenu.vue'
 import { useI18n } from '../i18n'
 import { useAppInit } from '../composables/useAppInit'
 import { useCardLayout } from '../composables/useCardLayout'
@@ -1728,39 +1711,6 @@ provide('dnd', dnd)
 }
 .sort-menu-item.active .sort-check { opacity: 1; }
 
-/* Context Menu */
-.context-menu-overlay {
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  z-index: 1000;
-}
-.context-menu {
-  position: fixed;
-  background: #fff;
-  border: 1px solid var(--border);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
-  border-radius: 8px;
-  padding: 4px 0;
-  min-width: 170px;
-  z-index: 1001;
-}
-.context-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  font-size: 14px;
-  cursor: pointer;
-  color: var(--text);
-}
-.context-menu-item:hover {
-  background: var(--bg);
-}
-.context-menu-item.text-danger {
-  color: var(--danger);
-}
-
-
 /* Draft Restored Banner */
 .draft-banner {
   position: fixed;
@@ -1987,15 +1937,6 @@ provide('dnd', dnd)
   .header-title-input,
   .tag-inline-input,
   select { font-size: 16px !important; }
-  /* Larger touch targets for context menu items */
-  .context-menu-item {
-    padding: 14px 16px;
-  }
-  /* Context menu max width on narrow screens */
-  .context-menu {
-    min-width: 140px;
-    max-width: calc(100vw - 16px);
-  }
   /* Wider cards on mobile since single column */
   .waterfall-card {
     border-radius: 10px;
