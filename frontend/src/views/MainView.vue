@@ -481,6 +481,7 @@ import { useI18n } from '../i18n'
 import { useAppInit } from '../composables/useAppInit'
 import { useCardLayout } from '../composables/useCardLayout'
 import { useDialogs } from '../composables/useDialogs'
+import { useAutosave } from '../composables/useAutosave'
 
 const router = useRouter()
 const route = useRoute()
@@ -568,9 +569,6 @@ const contextMenu = reactive({
   y: 0,
   note: null
 })
-
-// Draft restored banner
-const showDraftRestoredBanner = ref(false)
 
 // View context captured before entering the editor, used by the back button.
 const prevView = reactive({ folder: '', search: false })
@@ -804,77 +802,9 @@ function openSearchPanel() {
   updateUrl()
 }
 
-function handleBeforeUnload(e) {
-  if (isDirty.value) {
-    e.preventDefault()
-    e.returnValue = ''
-  }
-}
-
-// ======= AUTOSAVE (iOS PWA data-loss prevention) =======
-// iOS Safari/PWA frequently suspends or evicts a backgrounded tab without
-// ever firing beforeunload, so manual-save-only loses unsaved edits. Save
-// debounced shortly after each edit, and immediately when the tab is hidden
-// or about to be torn down.
-let autosaveTimer = null
-let autosaving = false
-
-function scheduleAutosave() {
-  if (autosaveTimer) clearTimeout(autosaveTimer)
-  autosaveTimer = setTimeout(() => {
-    if (isDirty.value && editingNote.value && !autosaving) {
-      runAutosave()
-    }
-  }, 3000)
-}
-
-async function runAutosave() {
-  autosaving = true
-  try {
-    await saveNote()
-  } finally {
-    autosaving = false
-  }
-}
-
-watch(isDirty, (dirty) => {
-  if (dirty) scheduleAutosave()
+const { showDraftRestoredBanner } = useAutosave({
+  editingNote, isDirty, editContent, editName, editTags, editFolder, saveNote,
 })
-
-function persistDraftToLocalStorage() {
-  try {
-    localStorage.setItem('memodump_draft', JSON.stringify({
-      content: editContent.value,
-      name: editName.value,
-      tags: editTags.value,
-      folder: editFolder.value,
-      path: editingNote.value?.path || '',
-    }))
-  } catch (_) {}
-}
-
-async function flushSaveOrFallback() {
-  if (!isDirty.value || !editingNote.value || autosaving) return
-  autosaving = true
-  try {
-    await saveNote({ silent: true })
-  } catch (_) {
-    // Network unavailable (e.g. backgrounded PWA with no connectivity) —
-    // fall back to the same localStorage draft mechanism already used for
-    // the 401/session-expiry case, so the next launch can restore it.
-    persistDraftToLocalStorage()
-  } finally {
-    autosaving = false
-  }
-}
-
-function handleVisibilityChange() {
-  if (document.hidden) flushSaveOrFallback()
-}
-
-function handlePageHide() {
-  flushSaveOrFallback()
-}
 
 function handleGlobalKeydown(e) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -969,9 +899,6 @@ function applySettings() {
 onMounted(async () => {
   applySettings()
   window.addEventListener('keydown', handleGlobalKeydown)
-  window.addEventListener('beforeunload', handleBeforeUnload)
-  document.addEventListener('visibilitychange', handleVisibilityChange)
-  window.addEventListener('pagehide', handlePageHide)
   await loadAll()
 
   // Restore draft saved before session-expiry redirect
@@ -998,11 +925,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
-  window.removeEventListener('beforeunload', handleBeforeUnload)
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
-  window.removeEventListener('pagehide', handlePageHide)
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
-  if (autosaveTimer) clearTimeout(autosaveTimer)
 })
 
 async function loadAll() {
