@@ -1,0 +1,115 @@
+{
+  "sidebar": {
+    "newNote": "新建笔记",
+    "search": "搜索",
+    "allNotes": "全部笔记",
+    "storage": "存储",
+    "settings": "设置",
+    "dataFolder": "数据目录",
+    "signOut": "退出登录",
+    "savedInBrowser": "已保存在此浏览器中",
+    "savedInBrowserTitle": "你的笔记保存在此浏览器的本地存储中 — 不会上传到服务器。"
+  },
+  "editor": {
+    "save": "保存",
+    "untitled": "无标题",
+    "deleteNote": "删除笔记",
+    "rawMarkdown": "原始 Markdown...",
+    "switchToRaw": "切换到原始 Markdown",
+    "switchToRich": "切换到富文本",
+    "newNote": "新建笔记",
+    "back": "返回",
+    "allNotes": "全部笔记"
+  },
+  "login": {
+    "brand": "MemoDump",
+    "account": "账号",
+    "username": "用户名",
+    "password": "密码",
+    "signIn": "登录",
+    "signingIn": "登录中...",
+    "enterCredentials": "请输入账号和密码",
+    "loginFailed": "登录失败"
+  },
+  "settings": {
+    "title": "设置",
+    "language": "语言",
+    "appFontSize": "应用字体大小",
+    "editorWysiwygFontSize": "富文本字体大小",
+    "editorRawFontSize": "原始编辑器字体大小",
+    "fontsFor": "字体设置：",
+    "proportional": "比例字体：",
+    "sansSerif": "无衬线体",
+    "serif": "衬线体",
+    "sansSerifFont": "无衬线字体：",
+    "serifFont": "衬线字体：",
+    "monospaceFont": "等宽字体：",
+    "resetToDefaults": "恢复默认设置"
+  },
+  "modals": {
+    "cancel": "取消",
+    "confirm": "确认",
+    "delete": "删除",
+    "close": "关闭",
+    "copy": "复制",
+    "create": "创建",
+    "moveHere": "移动到此",
+    "moveToFolder": "移动到文件夹",
+    "newFolder": "新建文件夹",
+    "folderName": "文件夹名称：",
+    "newName": "新名称：",
+    "copyText": "复制文本",
+    "copyInstruction": "点击复制，或长按文本手动复制：",
+    "deleteNote": "删除笔记？",
+    "deleteNoteMsg": "这将永久删除此笔记。",
+    "deleteFolder": "删除文件夹？",
+    "deleteFolderMsg": "这将永久删除此文件夹及其所有内容。",
+    "unsavedChanges": "你有未保存的更改。确定要离开吗？"
+  },
+  "search": {
+    "searchNotes": "搜索笔记",
+    "searchContent": "搜索内容...",
+    "searchTags": "搜索标签...",
+    "typeToSearch": "输入关键词搜索...",
+    "noResults": "未找到结果"
+  },
+  "notes": {
+    "emptyNote": "空白笔记",
+    "noNotes": "暂无笔记。点击新建笔记开始。",
+    "noFolders": "暂无文件夹",
+    "root": "根目录",
+    "tagPlaceholder": "+ 标签",
+    "dropToImport": "拖放 .md 或 .txt 文件以导入",
+    "importing": "导入中...",
+    "importMd": "导入 .md",
+    "draftRestored": "会话已过期。你的未保存内容已恢复 — 请重新保存。",
+    "sortOrder": "排序方式",
+    "recentlyModified": "最近修改",
+    "oldestModified": "最早修改"
+  },
+  "folder": {
+    "newNoteHere": "在此新建笔记",
+    "newSubfolder": "新建子文件夹"
+  },
+  "actions": {
+    "edit": "编辑",
+    "copyFullText": "复制全文",
+    "download": "下载",
+    "move": "移动",
+    "delete": "删除"
+  },
+  "errors": {
+    "copyFailed": "复制失败",
+    "deleteFailed": "删除失败",
+    "downloadFailed": "下载失败",
+    "moveFailed": "移动失败",
+    "createFolderFailed": "创建文件夹失败",
+    "saveFailed": "保存失败：",
+    "failed": "操作失败",
+    "nameExists": "目标文件夹中已存在同名笔记。",
+    "folderExists": "目标位置已存在同名文件夹。",
+    "fileTypeUnsupported": "仅支持 .md 和 .txt 文件。",
+    "importFailed": "导入 \"{name}\" 失败：{msg}"
+  },
+  "editorPlaceholder": "输入 / 打开快捷菜单，或直接开始输入..."
+}

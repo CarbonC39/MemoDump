@@ -7,38 +7,38 @@
     <aside class="sidebar" :class="{ 'mobile-open': mobileSidebar }">
       <div class="sidebar-header">
         <img src="/favicon.ico" width="22" height="22" alt="Logo" style="border-radius: 4px; margin-right: 8px;" />
-        <span class="brand">MemoDump</span>
+        <span class="brand">{{ t('login.brand') }}</span>
       </div>
 
       <div class="sidebar-scroll">
         <!-- New Note button -->
         <button class="sidebar-action" @click="newNote">
           <span class="material-icons-outlined">edit_note</span>
-          New Note
+          {{ t('sidebar.newNote') }}
         </button>
 
         <div class="sidebar-nav">
           <div class="nav-item" @click="openSearchPanel()">
             <span class="material-icons-outlined">search</span>
-            <span class="nav-text">Search</span>
+            <span class="nav-text">{{ t('sidebar.search') }}</span>
           </div>
           
           <div class="nav-item" :class="{ active: !searchOpen && !currentFolder && !editingNote }" @click="handleAllClick()">
             <span class="material-icons-outlined">sticky_note_2</span>
-            <span class="nav-text">All Notes</span>
+            <span class="nav-text">{{ t('sidebar.allNotes') }}</span>
           </div>
 
           <div class="nav-item storage-nav-item" @click="toggleSection('storage')">
             <span class="material-icons-outlined">folder_open</span>
-            <span class="nav-text">Storage</span>
+            <span class="nav-text">{{ t('sidebar.storage') }}</span>
             <div class="storage-header-actions" @click.stop>
-              <button class="fa-btn-sm" @click="promptNewFolder('')" title="New Folder">
+              <button class="fa-btn-sm" @click="promptNewFolder('')" :title="t('modals.newFolder')">
                 <span class="material-icons-outlined">create_new_folder</span>
               </button>
-              <button class="fa-btn-sm" @click="createNewNoteIn('')" title="New Note">
+              <button class="fa-btn-sm" @click="createNewNoteIn('')" :title="t('editor.newNote')">
                 <span class="material-icons-outlined">note_add</span>
               </button>
-              <button class="fa-btn-sm" @click="triggerFileInput" :disabled="uploadingFiles" :title="uploadingFiles ? 'Importing…' : 'Import .md'">
+              <button class="fa-btn-sm" @click="triggerFileInput" :disabled="uploadingFiles" :title="uploadingFiles ? t('notes.importing') : t('notes.importMd')">
                 <span class="material-icons-outlined">upload_file</span>
               </button>
               <input
@@ -63,10 +63,10 @@
               @drop.prevent="onDropOnRoot"
             >
               <span class="material-icons-outlined">home</span>
-              Root
+              {{ t('notes.root') }}
             </div>
 
-            <div v-if="folders.length === 0" class="empty-hint">No folders yet</div>
+            <div v-if="folders.length === 0" class="empty-hint">{{ t('notes.noFolders') }}</div>
 
             <FolderNode
               v-for="f in folders"
@@ -87,17 +87,21 @@
       </div>
 
       <div class="sidebar-footer">
+        <button class="sidebar-action" @click="showSettings = !showSettings">
+          <span class="material-icons-outlined">settings</span>
+          {{ t('sidebar.settings') }}
+        </button>
         <button v-if="isWailsApp" class="sidebar-action" @click="changeDataDir" :title="wailsDataDir">
           <span class="material-icons-outlined">folder_open</span>
-          Data Folder
+          {{ t('sidebar.dataFolder') }}
         </button>
         <button v-if="!serverNoAuth" class="sidebar-action logout" @click="doLogout">
           <span class="material-icons-outlined">logout</span>
-          Sign Out
+          {{ t('sidebar.signOut') }}
         </button>
-        <div v-if="isLocalBuild" class="local-hint" title="Your notes are kept in this browser's local storage — nothing is uploaded to a server.">
+        <div v-if="isLocalBuild" class="local-hint" :title="t('sidebar.savedInBrowserTitle')">
           <span class="material-icons-outlined">cloud_off</span>
-          <span>Saved in this browser</span>
+          <span>{{ t('sidebar.savedInBrowser') }}</span>
         </div>
       </div>
     </aside>
@@ -117,7 +121,7 @@
 
         <!-- Back button: always visible when editing (desktop + PWA).
              With no previous view to return to, it becomes a Home button → All Notes. -->
-        <button v-if="editingNote" class="btn btn-icon btn-ghost editor-back-btn" @click="goBack" :title="hasPrevPage ? 'Back' : 'All Notes'">
+        <button v-if="editingNote" class="btn btn-icon btn-ghost editor-back-btn" @click="goBack" :title="hasPrevPage ? t('editor.back') : t('editor.allNotes')">
           <span class="material-icons-outlined">{{ hasPrevPage ? 'arrow_back' : 'home' }}</span>
         </button>
 
@@ -128,14 +132,14 @@
             class="header-title-input"
             v-model="editName"
             :style="{ width: titleInputWidth + 'px' }"
-            placeholder="Untitled"
+            :placeholder="t('editor.untitled')"
             @input="isDirty = true"
           />
-          <span ref="titleMirrorRef" class="header-title-mirror" aria-hidden="true">{{ editName || 'Untitled' }}</span>
+          <span ref="titleMirrorRef" class="header-title-mirror" aria-hidden="true">{{ editName || t('editor.untitled') }}</span>
           <span class="header-meta-sep">·</span>
           <button class="note-folder-btn" @click="pickEditFolder">
             <span class="material-icons-outlined">{{ editFolder ? 'folder' : 'home' }}</span>
-            <span class="note-folder-label">{{ editFolder || 'Root' }}</span>
+            <span class="note-folder-label">{{ editFolder || t('notes.root') }}</span>
           </button>
           <span class="header-meta-sep">·</span>
           <div class="note-tags-inline">
@@ -145,7 +149,7 @@
             <input
               class="tag-inline-input"
               v-model="tagInput"
-              placeholder="+ tag"
+              :placeholder="t('notes.tagPlaceholder')"
               @keydown.enter.prevent="addTag"
             />
           </div>
@@ -162,34 +166,34 @@
         <!-- Right: sort order + new note shortcut when browsing waterfall -->
         <div class="header-right" v-if="!editingNote && !searchOpen">
           <div class="sort-control">
-            <button class="btn btn-icon header-sort-btn" :class="{ active: sortMenuOpen }" @click.stop="sortMenuOpen = !sortMenuOpen" title="Sort order">
+            <button class="btn btn-icon header-sort-btn" :class="{ active: sortMenuOpen }" @click.stop="sortMenuOpen = !sortMenuOpen" :title="t('notes.sortOrder')">
               <span class="material-icons-outlined">sort</span>
             </button>
             <div v-if="sortMenuOpen" class="sort-overlay" @click="sortMenuOpen = false"></div>
             <div v-if="sortMenuOpen" class="sort-menu">
               <div class="sort-menu-item" :class="{ active: sortMode === 'modified-desc' }" @click="setSort('modified-desc')">
-                <span class="material-icons-outlined sort-check">check</span><span>Recently modified</span>
+                <span class="material-icons-outlined sort-check">check</span><span>{{ t('notes.recentlyModified') }}</span>
               </div>
               <div class="sort-menu-item" :class="{ active: sortMode === 'modified-asc' }" @click="setSort('modified-asc')">
-                <span class="material-icons-outlined sort-check">check</span><span>Oldest modified</span>
+                <span class="material-icons-outlined sort-check">check</span><span>{{ t('notes.oldestModified') }}</span>
               </div>
             </div>
           </div>
-          <button class="btn btn-icon header-new-btn" @click="createNewNoteIn(currentFolder)" title="New note">
+          <button class="btn btn-icon header-new-btn" @click="createNewNoteIn(currentFolder)" :title="t('editor.newNote')">
             <span class="material-icons-outlined">add</span>
           </button>
         </div>
 
         <!-- Fixed right: save & delete — do NOT scroll -->
         <div class="header-right" v-else-if="editingNote">
-          <button class="btn btn-sm btn-icon btn-ghost" @click="toggleEditorMode" :title="editorMode === 'wysiwyg' ? 'Switch to raw markdown' : 'Switch to rich text'">
+          <button class="btn btn-sm btn-icon btn-ghost" @click="toggleEditorMode" :title="editorMode === 'wysiwyg' ? t('editor.switchToRaw') : t('editor.switchToRich')">
             <span class="material-icons-outlined" style="font-size:16px">{{ editorMode === 'wysiwyg' ? 'code' : 'visibility' }}</span>
           </button>
           <button class="save-btn" :class="{ dirty: isDirty }" @click="saveNote">
             <span class="save-dot" v-if="isDirty"></span>
-            Save
+            {{ t('editor.save') }}
           </button>
-          <button class="btn btn-sm btn-icon btn-danger-subtle" v-if="editingNote.path" @click="deleteCurrentNote" title="Delete note">
+          <button class="btn btn-sm btn-icon btn-danger-subtle" v-if="editingNote.path" @click="deleteCurrentNote" :title="t('editor.deleteNote')">
             <span class="material-icons-outlined" style="font-size:16px">delete_outline</span>
           </button>
         </div>
@@ -199,22 +203,22 @@
         <!-- Search results (right-side panel) -->
         <div v-if="searchOpen" class="search-results-view">
           <div class="search-results-header">
-            <h2>Search Notes</h2>
+            <h2>{{ t('search.searchNotes') }}</h2>
             <button class="btn btn-icon btn-ghost" @click="searchOpen = false">
               <span class="material-icons-outlined">close</span>
             </button>
           </div>
           <div class="search-inputs-wrap">
-            <input v-model="searchQuery" class="input" placeholder="Search content..." @input="doSearch" />
-            <input v-model="searchTag" class="input" placeholder="Search tags..." @input="doSearch" />
+            <input v-model="searchQuery" class="input" :placeholder="t('search.searchContent')" @input="doSearch" />
+            <input v-model="searchTag" class="input" :placeholder="t('search.searchTags')" @input="doSearch" />
           </div>
           <div v-if="!searchQuery && !searchTag" class="empty-state-big">
             <span class="material-icons-outlined" style="font-size:48px;color:var(--border)">search</span>
-            <p>Type to search...</p>
+            <p>{{ t('search.typeToSearch') }}</p>
           </div>
           <div v-else-if="searchResults.length === 0" class="empty-state-big">
             <span class="material-icons-outlined" style="font-size:48px;color:var(--border)">search_off</span>
-            <p>No results found</p>
+            <p>{{ t('search.noResults') }}</p>
           </div>
           <div class="waterfall-grid">
             <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(searchResults)" :key="ci">
@@ -234,7 +238,7 @@
                   @mouseleave="hoveredNotePath = null"
                   @dragstart.stop v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
                   <template v-if="cardText(note)">{{ cardText(note) }}</template>
-                  <span v-else class="card-empty">Empty note</span>
+                  <span v-else class="card-empty">{{ t('notes.emptyNote') }}</span>
                 </div>
                 <div class="card-expand-bar" v-if="overlongStates[note.path]" @click.stop="toggleExpand(note.path)">
                   <span class="material-icons-outlined">
@@ -264,7 +268,7 @@
             class="raw-editor"
             v-model="editContent"
             @input="isDirty = true"
-            placeholder="Raw markdown..."
+            :placeholder="t('editor.rawMarkdown')"
           ></textarea>
         </div>
 
@@ -272,7 +276,7 @@
         <div v-else class="waterfall-view">
           <div v-if="displayNotes.length === 0" class="empty-state-big">
             <span class="material-icons-outlined" style="font-size:56px;color:var(--border)">description</span>
-            <p>No notes yet. Click <strong>New Note</strong> to create one.</p>
+            <p>{{ t('notes.noNotes') }}</p>
           </div>
           <div v-else class="waterfall-grid">
             <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(sortedDisplayNotes)" :key="ci">
@@ -292,7 +296,7 @@
                   @mouseleave="hoveredNotePath = null"
                   @dragstart.stop v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
                   <template v-if="cardText(note)">{{ cardText(note) }}</template>
-                  <span v-else class="card-empty">Empty note</span>
+                  <span v-else class="card-empty">{{ t('notes.emptyNote') }}</span>
                 </div>
                 <div class="card-expand-bar" v-if="overlongStates[note.path]" @click.stop="toggleExpand(note.path)">
                   <span class="material-icons-outlined">
@@ -314,7 +318,7 @@
       <div v-if="isFileDragOver" class="file-drop-overlay">
         <div class="file-drop-inner">
           <span class="material-icons-outlined">upload_file</span>
-          <p>Drop .md or .txt files to import</p>
+          <p>{{ t('notes.dropToImport') }}</p>
         </div>
       </div>
     </main>
@@ -322,7 +326,7 @@
     <!-- Draft Restored Banner -->
     <div v-if="showDraftRestoredBanner" class="draft-banner">
       <span class="material-icons-outlined" style="font-size:18px;flex-shrink:0">restore</span>
-      <span>Session expired. Your unsaved content has been restored — please save again.</span>
+      <span>{{ t('notes.draftRestored') }}</span>
       <button class="draft-banner-close" @click="showDraftRestoredBanner = false">
         <span class="material-icons-outlined">close</span>
       </button>
@@ -332,10 +336,10 @@
     <div v-if="folderPicker.visible" class="modal-overlay" @click.self="closeFolderPicker">
       <div class="folder-picker-modal">
         <div class="folder-picker-head">
-          <h3>Move to Folder</h3>
-          <button class="btn-new-folder" @click="startCreateFolderInPicker" title="New folder">
+          <h3>{{ t('modals.moveToFolder') }}</h3>
+          <button class="btn-new-folder" @click="startCreateFolderInPicker" :title="t('modals.newFolder')">
             <span class="material-icons-outlined">create_new_folder</span>
-            New Folder
+            {{ t('modals.newFolder') }}
           </button>
         </div>
         <div v-if="folderPicker.newFolderActive" class="folder-picker-new-row">
@@ -347,14 +351,14 @@
             ref="newFolderInputRef"
             v-model="folderPicker.newFolderName"
             class="folder-picker-new-input"
-            placeholder="Folder name"
+            :placeholder="t('modals.folderName')"
             @keydown.enter.prevent="submitNewFolderInPicker"
             @keydown.esc.prevent="cancelNewFolderInPicker"
           />
-          <button class="fa-btn-sm" @click="submitNewFolderInPicker" title="Create">
+          <button class="fa-btn-sm" @click="submitNewFolderInPicker" :title="t('modals.create')">
             <span class="material-icons-outlined">check</span>
           </button>
-          <button class="fa-btn-sm" @click="cancelNewFolderInPicker" title="Cancel">
+          <button class="fa-btn-sm" @click="cancelNewFolderInPicker" :title="t('modals.cancel')">
             <span class="material-icons-outlined">close</span>
           </button>
         </div>
@@ -365,7 +369,7 @@
             @click="folderPicker.selected = ''"
           >
             <span class="material-icons-outlined">home</span>
-            Root
+            {{ t('notes.root') }}
           </div>
           <div
             v-for="f in flatFoldersForPicker"
@@ -379,12 +383,12 @@
             {{ f.name }}
           </div>
           <div v-if="flatFoldersForPicker.length === 0" class="folder-picker-empty">
-            No folders yet
+            {{ t('notes.noFolders') }}
           </div>
         </div>
         <div class="prompt-actions">
-          <button class="btn btn-ghost" @click="closeFolderPicker">Cancel</button>
-          <button class="btn btn-primary" @click="confirmFolderPicker">Move Here</button>
+          <button class="btn btn-ghost" @click="closeFolderPicker">{{ t('modals.cancel') }}</button>
+          <button class="btn btn-primary" @click="confirmFolderPicker">{{ t('modals.moveHere') }}</button>
         </div>
       </div>
     </div>
@@ -395,8 +399,8 @@
         <h3>{{ promptTitle }}</h3>
         <input v-model="promptValue" class="input" :placeholder="promptTitle" @keydown.enter="submitPrompt" ref="promptInputRef" />
         <div class="prompt-actions">
-          <button class="btn btn-ghost" @click="cancelPrompt">Cancel</button>
-          <button class="btn btn-primary" @click="submitPrompt">Confirm</button>
+          <button class="btn btn-ghost" @click="cancelPrompt">{{ t('modals.cancel') }}</button>
+          <button class="btn btn-primary" @click="submitPrompt">{{ t('modals.confirm') }}</button>
         </div>
       </div>
     </div>
@@ -407,7 +411,7 @@
         <h3>{{ confirmDialog.title }}</h3>
         <p class="confirm-message" v-if="confirmDialog.message">{{ confirmDialog.message }}</p>
         <div class="prompt-actions">
-          <button class="btn btn-ghost" @click="cancelConfirm">Cancel</button>
+          <button class="btn btn-ghost" @click="cancelConfirm">{{ t('modals.cancel') }}</button>
           <button class="btn" :class="confirmDialog.danger ? 'btn-danger' : 'btn-primary'" @click="acceptConfirm">{{ confirmDialog.okLabel }}</button>
         </div>
       </div>
@@ -416,8 +420,8 @@
     <!-- Copy Dialog (iOS PWA fallback) -->
     <div v-if="copyDialog.visible" class="modal-overlay" @click.self="copyDialog.visible = false">
       <div class="prompt-modal">
-        <h3>Copy Text</h3>
-        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">Tap Copy, or long-press the text to copy manually:</p>
+        <h3>{{ t('modals.copyText') }}</h3>
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">{{ t('modals.copyInstruction') }}</p>
         <textarea
           ref="copyDialogTextarea"
           class="input"
@@ -427,8 +431,8 @@
           @focus="e => e.target.setSelectionRange(0, e.target.value.length)"
         />
         <div class="prompt-actions">
-          <button class="btn btn-ghost" @click="copyDialog.visible = false">Close</button>
-          <button class="btn btn-primary" @click="copyFromDialog">Copy</button>
+          <button class="btn btn-ghost" @click="copyDialog.visible = false">{{ t('modals.close') }}</button>
+          <button class="btn btn-primary" @click="copyFromDialog">{{ t('modals.copy') }}</button>
         </div>
       </div>
     </div>
@@ -437,21 +441,28 @@
     <div v-if="contextMenu.visible" class="context-menu-overlay" @click="closeContextMenu" @contextmenu.prevent="closeContextMenu"></div>
     <div v-if="contextMenu.visible" class="context-menu" :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }">
       <div class="context-menu-item" @click="menuEditNote">
-        <span class="material-icons-outlined">edit</span> Edit
+        <span class="material-icons-outlined">edit</span> {{ t('actions.edit') }}
       </div>
       <div class="context-menu-item" @click="menuCopyContent">
-        <span class="material-icons-outlined">content_copy</span> Copy Full Text
+        <span class="material-icons-outlined">content_copy</span> {{ t('actions.copyFullText') }}
       </div>
       <div class="context-menu-item" @click="menuDownloadNote">
-        <span class="material-icons-outlined">download</span> Download
+        <span class="material-icons-outlined">download</span> {{ t('actions.download') }}
       </div>
       <div class="context-menu-item" @click="menuMoveNote">
-        <span class="material-icons-outlined">drive_file_move</span> Move
+        <span class="material-icons-outlined">drive_file_move</span> {{ t('actions.move') }}
       </div>
       <div class="context-menu-item text-danger" @click="menuDeleteNote">
-        <span class="material-icons-outlined">delete_outline</span> Delete
+        <span class="material-icons-outlined">delete_outline</span> {{ t('actions.delete') }}
       </div>
     </div>
+
+    <!-- Settings Panel -->
+    <SettingsPanel
+      :visible="showSettings"
+      @close="showSettings = false"
+      @changed="applySettings"
+    />
   </div>
 </template>
 
@@ -461,9 +472,12 @@ import { useRouter, useRoute } from 'vue-router'
 import apiClient from '../api'
 import MilkdownEditor from '../components/MilkdownEditor.vue'
 import FolderNode from '../components/FolderNode.vue'
+import SettingsPanel from '../components/SettingsPanel.vue'
+import { useI18n } from '../i18n'
 
 const router = useRouter()
 const route = useRoute()
+const { t } = useI18n()
 
 // Wails desktop detection — window.go is injected by the Wails runtime.
 const isWailsApp = typeof window !== 'undefined' && typeof window.go !== 'undefined'
@@ -489,6 +503,7 @@ async function changeDataDir() {
 
 // Sidebar state
 const mobileSidebar = ref(false)
+const showSettings = ref(false)
 const openSections = reactive({ search: false, all: false, storage: false })
 const searchOpen = ref(false)
 
@@ -883,7 +898,7 @@ async function menuCopyContent() {
     copyDialog.content = content
     copyDialog.visible = true
   } catch (e) {
-    alert('Copy failed')
+    alert(t('errors.copyFailed'))
   }
 }
 
@@ -892,9 +907,9 @@ async function menuDeleteNote() {
   closeContextMenu()
   if (!note) return
   if (!(await showConfirm({
-    title: 'Delete note?',
-    message: 'This will permanently remove the note.',
-    okLabel: 'Delete',
+    title: t('modals.deleteNote'),
+    message: t('modals.deleteNoteMsg'),
+    okLabel: t('modals.delete'),
     danger: true,
   }))) return
   try {
@@ -902,7 +917,7 @@ async function menuDeleteNote() {
     isDirty.value = false
     await loadAll()
     if (editingNote.value && editingNote.value.path === note.path) _forceNewNote()
-  } catch (e) { alert('Delete failed') }
+  } catch (e) { alert(t('errors.deleteFailed')) }
 }
 
 async function menuDownloadNote() {
@@ -922,7 +937,7 @@ async function menuDownloadNote() {
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
   } catch (e) {
-    alert('Download failed')
+    alert(t('errors.downloadFailed'))
   }
 }
 
@@ -941,7 +956,7 @@ async function menuMoveNote() {
       const newPath = dest ? dest + '/' + note.path.split('/').pop() : note.path.split('/').pop()
       openNote({ path: newPath })
     }
-  } catch (e) { alert('Move failed') }
+  } catch (e) { alert(t('errors.moveFailed')) }
 }
 
 function showFolderPicker(defaultFolder = '') {
@@ -988,7 +1003,7 @@ async function submitNewFolderInPicker() {
     folderPicker.newFolderActive = false
     folderPicker.newFolderName = ''
   } catch (e) {
-    alert('Failed to create folder')
+    alert(t('errors.createFolderFailed'))
   }
 }
 
@@ -1158,7 +1173,41 @@ async function restoreFromUrl() {
   _forceNewNote()
 }
 
+// --- Apply font settings to CSS variables ---
+function applySettings() {
+  try {
+    const raw = localStorage.getItem('memodump_settings')
+    if (!raw) return
+    const s = JSON.parse(raw)
+    const root = document.documentElement
+
+    root.style.setProperty('--app-zoom', ((s.appFontSize || 14) / 14).toFixed(2))
+    root.style.setProperty('--editor-wysiwyg-font-size', (s.editorWysiwygFontSize || 16) + 'px')
+    root.style.setProperty('--editor-raw-font-size', (s.editorRawFontSize || 14) + 'px')
+
+    if (s.editorFonts) {
+      // Build proportional font-family: pick each system's chosen serif or sans-serif
+      const proportionalParts = []
+      for (const key of ['latin', 'sc', 'tcHK', 'tcTW']) {
+        const fs = s.editorFonts[key]
+        if (!fs) continue
+        const fontName = fs.proportional === 'serif' ? fs.serif : fs.sansSerif
+        if (fontName) proportionalParts.push(fontName.includes(' ') ? `"${fontName}"` : fontName)
+      }
+      proportionalParts.push('sans-serif')
+      root.style.setProperty('--editor-font-proportional', proportionalParts.join(', '))
+    }
+
+    // Global monospace font
+    if (s.editorMonospace) {
+      const name = s.editorMonospace.includes(' ') ? `"${s.editorMonospace}"` : s.editorMonospace
+      root.style.setProperty('--editor-font-monospace', `${name}, monospace`)
+    }
+  } catch (e) { console.warn('Failed to apply font settings:', e) }
+}
+
 onMounted(async () => {
+  applySettings()
   initWails()
   try { serverNoAuth.value = (await apiClient.config()).data.noAuth } catch (_) {}
   window.addEventListener('resize', updateColumnCount)
@@ -1229,7 +1278,7 @@ let _editorReady = false
 
 function confirmLeave() {
   if (!isDirty.value) return true
-  return confirm('You have unsaved changes. Leave without saving?')
+  return confirm(t('modals.unsavedChanges'))
 }
 
 // Internal helper: create new note without confirmLeave check (used after delete/startup)
@@ -1356,15 +1405,15 @@ async function saveNote({ silent = false } = {}) {
       return
     }
     if (silent) throw e
-    alert('Save failed: ' + (e.response?.data?.error || e.message))
+    alert(t('errors.saveFailed') + (e.response?.data?.error || e.message))
   }
 }
 
 async function deleteCurrentNote() {
   if (!(await showConfirm({
-    title: 'Delete note?',
-    message: 'This will permanently remove the note.',
-    okLabel: 'Delete',
+    title: t('modals.deleteNote'),
+    message: t('modals.deleteNoteMsg'),
+    okLabel: t('modals.delete'),
     danger: true,
   }))) return
   try {
@@ -1373,7 +1422,7 @@ async function deleteCurrentNote() {
     await loadAll()
     _forceNewNote()
   } catch (e) {
-    alert('Delete failed')
+    alert(t('errors.deleteFailed'))
   }
 }
 
@@ -1473,19 +1522,19 @@ function cancelConfirm() {
 }
 
 async function promptNewFolder(parentPath) {
-  const name = await showPrompt('Folder name:')
+  const name = await showPrompt(t('modals.folderName'))
   if (!name) return
   const path = parentPath ? parentPath + '/' + name : name
   try {
     await apiClient.createFolder(path)
     const res = await apiClient.listFolders()
     folders.value = res.data || []
-  } catch (e) { alert('Failed') }
+  } catch (e) { alert(t('errors.failed')) }
 }
 
 async function promptRenameFolder(folderPath) {
   const currentName = folderPath.split('/').pop()
-  const name = await showPrompt('New name:', currentName)
+  const name = await showPrompt(t('modals.newName'), currentName)
   if (!name || name === currentName) return
   try {
     await apiClient.renameFolder(folderPath, name)
@@ -1497,14 +1546,14 @@ async function promptRenameFolder(folderPath) {
     }
     await loadAll()
     updateUrl()
-  } catch (e) { alert('Failed') }
+  } catch (e) { alert(t('errors.failed')) }
 }
 
 async function doDeleteFolder(folderPath) {
   if (!(await showConfirm({
-    title: 'Delete folder?',
-    message: 'This will permanently remove the folder and all its contents.',
-    okLabel: 'Delete',
+    title: t('modals.deleteFolder'),
+    message: t('modals.deleteFolderMsg'),
+    okLabel: t('modals.delete'),
     danger: true,
   }))) return
   try {
@@ -1515,7 +1564,7 @@ async function doDeleteFolder(folderPath) {
     }
     await loadAll()
     updateUrl()
-  } catch (e) { alert('Failed') }
+  } catch (e) { alert(t('errors.failed')) }
 }
 
 async function doLogout() {
@@ -1548,8 +1597,8 @@ async function onDropNote({ notePath, destFolder }) {
       openNote({ path: newPath })
     }
   } catch (e) {
-    if (e.response?.status === 409) alert('A note with that name already exists in the destination folder.')
-    else alert('Move failed')
+    if (e.response?.status === 409) alert(t('errors.nameExists'))
+    else alert(t('errors.moveFailed'))
   }
 }
 
@@ -1563,9 +1612,9 @@ async function onDropFolder({ folderPath, destFolder }) {
     await loadAll()
     updateUrl()
   } catch (e) {
-    if (e.response?.status === 409) alert('A folder with that name already exists in the destination.')
-    else if (e.response?.status === 400) alert(e.response.data?.error || 'Move failed')
-    else alert('Move failed')
+    if (e.response?.status === 409) alert(t('errors.folderExists'))
+    else if (e.response?.status === 400) alert(e.response.data?.error || t('errors.moveFailed'))
+    else alert(t('errors.moveFailed'))
   }
 }
 
@@ -1631,7 +1680,7 @@ function onMainDrop(e) {
 async function uploadFiles(files) {
   const allowed = files.filter(f => /\.(md|txt)$/i.test(f.name))
   if (!allowed.length) {
-    alert('Only .md and .txt files are supported.')
+    alert(t('errors.fileTypeUnsupported'))
     return
   }
   uploadingFiles.value = true
@@ -1644,7 +1693,7 @@ async function uploadFiles(files) {
       lastOpened = res.data
     } catch (e) {
       const msg = e.response?.data?.error || e.message
-      alert(`Failed to import "${file.name}": ${msg}`)
+      alert(t('errors.importFailed').replace('{name}', file.name).replace('{msg}', msg))
     }
   }
   uploadingFiles.value = false
@@ -2125,8 +2174,8 @@ async function uploadFiles(files) {
   outline: none;
   resize: none;
   padding: 16px;
-  font-family: 'Roboto Mono', 'Consolas', 'Menlo', monospace;
-  font-size: 14px;
+  font-family: var(--editor-font-monospace);
+  font-size: var(--editor-raw-font-size);
   line-height: 1.7;
   color: var(--text);
   background: var(--bg-card);

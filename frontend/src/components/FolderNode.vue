@@ -17,13 +17,13 @@
       <span class="material-icons-outlined folder-ico">folder</span>
       <span class="folder-name">{{ folder.name }}</span>
       <div class="folder-actions">
-        <button class="fa-btn" @click.stop="$emit('new-note', folder.path)" title="New note here">
+        <button class="fa-btn" @click.stop="$emit('new-note', folder.path)" :title="t('folder.newNoteHere')">
           <span class="material-icons-outlined">note_add</span>
         </button>
-        <button class="fa-btn" @click.stop="$emit('new-folder', folder.path)" title="New subfolder">
+        <button class="fa-btn" @click.stop="$emit('new-folder', folder.path)" :title="t('folder.newSubfolder')">
           <span class="material-icons-outlined">create_new_folder</span>
         </button>
-        <button class="fa-btn delete" @click.stop="$emit('delete-folder', folder.path)" title="Delete">
+        <button class="fa-btn delete" @click.stop="$emit('delete-folder', folder.path)" :title="t('modals.delete')">
           <span class="material-icons-outlined">delete_outline</span>
         </button>
       </div>
@@ -64,6 +64,9 @@
 
 <script setup>
 import { ref } from 'vue'
+import { useI18n } from '../i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   folder: Object,
