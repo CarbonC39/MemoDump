@@ -6,3 +6,4 @@ memodump
 .claude/
 package.json.md5
 docs/
+.DS_Store
