@@ -1,69 +1,134 @@
 <template>
-  <Teleport to="body">
-    <div class="settings-overlay" v-if="visible" ref="panelEl" tabindex="-1" @click.self="$emit('close')" @keydown.escape="$emit('close')">
-      <div class="settings-panel">
-        <div class="settings-header">
-          <span class="material-icons-outlined">settings</span>
-          <h3>{{ t('settings.title') }}</h3>
-          <button class="btn btn-icon btn-ghost" @click="$emit('close')">
-            <span class="material-icons-outlined">close</span>
-          </button>
+  <div class="settings-page">
+    <div class="settings-header">
+      <h2>{{ t('settings.title') }}</h2>
+      <button class="btn btn-icon btn-ghost" @click="$emit('close')">
+        <span class="material-icons-outlined">close</span>
+      </button>
+    </div>
+
+    <div class="settings-body">
+      <!-- Preview card -->
+      <div class="preview-card">
+        <div class="preview-card-header">{{ t('settings.preview') }}</div>
+        <div class="preview-section">
+          <div class="preview-label">{{ t('settings.previewProportional') }}</div>
+          <div class="preview-sample preview-proportional">
+            <p>The quick brown fox jumps over the lazy dog.</p>
+            <p><strong>Bold text</strong> <em>italic text</em></p>
+            <p>简体中文示例文字 繁體中文範例</p>
+          </div>
+        </div>
+        <div class="preview-section">
+          <div class="preview-label">{{ t('settings.previewMonospace') }}</div>
+          <div class="preview-sample preview-monospace">
+            function hello() {<br/>
+            &nbsp;&nbsp;return "Hello, world!";<br/>
+            }
+          </div>
+        </div>
+      </div>
+
+      <hr class="settings-divider" />
+
+      <!-- Interface section -->
+      <div class="settings-section">
+        <div class="settings-section-label">{{ t('settings.language') }}</div>
+        <hr class="settings-section-line" />
+
+        <div class="setting-row">
+          <span class="setting-row-label">{{ t('settings.language') }}</span>
+          <select class="input input-select" :value="locale" @change="setLocale($event.target.value)">
+            <option value="en">English</option>
+            <option value="zh-CN">简体中文</option>
+          </select>
         </div>
 
-        <div class="settings-body">
-          <!-- Language -->
-          <div class="setting-group">
-            <label class="setting-label">{{ t('settings.language') }}</label>
-            <select class="input" :value="locale" @change="setLocale($event.target.value)">
-              <option value="en">English</option>
-              <option value="zh-CN">简体中文</option>
-            </select>
+        <div class="setting-row">
+          <span class="setting-row-label">{{ t('settings.appFontSize') }}</span>
+          <div class="number-input-group">
+            <input
+              type="number"
+              class="input input-number"
+              v-model.number="local.appFontSize"
+              :min="10" :max="24" :step="1"
+              @blur="clamp('appFontSize', 10, 24)"
+              @change="onSettingChange"
+            />
+            <span class="unit">px</span>
           </div>
+        </div>
+      </div>
 
-          <!-- App Font Size -->
-          <div class="setting-group">
-            <label class="setting-label">{{ t('settings.appFontSize') }}</label>
-            <div class="slider-row">
-              <input
-                type="range"
-                min="10" max="24" step="1"
-                :value="local.appFontSize"
-                @input="setAppFontSize(Number($event.target.value))"
-              />
-              <span class="slider-value">{{ local.appFontSize }}px</span>
-            </div>
+      <hr class="settings-divider" />
+
+      <!-- Editor section -->
+      <div class="settings-section">
+        <div class="settings-section-label">Editor</div>
+        <hr class="settings-section-line" />
+
+        <div class="setting-row">
+          <span class="setting-row-label">{{ t('settings.editorWysiwygFontSize') }}</span>
+          <div class="number-input-group">
+            <input
+              type="number"
+              class="input input-number"
+              v-model.number="local.editorWysiwygFontSize"
+              :min="12" :max="32" :step="1"
+              @blur="clamp('editorWysiwygFontSize', 12, 32)"
+              @change="onSettingChange"
+            />
+            <span class="unit">px</span>
           </div>
+        </div>
 
-          <!-- WYSIWYG Font Size -->
-          <div class="setting-group">
-            <label class="setting-label">{{ t('settings.editorWysiwygFontSize') }}</label>
-            <div class="slider-row">
-              <input
-                type="range"
-                min="12" max="32" step="1"
-                :value="local.editorWysiwygFontSize"
-                @input="setWysiwygFontSize(Number($event.target.value))"
-              />
-              <span class="slider-value">{{ local.editorWysiwygFontSize }}px</span>
-            </div>
+        <div class="setting-row">
+          <span class="setting-row-label">{{ t('settings.editorRawFontSize') }}</span>
+          <div class="number-input-group">
+            <input
+              type="number"
+              class="input input-number"
+              v-model.number="local.editorRawFontSize"
+              :min="12" :max="32" :step="1"
+              @blur="clamp('editorRawFontSize', 12, 32)"
+              @change="onSettingChange"
+            />
+            <span class="unit">px</span>
           </div>
+        </div>
 
-          <!-- Raw Editor Font Size -->
-          <div class="setting-group">
-            <label class="setting-label">{{ t('settings.editorRawFontSize') }}</label>
-            <div class="slider-row">
-              <input
-                type="range"
-                min="12" max="32" step="1"
-                :value="local.editorRawFontSize"
-                @input="setRawFontSize(Number($event.target.value))"
-              />
-              <span class="slider-value">{{ local.editorRawFontSize }}px</span>
-            </div>
+        <div class="setting-row">
+          <span class="setting-row-label">{{ t('settings.monospaceFont') }}</span>
+          <select
+            v-if="!customFields['editorMonospace']"
+            class="input input-select"
+            :value="local.editorMonospace"
+            @change="onFontSelect('editorMonospace', $event.target.value)"
+          >
+            <option v-for="f in installedFonts" :key="f" :value="f">{{ f }}</option>
+            <option value="__custom__">Custom...</option>
+          </select>
+          <div v-else class="custom-font-row">
+            <input
+              type="text"
+              class="input"
+              v-model="customValues['editorMonospace']"
+              @input="onCustomInput('editorMonospace')"
+            />
+            <button class="btn btn-ghost btn-sm" @click="customFields['editorMonospace'] = false">&#8617;</button>
           </div>
+        </div>
+      </div>
 
-          <hr class="settings-divider" />
+      <hr class="settings-divider" />
 
+      <!-- Advanced Typography (collapsed) -->
+      <details class="settings-advanced">
+        <summary>
+          <span class="material-icons-outlined">chevron_right</span>
+          {{ t('settings.advancedTypography') }}
+        </summary>
+        <div class="advanced-body">
           <!-- Writing System Selector -->
           <div class="setting-group">
             <label class="setting-label">{{ t('settings.fontsFor') }}</label>
@@ -145,54 +210,28 @@
               <button class="btn btn-ghost btn-sm" @click="customFields[serifKey] = false">&#8617;</button>
             </div>
           </div>
-
-          <hr class="settings-divider" />
-
-          <!-- Global Monospace -->
-          <div class="setting-group">
-            <label class="setting-label">{{ t('settings.monospaceFont') }}</label>
-            <select
-              v-if="!customFields['editorMonospace']"
-              class="input"
-              :value="local.editorMonospace"
-              @change="onFontSelect('editorMonospace', $event.target.value)"
-            >
-              <option v-for="f in installedFonts" :key="f" :value="f">{{ f }}</option>
-              <option value="__custom__">Custom...</option>
-            </select>
-            <div v-else class="custom-font-row">
-              <input
-                type="text"
-                class="input"
-                v-model="customValues['editorMonospace']"
-                @input="onCustomInput('editorMonospace')"
-              />
-              <button class="btn btn-ghost btn-sm" @click="customFields['editorMonospace'] = false">&#8617;</button>
-            </div>
-          </div>
         </div>
+      </details>
 
-        <div class="settings-footer">
-          <button class="btn btn-ghost reset-btn" @click="resetToDefaults">
-            <span class="material-icons-outlined">restart_alt</span>
-            {{ t('settings.resetToDefaults') }}
-          </button>
-        </div>
-      </div>
+      <hr class="settings-divider" />
+
+      <!-- Reset -->
+      <button class="btn btn-ghost reset-btn" @click="resetToDefaults">
+        <span class="material-icons-outlined">restart_alt</span>
+        {{ t('settings.resetToDefaults') }}
+      </button>
     </div>
-  </Teleport>
+  </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useI18n } from '../i18n'
 const { t, locale, setLocale } = useI18n()
 
-const emit = defineEmits(['close', 'changed'])
+const emit = defineEmits(['close'])
 
-const props = defineProps({
-  visible: { type: Boolean, default: false },
-})
+// Must NOT define props.visible — visibility is controlled by parent v-show.
 
 // --- Fonts to detect ---
 const FONTS_TO_DETECT = [
@@ -232,7 +271,6 @@ function loadSettings() {
     const raw = localStorage.getItem('memodump_settings')
     if (raw) {
       const parsed = JSON.parse(raw)
-      // Deep-merge with defaults to fill any missing keys from older versions
       return deepMerge(DEFAULTS, parsed)
     }
   } catch (e) { console.warn('Failed to load font settings:', e) }
@@ -269,7 +307,11 @@ function detectFonts() {
   }
   installedFonts.value = [...detected].sort()
 }
-onMounted(() => detectFonts())
+onMounted(() => {
+  detectFonts()
+  // Apply CSS variables on initial load so settings take effect before any user interaction
+  applySettings()
+})
 
 // --- Custom font mode tracking ---
 const customFields = reactive({})
@@ -283,8 +325,7 @@ function setFontValue(fieldKey, value) {
     const [system, prop] = fieldKey.split('.')
     local.editorFonts[system][prop] = value
   }
-  saveSettings()
-  emit('changed', { ...local })
+  onSettingChange()
 }
 
 function getFontValue(fieldKey) {
@@ -307,14 +348,37 @@ function onCustomInput(fieldKey) {
   setFontValue(fieldKey, customValues[fieldKey])
 }
 
-// --- Panel ref for Escape key focus ---
-const panelEl = ref(null)
+// --- Apply CSS variables to :root ---
+// Moved from MainView.vue — SettingsPanel owns the full settings lifecycle.
+function applySettings() {
+  try {
+    const raw = localStorage.getItem('memodump_settings')
+    if (!raw) return
+    const s = JSON.parse(raw)
+    const root = document.documentElement
 
-watch(() => props.visible, (v) => {
-  if (v) {
-    setTimeout(() => panelEl.value?.focus(), 100)
-  }
-})
+    root.style.setProperty('--app-zoom', ((s.appFontSize || 14) / 14).toFixed(2))
+    root.style.setProperty('--editor-wysiwyg-font-size', (s.editorWysiwygFontSize || 16) + 'px')
+    root.style.setProperty('--editor-raw-font-size', (s.editorRawFontSize || 14) + 'px')
+
+    if (s.editorFonts) {
+      const proportionalParts = []
+      for (const key of ['latin', 'sc', 'tcHK', 'tcTW']) {
+        const fs = s.editorFonts[key]
+        if (!fs) continue
+        const fontName = fs.proportional === 'serif' ? fs.serif : fs.sansSerif
+        if (fontName) proportionalParts.push(fontName.includes(' ') ? `"${fontName}"` : fontName)
+      }
+      proportionalParts.push('sans-serif')
+      root.style.setProperty('--editor-font-proportional', proportionalParts.join(', '))
+    }
+
+    if (s.editorMonospace) {
+      const name = s.editorMonospace.includes(' ') ? `"${s.editorMonospace}"` : s.editorMonospace
+      root.style.setProperty('--editor-font-monospace', `${name}, monospace`)
+    }
+  } catch (e) { console.warn('Failed to apply font settings:', e) }
+}
 
 // --- Persist to localStorage ---
 function saveSettings() {
@@ -325,25 +389,21 @@ function saveSettings() {
   } catch (_) {}
 }
 
-// --- Change handlers ---
-function setAppFontSize(val) {
-  local.appFontSize = val
+// Called on every number/select change
+function onSettingChange() {
   saveSettings()
-  emit('changed', { ...local })
+  applySettings()
 }
 
-function setWysiwygFontSize(val) {
-  local.editorWysiwygFontSize = val
+// --- Number input clamp on blur ---
+function clamp(field, min, max) {
+  if (local[field] < min) local[field] = min
+  if (local[field] > max) local[field] = max
   saveSettings()
-  emit('changed', { ...local })
+  applySettings()
 }
 
-function setRawFontSize(val) {
-  local.editorRawFontSize = val
-  saveSettings()
-  emit('changed', { ...local })
-}
-
+// --- Writing system selection (advanced typography) ---
 const selectedSystem = ref('latin')
 
 const currentFonts = computed(() => {
@@ -355,13 +415,12 @@ const serifKey = computed(() => selectedSystem.value + '.serif')
 
 function setProportional(val) {
   local.editorFonts[selectedSystem.value].proportional = val
-  saveSettings()
-  emit('changed', { ...local })
+  onSettingChange()
 }
 
+// --- Reset ---
 function resetToDefaults() {
   const fresh = JSON.parse(JSON.stringify(DEFAULTS))
-  // Clear custom mode tracking
   for (const key of Object.keys(customFields)) {
     delete customFields[key]
   }
@@ -369,99 +428,206 @@ function resetToDefaults() {
     delete customValues[key]
   }
   Object.assign(local, fresh)
-  saveSettings()
-  emit('changed', { ...local })
+  onSettingChange()
 }
 </script>
 
 <style scoped>
-.settings-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
-  background: rgba(0, 0, 0, 0.2);
-  display: flex;
-}
-
-.settings-panel {
-  width: 300px;
+.settings-page {
   height: 100%;
-  background: var(--bg-card);
-  display: flex;
-  flex-direction: column;
-  box-shadow: 2px 0 16px rgba(0, 0, 0, 0.08);
-  animation: slideIn 0.2s ease;
-}
-
-@keyframes slideIn {
-  from { transform: translateX(-100%); }
-  to   { transform: translateX(0); }
+  overflow-y: auto;
+  background: var(--bg);
 }
 
 .settings-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 16px;
+  justify-content: space-between;
+  padding: 16px 24px;
   border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
+  background: var(--bg-card);
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
-.settings-header h3 {
-  font-size: 15px;
+.settings-header h2 {
+  font-size: 18px;
   font-weight: 700;
-  flex: 1;
-}
-
-.settings-header .material-icons-outlined {
-  font-size: 20px;
-  color: var(--text-secondary);
 }
 
 .settings-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 24px;
 }
 
-.setting-group {
+/* ---- Preview card ---- */
+.preview-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+}
+
+.preview-card-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+}
+
+.preview-section {
+  margin-bottom: 12px;
+}
+.preview-section:last-child { margin-bottom: 0; }
+
+.preview-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.preview-proportional {
+  font-family: var(--editor-font-proportional);
+  font-size: var(--editor-wysiwyg-font-size);
+  line-height: 1.75;
+  color: var(--text);
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+}
+
+.preview-proportional p { margin: 0.3em 0; }
+
+.preview-monospace {
+  font-family: var(--editor-font-monospace);
+  font-size: var(--editor-raw-font-size);
+  line-height: 1.7;
+  color: var(--text);
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  white-space: pre-wrap;
+}
+
+/* ---- Dividers ---- */
+.settings-divider {
+  border: none;
+  border-top: 1px solid var(--border-light);
+  margin: 20px 0;
+}
+
+/* ---- Section headers ---- */
+.settings-section-label {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-section-line {
+  border: none;
+  border-top: 1px solid var(--border-light);
+  margin: 8px 0 14px;
+}
+
+/* ---- Setting rows ---- */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 14px;
 }
+.setting-row:last-child { margin-bottom: 0; }
 
-.setting-label {
+.setting-row-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* ---- Number input ---- */
+.number-input-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.input-number {
+  width: 64px;
+  padding: 6px 8px;
+  text-align: center;
+  font-size: 13px;
+}
+/* Keep native spinner visible */
+.input-number::-webkit-inner-spin-button,
+.input-number::-webkit-outer-spin-button { opacity: 1; }
+
+.unit {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* ---- Select ---- */
+.input-select {
+  width: 180px;
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+/* ---- Advanced typography ---- */
+.settings-advanced {
+  padding: 0;
+}
+.settings-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  list-style: none;
+  padding: 2px 0;
+}
+.settings-advanced > summary::-webkit-details-marker { display: none; }
+.settings-advanced > summary .material-icons-outlined {
+  font-size: 18px;
+  transition: transform 0.15s;
+}
+.settings-advanced[open] > summary .material-icons-outlined {
+  transform: rotate(90deg);
+}
+
+.advanced-body {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.advanced-body .setting-group {
+  margin-bottom: 12px;
+}
+.advanced-body .setting-group:last-child { margin-bottom: 0; }
+
+.advanced-body .setting-label {
   display: block;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
-.slider-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.slider-row input[type="range"] {
-  flex: 1;
-  accent-color: var(--primary);
-  height: 4px;
-}
-
-.slider-value {
+.advanced-body .input {
   font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  min-width: 36px;
-  text-align: right;
-}
-
-.settings-divider {
-  border: none;
-  border-top: 1px solid var(--border-light);
-  margin: 16px 0;
+  padding: 6px 8px;
 }
 
 .radio-row {
@@ -482,21 +648,12 @@ function resetToDefaults() {
   accent-color: var(--primary);
 }
 
-.settings-body .input {
-  font-size: 13px;
-  padding: 8px 10px;
-}
-
 .custom-font-row {
   display: flex;
   gap: 6px;
   align-items: center;
 }
-
-.custom-font-row .input {
-  flex: 1;
-}
-
+.custom-font-row .input { flex: 1; }
 .custom-font-row .btn-sm {
   padding: 4px 8px;
   font-size: 14px;
@@ -504,31 +661,22 @@ function resetToDefaults() {
   flex-shrink: 0;
 }
 
-.settings-footer {
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
+/* ---- Reset button ---- */
 .reset-btn {
-  width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  width: 100%;
   font-size: 13px;
   color: var(--text-muted);
-  padding: 8px;
+  padding: 10px;
   border-radius: var(--radius);
   transition: color 0.15s, background 0.15s;
 }
-
 .reset-btn:hover {
   color: var(--danger);
   background: var(--danger-light);
 }
-
-.reset-btn .material-icons-outlined {
-  font-size: 16px;
-}
+.reset-btn .material-icons-outlined { font-size: 16px; }
 </style>
