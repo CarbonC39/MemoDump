@@ -1,8 +1,8 @@
 {
   "sidebar": {
-    "newNote": "新建笔记",
+    "newNote": "新建",
     "search": "搜索",
-    "allNotes": "全部笔记",
+    "allNotes": "全部",
     "storage": "存储",
     "settings": "设置",
     "dataFolder": "数据目录",
@@ -14,8 +14,8 @@
     "save": "保存",
     "untitled": "无标题",
     "deleteNote": "删除笔记",
-    "rawMarkdown": "原始 Markdown...",
-    "switchToRaw": "切换到原始 Markdown",
+    "rawMarkdown": "原始文本...",
+    "switchToRaw": "切换到纯文本",
     "switchToRich": "切换到富文本",
     "newNote": "新建笔记",
     "back": "返回",
@@ -36,7 +36,7 @@
     "language": "语言",
     "appFontSize": "应用字体大小",
     "editorWysiwygFontSize": "富文本字体大小",
-    "editorRawFontSize": "原始编辑器字体大小",
+    "editorRawFontSize": "代码编辑器字体大小",
     "fontsFor": "字体设置：",
     "proportional": "比例字体：",
     "sansSerif": "无衬线体",
@@ -53,7 +53,7 @@
     "close": "关闭",
     "copy": "复制",
     "create": "创建",
-    "moveHere": "移动到此",
+    "moveHere": "移动",
     "moveToFolder": "移动到文件夹",
     "newFolder": "新建文件夹",
     "folderName": "文件夹名称：",
@@ -111,5 +111,5 @@
     "fileTypeUnsupported": "仅支持 .md 和 .txt 文件。",
     "importFailed": "导入 \"{name}\" 失败：{msg}"
   },
-  "editorPlaceholder": "输入 / 打开快捷菜单，或直接开始输入..."
+  "editorPlaceholder": "输入 / 唤出快捷菜单，或直接开始写作..."
 }
