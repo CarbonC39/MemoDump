@@ -4,6 +4,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from '../i18n'
 import { Crepe } from '@milkdown/crepe'
 import { $prose } from '@milkdown/utils'
 import { Plugin, PluginKey } from '@milkdown/prose/state'
@@ -13,6 +14,8 @@ import '@milkdown/crepe/theme/frame.css'
 const props = defineProps({
   initialContent: { type: String, default: '' },
 })
+
+const { t } = useI18n()
 
 // Milkdown's task-list `checked` attr lives on the list_item node, separate
 // from its text content. If a checked item's text is fully cleared and new
@@ -76,7 +79,7 @@ onMounted(async () => {
     },
     featureConfigs: {
       'placeholder': {
-        text: 'Type / to open the quick menu, or just start typing...',
+        text: t('editorPlaceholder'),
       }
     }
   })

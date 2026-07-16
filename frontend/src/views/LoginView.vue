@@ -5,20 +5,20 @@
         <div class="login-logo">
           <img src="/favicon.ico" width="64" height="64" alt="Logo" style="border-radius: 10px;" />
         </div>
-        <h1>MemoDump</h1>
+        <h1>{{ t('login.brand') }}</h1>
       </div>
       <form @submit.prevent="doLogin" class="login-form">
         <div v-if="error" class="login-error">{{ error }}</div>
         <div class="form-group">
-          <label>Account</label>
-          <input v-model="user" type="text" class="input" placeholder="Username" autofocus />
+          <label>{{ t('login.account') }}</label>
+          <input v-model="user" type="text" class="input" :placeholder="t('login.username')" autofocus />
         </div>
         <div class="form-group">
-          <label>Password</label>
-          <input v-model="pass" type="password" class="input" placeholder="Password" />
+          <label>{{ t('login.password') }}</label>
+          <input v-model="pass" type="password" class="input" :placeholder="t('login.password')" />
         </div>
         <button type="submit" class="btn btn-primary w-full" :disabled="loading" style="width:100%">
-          {{ loading ? 'Signing in...' : 'Sign In' }}
+          {{ loading ? t('login.signingIn') : t('login.signIn') }}
         </button>
       </form>
     </div>
@@ -28,8 +28,10 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { useI18n } from '../i18n'
 import api from '../api'
 
+const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const user = ref('')
@@ -39,7 +41,7 @@ const loading = ref(false)
 
 async function doLogin() {
   if (!user.value || !pass.value) {
-    error.value = 'Please enter account and password'
+    error.value = t('login.enterCredentials')
     return
   }
   loading.value = true
@@ -49,7 +51,7 @@ async function doLogin() {
     const redirect = (route.query.redirect && typeof route.query.redirect === 'string') ? route.query.redirect : '/'
     router.push(redirect)
   } catch (e) {
-    error.value = e.response?.data?.error || 'Login failed'
+    error.value = e.response?.data?.error || t('login.loginFailed')
   } finally {
     loading.value = false
   }

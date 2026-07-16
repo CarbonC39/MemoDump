@@ -1,0 +1,115 @@
+{
+  "sidebar": {
+    "newNote": "New Note",
+    "search": "Search",
+    "allNotes": "All Notes",
+    "storage": "Storage",
+    "settings": "Settings",
+    "dataFolder": "Data Folder",
+    "signOut": "Sign Out",
+    "savedInBrowser": "Saved in this browser",
+    "savedInBrowserTitle": "Your notes are kept in this browser's local storage — nothing is uploaded to a server."
+  },
+  "editor": {
+    "save": "Save",
+    "untitled": "Untitled",
+    "deleteNote": "Delete note",
+    "rawMarkdown": "Raw markdown...",
+    "switchToRaw": "Switch to raw markdown",
+    "switchToRich": "Switch to rich text",
+    "newNote": "New note",
+    "back": "Back",
+    "allNotes": "All Notes"
+  },
+  "login": {
+    "brand": "MemoDump",
+    "account": "Account",
+    "username": "Username",
+    "password": "Password",
+    "signIn": "Sign In",
+    "signingIn": "Signing in...",
+    "enterCredentials": "Please enter account and password",
+    "loginFailed": "Login failed"
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Language",
+    "appFontSize": "App Font Size",
+    "editorWysiwygFontSize": "Rich Text Font Size",
+    "editorRawFontSize": "Raw Editor Font Size",
+    "fontsFor": "Fonts for:",
+    "proportional": "Proportional:",
+    "sansSerif": "Sans-serif",
+    "serif": "Serif",
+    "sansSerifFont": "Sans-serif font:",
+    "serifFont": "Serif font:",
+    "monospaceFont": "Monospace font:",
+    "resetToDefaults": "Reset to Defaults"
+  },
+  "modals": {
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "delete": "Delete",
+    "close": "Close",
+    "copy": "Copy",
+    "create": "Create",
+    "moveHere": "Move Here",
+    "moveToFolder": "Move to Folder",
+    "newFolder": "New Folder",
+    "folderName": "Folder name:",
+    "newName": "New name:",
+    "copyText": "Copy Text",
+    "copyInstruction": "Tap Copy, or long-press the text to copy manually:",
+    "deleteNote": "Delete note?",
+    "deleteNoteMsg": "This will permanently remove the note.",
+    "deleteFolder": "Delete folder?",
+    "deleteFolderMsg": "This will permanently remove the folder and all its contents.",
+    "unsavedChanges": "You have unsaved changes. Leave without saving?"
+  },
+  "search": {
+    "searchNotes": "Search Notes",
+    "searchContent": "Search content...",
+    "searchTags": "Search tags...",
+    "typeToSearch": "Type to search...",
+    "noResults": "No results found"
+  },
+  "notes": {
+    "emptyNote": "Empty note",
+    "noNotes": "No notes yet. Click New Note to create one.",
+    "noFolders": "No folders yet",
+    "root": "Root",
+    "tagPlaceholder": "+ tag",
+    "dropToImport": "Drop .md or .txt files to import",
+    "importing": "Importing...",
+    "importMd": "Import .md",
+    "draftRestored": "Session expired. Your unsaved content has been restored — please save again.",
+    "sortOrder": "Sort order",
+    "recentlyModified": "Recently modified",
+    "oldestModified": "Oldest modified"
+  },
+  "folder": {
+    "newNoteHere": "New note here",
+    "newSubfolder": "New subfolder"
+  },
+  "actions": {
+    "edit": "Edit",
+    "copyFullText": "Copy Full Text",
+    "download": "Download",
+    "move": "Move",
+    "delete": "Delete"
+  },
+  "errors": {
+    "copyFailed": "Copy failed",
+    "deleteFailed": "Delete failed",
+    "downloadFailed": "Download failed",
+    "moveFailed": "Move failed",
+    "createFolderFailed": "Failed to create folder",
+    "saveFailed": "Save failed: ",
+    "failed": "Failed",
+    "nameExists": "A note with that name already exists in the destination folder.",
+    "folderExists": "A folder with that name already exists in the destination.",
+    "fileTypeUnsupported": "Only .md and .txt files are supported.",
+    "importFailed": "Failed to import \"{name}\": {msg}"
+  },
+  "editorPlaceholder": "Type / to open the quick menu, or just start typing..."
+}
