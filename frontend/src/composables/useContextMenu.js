@@ -1,9 +1,11 @@
 import { reactive } from 'vue'
 import apiClient from '../api'
+import { useI18n } from '../i18n'
 
 // Per-card context menu: edit/copy/duplicate/download/move/delete. The menu
 // is positioned near the three-dot button and stays within the viewport.
 export function useContextMenu({ openNote, isDirty, loadAll, editingNote, _forceNewNote, showConfirm, showFolderPicker, copyDialog }) {
+  const { t } = useI18n()
   const contextMenu = reactive({
     visible: false,
     x: 0,
@@ -71,7 +73,7 @@ export function useContextMenu({ openNote, isDirty, loadAll, editingNote, _force
       copyDialog.content = content
       copyDialog.visible = true
     } catch (e) {
-      alert('Copy failed')
+      alert(t('errors.copyFailed'))
     }
   }
 
@@ -90,9 +92,9 @@ export function useContextMenu({ openNote, isDirty, loadAll, editingNote, _force
     closeContextMenu()
     if (!note) return
     if (!(await showConfirm({
-      title: 'Delete note?',
-      message: 'This will permanently remove the note.',
-      okLabel: 'Delete',
+      title: t('modals.deleteNote'),
+      message: t('modals.deleteNoteMsg'),
+      okLabel: t('modals.delete'),
       danger: true,
     }))) return
     try {
@@ -100,7 +102,7 @@ export function useContextMenu({ openNote, isDirty, loadAll, editingNote, _force
       isDirty.value = false
       await loadAll()
       if (editingNote.value && editingNote.value.path === note.path) _forceNewNote()
-    } catch (e) { alert('Delete failed') }
+    } catch (e) { alert(t('errors.deleteFailed')) }
   }
 
   async function menuDownloadNote() {
@@ -120,7 +122,7 @@ export function useContextMenu({ openNote, isDirty, loadAll, editingNote, _force
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
     } catch (e) {
-      alert('Download failed')
+      alert(t('errors.downloadFailed'))
     }
   }
 
@@ -139,7 +141,7 @@ export function useContextMenu({ openNote, isDirty, loadAll, editingNote, _force
         const newPath = dest ? dest + '/' + note.path.split('/').pop() : note.path.split('/').pop()
         openNote({ path: newPath })
       }
-    } catch (e) { alert('Move failed') }
+    } catch (e) { alert(t('errors.moveFailed')) }
   }
 
   return {

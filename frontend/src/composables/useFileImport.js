@@ -1,10 +1,12 @@
 import { ref } from 'vue'
 import apiClient from '../api'
+import { useI18n } from '../i18n'
 
 // Card drag/drop (move notes/folders) + .md/.txt file import via drag/drop or
 // the file picker. Folder moves update the current-folder ref + URL so the
 // view follows a moved folder; imports open the last imported note.
 export function useFileImport({ editFolder, currentFolder, loadAll, openNote, editingNote, updateUrl }) {
+  const { t } = useI18n()
   const hoveredNotePath = ref(null)
 
   // ===== DRAG AND DROP =====
@@ -26,8 +28,8 @@ export function useFileImport({ editFolder, currentFolder, loadAll, openNote, ed
         openNote({ path: newPath })
       }
     } catch (e) {
-      if (e.response?.status === 409) alert('A note with that name already exists in the destination folder.')
-      else alert('Move failed')
+      if (e.response?.status === 409) alert(t('errors.nameExists'))
+      else alert(t('errors.moveFailed'))
     }
   }
 
@@ -41,9 +43,9 @@ export function useFileImport({ editFolder, currentFolder, loadAll, openNote, ed
       await loadAll()
       updateUrl()
     } catch (e) {
-      if (e.response?.status === 409) alert('A folder with that name already exists in the destination.')
-      else if (e.response?.status === 400) alert(e.response.data?.error || 'Move failed')
-      else alert('Move failed')
+      if (e.response?.status === 409) alert(t('errors.folderExists'))
+      else if (e.response?.status === 400) alert(e.response.data?.error || t('errors.moveFailed'))
+      else alert(t('errors.moveFailed'))
     }
   }
 
@@ -109,7 +111,7 @@ export function useFileImport({ editFolder, currentFolder, loadAll, openNote, ed
   async function uploadFiles(files) {
     const allowed = files.filter(f => /\.(md|txt)$/i.test(f.name))
     if (!allowed.length) {
-      alert('Only .md and .txt files are supported.')
+      alert(t('errors.fileTypeUnsupported'))
       return
     }
     uploadingFiles.value = true
@@ -122,7 +124,7 @@ export function useFileImport({ editFolder, currentFolder, loadAll, openNote, ed
         lastOpened = res.data
       } catch (e) {
         const msg = e.response?.data?.error || e.message
-        alert(`Failed to import "${file.name}": ${msg}`)
+        alert(t('errors.importFailed').replace('{name}', file.name).replace('{msg}', msg))
       }
     }
     uploadingFiles.value = false

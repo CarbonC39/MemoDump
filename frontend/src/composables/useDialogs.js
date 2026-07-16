@@ -1,7 +1,9 @@
 import { ref, reactive, nextTick } from 'vue'
 import apiClient from '../api'
+import { useI18n } from '../i18n'
 
 export function useDialogs({ folders }) {
+  const { t } = useI18n()
   // ===== Confirm Modal =====
   const confirmDialog = reactive({
     visible: false,
@@ -147,7 +149,7 @@ export function useDialogs({ folders }) {
       folderPicker.newFolderActive = false
       folderPicker.newFolderName = ''
     } catch (e) {
-      alert('Failed to create folder')
+      alert(t('errors.createFolderFailed'))
     }
   }
 
