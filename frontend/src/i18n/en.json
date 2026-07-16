@@ -35,6 +35,7 @@
     "title": "Settings",
     "language": "Language",
     "appFontSize": "App Font Size",
+    "editorSection": "Editor",
     "editorWysiwygFontSize": "Rich Text Font Size",
     "editorRawFontSize": "Raw Editor Font Size",
     "fontsFor": "Fonts for:",

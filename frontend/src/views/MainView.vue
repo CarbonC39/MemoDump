@@ -87,18 +87,17 @@
       </div>
 
       <div class="sidebar-footer">
-        <button class="sidebar-action" @click="showSettings = !showSettings">
-          <span class="material-icons-outlined">settings</span>
-          {{ t('sidebar.settings') }}
-        </button>
-        <button v-if="isWailsApp" class="sidebar-action" @click="changeDataDir" :title="wailsDataDir">
-          <span class="material-icons-outlined">folder_open</span>
-          {{ t('sidebar.dataFolder') }}
-        </button>
-        <button v-if="!serverNoAuth" class="sidebar-action logout" @click="doLogout">
-          <span class="material-icons-outlined">logout</span>
-          {{ t('sidebar.signOut') }}
-        </button>
+        <div class="footer-icons">
+          <button v-if="isWailsApp" class="btn btn-icon" @click="changeDataDir" :title="wailsDataDir">
+            <span class="material-icons-outlined">folder_open</span>
+          </button>
+          <button v-if="!serverNoAuth" class="btn btn-icon" @click="doLogout" title="Sign Out">
+            <span class="material-icons-outlined">logout</span>
+          </button>
+          <button class="btn btn-icon footer-gear" @click="showSettings = true" title="Settings">
+            <span class="material-icons-outlined">settings</span>
+          </button>
+        </div>
         <div v-if="isLocalBuild" class="local-hint" :title="t('sidebar.savedInBrowserTitle')">
           <span class="material-icons-outlined">cloud_off</span>
           <span>{{ t('sidebar.savedInBrowser') }}</span>
@@ -200,8 +199,13 @@
       </header>
 
       <div class="content-area" :class="{ 'is-editing': editingNote }">
-        <!-- Search results (right-side panel) -->
-        <div v-if="searchOpen" class="search-results-view">
+        <!-- Settings page (v-show: editor stays mounted behind) -->
+        <SettingsPanel v-show="showSettings" @close="showSettings = false" />
+
+        <!-- Normal content: hidden when settings is open -->
+        <div v-show="!showSettings">
+          <!-- Search results (right-side panel) -->
+          <div v-if="searchOpen" class="search-results-view">
           <div class="search-results-header">
             <h2>{{ t('search.searchNotes') }}</h2>
             <button class="btn btn-icon btn-ghost" @click="searchOpen = false">
@@ -311,6 +315,7 @@
               </div>
             </div>
           </div>
+        </div>
         </div>
       </div>
 
@@ -442,12 +447,6 @@
       @edit="menuEditNote" @copy="menuCopyContent" @duplicate="menuDuplicateNote"
       @download="menuDownloadNote" @move="menuMoveNote" @delete="menuDeleteNote" @close="closeContextMenu" />
 
-    <!-- Settings Panel -->
-    <SettingsPanel
-      :visible="showSettings"
-      @close="showSettings = false"
-      @changed="applySettings"
-    />
   </div>
 </template>
 
@@ -711,42 +710,7 @@ async function restoreFromUrl() {
   // Default: show all notes, open new note bypassing confirmLeave (startup)
   _forceNewNote()
 }
-
-// --- Apply font settings to CSS variables ---
-function applySettings() {
-  try {
-    const raw = localStorage.getItem('memodump_settings')
-    if (!raw) return
-    const s = JSON.parse(raw)
-    const root = document.documentElement
-
-    root.style.setProperty('--app-zoom', ((s.appFontSize || 14) / 14).toFixed(2))
-    root.style.setProperty('--editor-wysiwyg-font-size', (s.editorWysiwygFontSize || 16) + 'px')
-    root.style.setProperty('--editor-raw-font-size', (s.editorRawFontSize || 14) + 'px')
-
-    if (s.editorFonts) {
-      // Build proportional font-family: pick each system's chosen serif or sans-serif
-      const proportionalParts = []
-      for (const key of ['latin', 'sc', 'tcHK', 'tcTW']) {
-        const fs = s.editorFonts[key]
-        if (!fs) continue
-        const fontName = fs.proportional === 'serif' ? fs.serif : fs.sansSerif
-        if (fontName) proportionalParts.push(fontName.includes(' ') ? `"${fontName}"` : fontName)
-      }
-      proportionalParts.push('sans-serif')
-      root.style.setProperty('--editor-font-proportional', proportionalParts.join(', '))
-    }
-
-    // Global monospace font
-    if (s.editorMonospace) {
-      const name = s.editorMonospace.includes(' ') ? `"${s.editorMonospace}"` : s.editorMonospace
-      root.style.setProperty('--editor-font-monospace', `${name}, monospace`)
-    }
-  } catch (e) { console.warn('Failed to apply font settings:', e) }
-}
-
 onMounted(async () => {
-  applySettings()
   window.addEventListener('keydown', handleGlobalKeydown)
   await loadAll()
 
@@ -1100,15 +1064,6 @@ provide('dnd', dnd)
   transform: scale(0.98);
 }
 .sidebar-action .material-icons-outlined { font-size: 18px; color: var(--primary); }
-.sidebar-action.logout {
-  color: var(--text-secondary);
-  background: none;
-}
-.sidebar-action.logout:hover {
-  background: var(--danger-light);
-  color: var(--danger);
-}
-.sidebar-action.logout .material-icons-outlined { color: inherit; }
 
 /* Fluid list styling */
 .sidebar-search {
@@ -1234,6 +1189,15 @@ provide('dnd', dnd)
   padding: 8px;
   border-top: 1px solid var(--border-light);
   flex-shrink: 0;
+}
+.footer-icons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+}
+.footer-gear {
+  margin-left: auto;
 }
 /* Local build hint — informational, not alarming */
 .local-hint {
@@ -1977,10 +1941,5 @@ provide('dnd', dnd)
 .file-drop-inner .material-icons-outlined {
   font-size: 48px;
   color: var(--primary);
-}
-.sidebar-action:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-  pointer-events: none;
 }
 </style>

@@ -64,7 +64,7 @@
 
       <!-- Editor section -->
       <div class="settings-section">
-        <div class="settings-section-label">Editor</div>
+        <div class="settings-section-label">{{ t('settings.editorSection') }}</div>
         <hr class="settings-section-line" />
 
         <div class="setting-row">

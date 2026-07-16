@@ -35,6 +35,7 @@
     "title": "设置",
     "language": "语言",
     "appFontSize": "应用字体大小",
+    "editorSection": "编辑器",
     "editorWysiwygFontSize": "富文本字体大小",
     "editorRawFontSize": "代码编辑器字体大小",
     "fontsFor": "字体设置：",
