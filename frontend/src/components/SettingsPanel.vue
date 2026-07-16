@@ -217,7 +217,7 @@ const DEFAULTS = Object.freeze({
   appFontSize: 14,
   editorWysiwygFontSize: 16,
   editorRawFontSize: 14,
-  editorMonospace: 'Roboto Mono',
+  editorMonospace: 'Consolas',
   editorFonts: {
     latin:    { proportional: 'sans-serif', serif: 'Georgia',            sansSerif: 'Arial' },
     sc:       { proportional: 'sans-serif', serif: 'Noto Serif CJK SC', sansSerif: 'PingFang SC' },

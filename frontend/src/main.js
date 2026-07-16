@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'
 import { useI18n } from './i18n'
+import 'material-icons/iconfont/outlined.css'
 import './style.css'
 
 // Initialize locale before mounting

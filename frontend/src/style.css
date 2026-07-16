@@ -1,5 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;500;600;700;800&family=Roboto+Mono:wght@400;500&display=swap');
-@import url('https://fonts.googleapis.com/icon?family=Material+Icons+Outlined');
+/* Material Icons loaded locally — see main.js */
 
 :root {
   /* Main palette — cornflower blue (original) */
@@ -43,8 +42,8 @@
   --app-zoom: 1;
   --editor-wysiwyg-font-size: 16px;
   --editor-raw-font-size: 14px;
-  --editor-font-proportional: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --editor-font-monospace: 'Roboto Mono', 'Consolas', 'Menlo', monospace;
+  --editor-font-proportional: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --editor-font-monospace: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Menlo', 'Monaco', 'Courier New', monospace;
 }
 
 * {
@@ -66,7 +65,7 @@ html {
 }
 
 body {
-  font-family: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-weight: 500;
   color: var(--text);
   background: var(--bg);
@@ -137,8 +136,8 @@ a {
   --crepe-color-selected: var(--primary-bg);
   --crepe-color-inline-area: var(--primary-bg);
 
-  --crepe-font-title: 'Nunito', -apple-system, sans-serif;
-  --crepe-font-default: 'Nunito', -apple-system, sans-serif;
+  --crepe-font-title: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --crepe-font-default: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
 /* Milkdown Editor Base */
