@@ -44,7 +44,11 @@
     "sansSerifFont": "Sans-serif font:",
     "serifFont": "Serif font:",
     "monospaceFont": "Monospace font:",
-    "resetToDefaults": "Reset to Defaults"
+    "resetToDefaults": "Reset to Defaults",
+    "advancedTypography": "Advanced Typography",
+    "preview": "Preview",
+    "previewProportional": "Proportional",
+    "previewMonospace": "Monospace"
   },
   "modals": {
     "cancel": "Cancel",

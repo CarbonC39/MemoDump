@@ -44,7 +44,11 @@
     "sansSerifFont": "无衬线字体：",
     "serifFont": "衬线字体：",
     "monospaceFont": "等宽字体：",
-    "resetToDefaults": "恢复默认设置"
+    "resetToDefaults": "恢复默认设置",
+    "advancedTypography": "高级排版",
+    "preview": "预览",
+    "previewProportional": "比例字体",
+    "previewMonospace": "等宽字体"
   },
   "modals": {
     "cancel": "取消",
