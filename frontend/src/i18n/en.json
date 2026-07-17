@@ -38,7 +38,7 @@
     "editorSection": "Editor",
     "editorWysiwygFontSize": "Rich Text Font Size",
     "editorRawFontSize": "Raw Editor Font Size",
-    "fontsFor": "Fonts for:",
+    "fontsFor": "Writing system",
     "proportional": "Proportional:",
     "sansSerif": "Sans-serif",
     "serif": "Serif",
@@ -48,6 +48,7 @@
     "resetToDefaults": "Reset to Defaults",
     "advancedTypography": "Advanced Typography",
     "preview": "Preview",
+    "defaultProportionalFont": "Proportional font",
     "previewProportional": "Proportional",
     "previewMonospace": "Monospace"
   },

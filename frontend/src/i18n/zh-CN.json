@@ -38,7 +38,7 @@
     "editorSection": "编辑器",
     "editorWysiwygFontSize": "富文本字体大小",
     "editorRawFontSize": "代码编辑器字体大小",
-    "fontsFor": "字体设置：",
+    "fontsFor": "书写系统",
     "proportional": "比例字体：",
     "sansSerif": "无衬线体",
     "serif": "衬线体",
@@ -48,6 +48,7 @@
     "resetToDefaults": "恢复默认设置",
     "advancedTypography": "高级排版",
     "preview": "预览",
+    "defaultProportionalFont": "比例字体",
     "previewProportional": "比例字体",
     "previewMonospace": "等宽字体"
   },

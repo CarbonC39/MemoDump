@@ -91,10 +91,10 @@
           <button v-if="isWailsApp" class="btn btn-icon" @click="changeDataDir" :title="wailsDataDir">
             <span class="material-icons-outlined">folder_open</span>
           </button>
-          <button v-if="!serverNoAuth" class="btn btn-icon" @click="doLogout" title="Sign Out">
+          <button v-if="!serverNoAuth" class="btn btn-icon" @click="doLogout" :title="t('sidebar.signOut')">
             <span class="material-icons-outlined">logout</span>
           </button>
-          <button class="btn btn-icon footer-gear" @click="showSettings = true" title="Settings">
+          <button class="btn btn-icon" :class="{ active: showSettings }" @click="showSettings = !showSettings" :title="t('sidebar.settings')">
             <span class="material-icons-outlined">settings</span>
           </button>
         </div>
@@ -118,84 +118,97 @@
           <span class="material-icons-outlined">menu</span>
         </button>
 
-        <!-- Back button: always visible when editing (desktop + PWA).
-             With no previous view to return to, it becomes a Home button → All Notes. -->
-        <button v-if="editingNote" class="btn btn-icon btn-ghost editor-back-btn" @click="goBack" :title="hasPrevPage ? t('editor.back') : t('editor.allNotes')">
-          <span class="material-icons-outlined">{{ hasPrevPage ? 'arrow_back' : 'home' }}</span>
-        </button>
-
-        <!-- Editing: horizontally scrollable metadata (title · folder · tags) -->
-        <div v-if="editingNote" class="header-meta-scroll">
-          <input
-            ref="titleInputRef"
-            class="header-title-input"
-            v-model="editName"
-            :style="{ width: titleInputWidth + 'px' }"
-            :placeholder="t('editor.untitled')"
-            @input="isDirty = true"
-          />
-          <span ref="titleMirrorRef" class="header-title-mirror" aria-hidden="true">{{ editName || t('editor.untitled') }}</span>
-          <span class="header-meta-sep">·</span>
-          <button class="note-folder-btn" @click="pickEditFolder">
-            <span class="material-icons-outlined">{{ editFolder ? 'folder' : 'home' }}</span>
-            <span class="note-folder-label">{{ editFolder || t('notes.root') }}</span>
-          </button>
-          <span class="header-meta-sep">·</span>
-          <div class="note-tags-inline">
-            <span class="tag" v-for="(t, i) in editTags" :key="i">
-              {{ t }}<span class="remove" @click="editTags.splice(i, 1); isDirty = true">×</span>
-            </span>
-            <input
-              class="tag-inline-input"
-              v-model="tagInput"
-              :placeholder="t('notes.tagPlaceholder')"
-              @keydown.enter.prevent="addTag"
-            />
-          </div>
-        </div>
-
-        <!-- Not editing: static breadcrumb -->
-        <div v-else class="header-left">
-          <span v-if="currentFolder" class="header-folder-display">
-            <span class="material-icons-outlined" style="font-size:16px;opacity:0.6">folder_open</span>
-            {{ currentFolder }}
-          </span>
-        </div>
-
-        <!-- Right: sort order + new note shortcut when browsing waterfall -->
-        <div class="header-right" v-if="!editingNote && !searchOpen">
-          <div class="sort-control">
-            <button class="btn btn-icon header-sort-btn" :class="{ active: sortMenuOpen }" @click.stop="sortMenuOpen = !sortMenuOpen" :title="t('notes.sortOrder')">
-              <span class="material-icons-outlined">sort</span>
+        <!-- Settings header (replaces normal header when open) -->
+        <template v-if="showSettings">
+          <span class="header-settings-title">{{ t('settings.title') }}</span>
+          <div class="header-right">
+            <button class="btn btn-icon btn-ghost" @click="showSettings = false">
+              <span class="material-icons-outlined">close</span>
             </button>
-            <div v-if="sortMenuOpen" class="sort-overlay" @click="sortMenuOpen = false"></div>
-            <div v-if="sortMenuOpen" class="sort-menu">
-              <div class="sort-menu-item" :class="{ active: sortMode === 'modified-desc' }" @click="setSort('modified-desc')">
-                <span class="material-icons-outlined sort-check">check</span><span>{{ t('notes.recentlyModified') }}</span>
-              </div>
-              <div class="sort-menu-item" :class="{ active: sortMode === 'modified-asc' }" @click="setSort('modified-asc')">
-                <span class="material-icons-outlined sort-check">check</span><span>{{ t('notes.oldestModified') }}</span>
-              </div>
+          </div>
+        </template>
+
+        <!-- Normal header (hidden when settings open) -->
+        <template v-if="!showSettings">
+          <!-- Back button: always visible when editing (desktop + PWA).
+               With no previous view to return to, it becomes a Home button → All Notes. -->
+          <button v-if="editingNote" class="btn btn-icon btn-ghost editor-back-btn" @click="goBack" :title="hasPrevPage ? t('editor.back') : t('editor.allNotes')">
+            <span class="material-icons-outlined">{{ hasPrevPage ? 'arrow_back' : 'home' }}</span>
+          </button>
+
+          <!-- Editing: horizontally scrollable metadata (title · folder · tags) -->
+          <div v-if="editingNote" class="header-meta-scroll">
+            <input
+              ref="titleInputRef"
+              class="header-title-input"
+              v-model="editName"
+              :style="{ width: titleInputWidth + 'px' }"
+              :placeholder="t('editor.untitled')"
+              @input="isDirty = true"
+            />
+            <span ref="titleMirrorRef" class="header-title-mirror" aria-hidden="true">{{ editName || t('editor.untitled') }}</span>
+            <span class="header-meta-sep">·</span>
+            <button class="note-folder-btn" @click="pickEditFolder">
+              <span class="material-icons-outlined">{{ editFolder ? 'folder' : 'home' }}</span>
+              <span class="note-folder-label">{{ editFolder || t('notes.root') }}</span>
+            </button>
+            <span class="header-meta-sep">·</span>
+            <div class="note-tags-inline">
+              <span class="tag" v-for="(t, i) in editTags" :key="i">
+                {{ t }}<span class="remove" @click="editTags.splice(i, 1); isDirty = true">×</span>
+              </span>
+              <input
+                class="tag-inline-input"
+                v-model="tagInput"
+                :placeholder="t('notes.tagPlaceholder')"
+                @keydown.enter.prevent="addTag"
+              />
             </div>
           </div>
-          <button class="btn btn-icon header-new-btn" @click="createNewNoteIn(currentFolder)" :title="t('editor.newNote')">
-            <span class="material-icons-outlined">add</span>
-          </button>
-        </div>
 
-        <!-- Fixed right: save & delete — do NOT scroll -->
-        <div class="header-right" v-else-if="editingNote">
-          <button class="btn btn-sm btn-icon btn-ghost" @click="toggleEditorMode" :title="editorMode === 'wysiwyg' ? t('editor.switchToRaw') : t('editor.switchToRich')">
-            <span class="material-icons-outlined" style="font-size:16px">{{ editorMode === 'wysiwyg' ? 'code' : 'visibility' }}</span>
-          </button>
-          <button class="save-btn" :class="{ dirty: isDirty }" @click="saveNote">
-            <span class="save-dot" v-if="isDirty"></span>
-            {{ t('editor.save') }}
-          </button>
-          <button class="btn btn-sm btn-icon btn-danger-subtle" v-if="editingNote.path" @click="deleteCurrentNote" :title="t('editor.deleteNote')">
-            <span class="material-icons-outlined" style="font-size:16px">delete_outline</span>
-          </button>
-        </div>
+          <!-- Not editing: static breadcrumb -->
+          <div v-else class="header-left">
+            <span v-if="currentFolder" class="header-folder-display">
+              <span class="material-icons-outlined" style="font-size:16px;opacity:0.6">folder_open</span>
+              {{ currentFolder }}
+            </span>
+          </div>
+
+          <!-- Right: sort order + new note shortcut when browsing waterfall -->
+          <div class="header-right" v-if="!editingNote && !searchOpen">
+            <div class="sort-control">
+              <button class="btn btn-icon header-sort-btn" :class="{ active: sortMenuOpen }" @click.stop="sortMenuOpen = !sortMenuOpen" :title="t('notes.sortOrder')">
+                <span class="material-icons-outlined">sort</span>
+              </button>
+              <div v-if="sortMenuOpen" class="sort-overlay" @click="sortMenuOpen = false"></div>
+              <div v-if="sortMenuOpen" class="sort-menu">
+                <div class="sort-menu-item" :class="{ active: sortMode === 'modified-desc' }" @click="setSort('modified-desc')">
+                  <span class="material-icons-outlined sort-check">check</span><span>{{ t('notes.recentlyModified') }}</span>
+                </div>
+                <div class="sort-menu-item" :class="{ active: sortMode === 'modified-asc' }" @click="setSort('modified-asc')">
+                  <span class="material-icons-outlined sort-check">check</span><span>{{ t('notes.oldestModified') }}</span>
+                </div>
+              </div>
+            </div>
+            <button class="btn btn-icon header-new-btn" @click="createNewNoteIn(currentFolder)" :title="t('editor.newNote')">
+              <span class="material-icons-outlined">add</span>
+            </button>
+          </div>
+
+          <!-- Fixed right: save & delete — do NOT scroll -->
+          <div class="header-right" v-else-if="editingNote">
+            <button class="btn btn-sm btn-icon btn-ghost" @click="toggleEditorMode" :title="editorMode === 'wysiwyg' ? t('editor.switchToRaw') : t('editor.switchToRich')">
+              <span class="material-icons-outlined" style="font-size:16px">{{ editorMode === 'wysiwyg' ? 'code' : 'visibility' }}</span>
+            </button>
+            <button class="save-btn" :class="{ dirty: isDirty }" @click="saveNote">
+              <span class="save-dot" v-if="isDirty"></span>
+              {{ t('editor.save') }}
+            </button>
+            <button class="btn btn-sm btn-icon btn-danger-subtle" v-if="editingNote.path" @click="deleteCurrentNote" :title="t('editor.deleteNote')">
+              <span class="material-icons-outlined" style="font-size:16px">delete_outline</span>
+            </button>
+          </div>
+        </template>
       </header>
 
       <div class="content-area" :class="{ 'is-editing': editingNote }">
@@ -1034,6 +1047,9 @@ provide('dnd', dnd)
   border-bottom: 1px solid var(--border-light);
   flex-shrink: 0;
 }
+.brand {
+  color: var(--waterfall-title);
+}
 .sidebar-scroll {
   flex: 1;
   overflow-y: auto;
@@ -1193,11 +1209,19 @@ provide('dnd', dnd)
 .footer-icons {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
+  justify-content: space-evenly;
+  padding: 8px;
 }
-.footer-gear {
-  margin-left: auto;
+.footer-icons .btn-icon {
+  color: var(--text-secondary);
+}
+.footer-icons .btn-icon:hover {
+  color: var(--primary-dark);
+  background: var(--primary-bg);
+}
+.footer-icons .btn-icon.active {
+  color: var(--primary-dark);
+  background: var(--primary-bg);
 }
 /* Local build hint — informational, not alarming */
 .local-hint {
@@ -1274,6 +1298,14 @@ provide('dnd', dnd)
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Settings header title — replaces breadcrumb when settings open */
+.header-settings-title {
+  font-size: 16px;
+  font-weight: 700;
+  flex: 1;
+  color: var(--waterfall-title);
 }
 
 /* Back button in editor header — always visible on desktop and mobile */

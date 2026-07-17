@@ -1,31 +1,34 @@
 <template>
   <div class="settings-page">
-    <div class="settings-header">
-      <h2>{{ t('settings.title') }}</h2>
-      <button class="btn btn-icon btn-ghost" @click="$emit('close')">
-        <span class="material-icons-outlined">close</span>
-      </button>
-    </div>
-
     <div class="settings-body">
       <!-- Preview card -->
       <div class="preview-card">
-        <div class="preview-card-header">{{ t('settings.preview') }}</div>
-        <div class="preview-section">
-          <div class="preview-label">{{ t('settings.previewProportional') }}</div>
-          <div class="preview-sample preview-proportional">
-            <p>The quick brown fox jumps over the lazy dog.</p>
-            <p><strong>Bold text</strong> <em>italic text</em></p>
-            <p>简体中文示例文字 繁體中文範例</p>
+        <div class="preview-card-header">
+          <span>{{ t('settings.preview') }}</span>
+          <button class="btn btn-icon btn-ghost preview-toggle" @click="previewMode = previewMode === 'wysiwyg' ? 'raw' : 'wysiwyg'" :title="previewMode === 'wysiwyg' ? t('editor.switchToRaw') : t('editor.switchToRich')">
+            <span class="material-icons-outlined" style="font-size:16px">{{ previewMode === 'wysiwyg' ? 'code' : 'visibility' }}</span>
+          </button>
+        </div>
+
+        <!-- WYSIWYG mode: uses editor-native .milkdown .editor class for font/size/line-height -->
+        <div v-if="previewMode === 'wysiwyg'" class="preview-editor milkdown">
+          <div class="editor">
+            <template v-for="(line, i) in previewLines" :key="i">
+              <p v-if="line.type === 'text'">{{ line.content }}</p>
+              <p v-else-if="line.type === 'strong'"><strong>{{ line.content }}</strong></p>
+              <p v-else-if="line.type === 'em'"><em>{{ line.content }}</em></p>
+              <p v-else-if="line.type === 'code'"><code>{{ line.content }}</code></p>
+              <h3 v-else-if="line.type === 'h3'">{{ line.content }}</h3>
+            </template>
           </div>
         </div>
-        <div class="preview-section">
-          <div class="preview-label">{{ t('settings.previewMonospace') }}</div>
-          <div class="preview-sample preview-monospace">
-            function hello() {<br/>
-            &nbsp;&nbsp;return "Hello, world!";<br/>
-            }
-          </div>
+
+        <!-- Raw mode: uses editor-native raw styling -->
+        <div v-else class="preview-raw">
+          function hello() {<br/>
+          &nbsp;&nbsp;return "Hello, world!";<br/>
+          }<br/>
+          const msg = "Plain text"
         </div>
       </div>
 
@@ -34,7 +37,6 @@
       <!-- Interface section -->
       <div class="settings-section">
         <div class="settings-section-label">{{ t('settings.language') }}</div>
-        <hr class="settings-section-line" />
 
         <div class="setting-row">
           <span class="setting-row-label">{{ t('settings.language') }}</span>
@@ -65,7 +67,6 @@
       <!-- Editor section -->
       <div class="settings-section">
         <div class="settings-section-label">{{ t('settings.editorSection') }}</div>
-        <hr class="settings-section-line" />
 
         <div class="setting-row">
           <span class="setting-row-label">{{ t('settings.editorWysiwygFontSize') }}</span>
@@ -98,6 +99,28 @@
         </div>
 
         <div class="setting-row">
+          <span class="setting-row-label">{{ t('settings.defaultProportionalFont') }}</span>
+          <select
+            v-if="!customFields['defaultProportionalFont']"
+            class="input input-select"
+            :value="local.defaultProportionalFont"
+            @change="onFontSelect('defaultProportionalFont', $event.target.value)"
+          >
+            <option v-for="f in installedFonts" :key="f" :value="f">{{ f }}</option>
+            <option value="__custom__">Custom...</option>
+          </select>
+          <div v-else class="custom-font-row">
+            <input
+              type="text"
+              class="input"
+              v-model="customValues['defaultProportionalFont']"
+              @input="onCustomInput('defaultProportionalFont')"
+            />
+            <button class="btn btn-ghost btn-sm" @click="customFields['defaultProportionalFont'] = false">&#8617;</button>
+          </div>
+        </div>
+
+        <div class="setting-row">
           <span class="setting-row-label">{{ t('settings.monospaceFont') }}</span>
           <select
             v-if="!customFields['editorMonospace']"
@@ -123,7 +146,7 @@
       <hr class="settings-divider" />
 
       <!-- Advanced Typography (collapsed) -->
-      <details class="settings-advanced">
+      <details class="settings-advanced" :open="advancedOpen" @toggle="advancedOpen = $event.target.open">
         <summary>
           <span class="material-icons-outlined">chevron_right</span>
           {{ t('settings.advancedTypography') }}
@@ -233,6 +256,72 @@ const emit = defineEmits(['close'])
 
 // Must NOT define props.visible — visibility is controlled by parent v-show.
 
+const previewMode = ref('wysiwyg')
+const advancedOpen = ref(false)
+
+// Preview sample text: tied to selected writing system when advanced is open,
+// otherwise tied to UI language.
+const PREVIEW_SAMPLES = {
+  latin: {
+    paragraphs: [
+      'The quick brown fox jumps over the lazy dog.',
+      ['strong', 'Bold text'], ['em', 'italic text'],
+      ['code', 'Inline code sample'],
+      'Jazz, jive, and waltz — every dance tells a story.',
+    ],
+    heading: 'Sample heading',
+  },
+  sc: {
+    paragraphs: [
+      '敏捷的棕色狐狸跳过了懒狗。',
+      ['strong', '粗体文字'], ['em', '斜体文字'],
+      ['code', '内联代码示例'],
+      '中文排版注重字间距与行高的和谐。',
+    ],
+    heading: '示例标题',
+  },
+  tcHK: {
+    paragraphs: [
+      '敏捷嘅棕色狐狸跳過咗懶狗。',
+      ['strong', '粗體文字'], ['em', '斜體文字'],
+      ['code', '內聯代碼示例'],
+      '香港繁體中文排版示例。',
+    ],
+    heading: '示例標題',
+  },
+  tcTW: {
+    paragraphs: [
+      '敏捷的棕色狐狸跳過了懶狗。',
+      ['strong', '粗體文字'], ['em', '斜體文字'],
+      ['code', '內聯代碼示例'],
+      '臺灣正體中文排版示例。',
+    ],
+    heading: '示例標題',
+  },
+}
+
+const activePreviewLang = computed(() => {
+  if (advancedOpen.value) {
+    return selectedSystem.value
+  }
+  return locale.value === 'zh-CN' ? 'sc' : 'latin'
+})
+
+const previewLines = computed(() => {
+  const base = PREVIEW_SAMPLES[activePreviewLang.value]
+  if (!base) return [{ type: 'text', content: 'The quick brown fox jumps over the lazy dog.' }]
+  const lines = []
+  for (const item of base.paragraphs) {
+    if (typeof item === 'string') {
+      lines.push({ type: 'text', content: item })
+    } else if (Array.isArray(item)) {
+      lines.push({ type: item[0], content: item[1] })
+    }
+  }
+  lines.push({ type: 'h3', content: base.heading })
+  return lines
+})
+
 // --- Fonts to detect ---
 const FONTS_TO_DETECT = [
   'Arial', 'Helvetica', 'Helvetica Neue', 'Inter', 'Segoe UI', 'Roboto', 'Open Sans',
@@ -256,6 +345,7 @@ const DEFAULTS = Object.freeze({
   appFontSize: 14,
   editorWysiwygFontSize: 16,
   editorRawFontSize: 14,
+  defaultProportionalFont: 'Arial',
   editorMonospace: 'Consolas',
   editorFonts: {
     latin:    { proportional: 'sans-serif', serif: 'Georgia',            sansSerif: 'Arial' },
@@ -321,6 +411,8 @@ const customValues = reactive({})
 function setFontValue(fieldKey, value) {
   if (fieldKey === 'editorMonospace') {
     local.editorMonospace = value
+  } else if (fieldKey === 'defaultProportionalFont') {
+    local.defaultProportionalFont = value
   } else {
     const [system, prop] = fieldKey.split('.')
     local.editorFonts[system][prop] = value
@@ -330,6 +422,7 @@ function setFontValue(fieldKey, value) {
 
 function getFontValue(fieldKey) {
   if (fieldKey === 'editorMonospace') return local.editorMonospace
+  if (fieldKey === 'defaultProportionalFont') return local.defaultProportionalFont
   const [system, prop] = fieldKey.split('.')
   return local.editorFonts[system][prop]
 }
@@ -362,15 +455,29 @@ function applySettings() {
     root.style.setProperty('--editor-raw-font-size', (s.editorRawFontSize || 14) + 'px')
 
     if (s.editorFonts) {
-      const proportionalParts = []
-      for (const key of ['latin', 'sc', 'tcHK', 'tcTW']) {
-        const fs = s.editorFonts[key]
-        if (!fs) continue
-        const fontName = fs.proportional === 'serif' ? fs.serif : fs.sansSerif
-        if (fontName) proportionalParts.push(fontName.includes(' ') ? `"${fontName}"` : fontName)
+      // Per-script overrides (only applies when advanced typography has been expanded and configured)
+      const overrideKeys = ['latin', 'sc', 'tcHK', 'tcTW']
+      const hasOverrides = overrideKeys.some(k => {
+        const fs = s.editorFonts[k]
+        return fs && (fs.sansSerif && fs.sansSerif !== DEFAULTS.editorFonts[k]?.sansSerif ||
+                      fs.serif && fs.serif !== DEFAULTS.editorFonts[k]?.serif)
+      })
+
+      if (hasOverrides) {
+        const proportionalParts = []
+        for (const key of overrideKeys) {
+          const fs = s.editorFonts[key]
+          if (!fs) continue
+          const fontName = fs.proportional === 'serif' ? fs.serif : fs.sansSerif
+          if (fontName) proportionalParts.push(fontName.includes(' ') ? `"${fontName}"` : fontName)
+        }
+        proportionalParts.push('sans-serif')
+        root.style.setProperty('--editor-font-proportional', proportionalParts.join(', '))
+      } else if (s.defaultProportionalFont) {
+        // Fall back to global proportional font setting
+        const name = s.defaultProportionalFont.includes(' ') ? `"${s.defaultProportionalFont}"` : s.defaultProportionalFont
+        root.style.setProperty('--editor-font-proportional', `${name}, sans-serif`)
       }
-      proportionalParts.push('sans-serif')
-      root.style.setProperty('--editor-font-proportional', proportionalParts.join(', '))
     }
 
     if (s.editorMonospace) {
@@ -439,38 +546,25 @@ function resetToDefaults() {
   background: var(--bg);
 }
 
-.settings-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 24px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-card);
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
-
-.settings-header h2 {
-  font-size: 18px;
-  font-weight: 700;
-}
-
 .settings-body {
   max-width: 600px;
   margin: 0 auto;
   padding: 24px;
 }
 
-/* ---- Preview card ---- */
+/* ---- Preview card (matches waterfall card style) ---- */
 .preview-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 16px 20px;
+  background: #FFFFFF;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  border-radius: 14px;
+  padding: 16px 18px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.03);
 }
 
 .preview-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-muted);
@@ -479,44 +573,36 @@ function resetToDefaults() {
   margin-bottom: 12px;
 }
 
-.preview-section {
-  margin-bottom: 12px;
-}
-.preview-section:last-child { margin-bottom: 0; }
-
-.preview-label {
-  font-size: 11px;
+.preview-toggle {
+  width: 24px;
+  height: 24px;
   color: var(--text-muted);
-  margin-bottom: 6px;
+}
+.preview-toggle:hover {
+  color: var(--primary-dark);
 }
 
-.preview-proportional {
-  font-family: var(--editor-font-proportional);
-  font-size: var(--editor-wysiwyg-font-size);
-  line-height: 1.75;
-  color: var(--text);
-  background: var(--bg);
-  border-radius: var(--radius);
-  padding: 12px 16px;
+/* WYSIWYG preview — uses global .milkdown .editor styles via CSS cascade */
+.preview-editor.milkdown .editor {
+  /* Inherits font-family/size/line-height/color from global style.css */
+  padding: 0;
+  outline: none;
+  background: transparent;
 }
 
-.preview-proportional p { margin: 0.3em 0; }
-
-.preview-monospace {
+/* Raw preview — matches raw editor styling */
+.preview-raw {
   font-family: var(--editor-font-monospace);
   font-size: var(--editor-raw-font-size);
   line-height: 1.7;
   color: var(--text);
-  background: var(--bg);
-  border-radius: var(--radius);
-  padding: 12px 16px;
   white-space: pre-wrap;
 }
 
 /* ---- Dividers ---- */
 .settings-divider {
   border: none;
-  border-top: 1px solid var(--border-light);
+  border-top: 1px solid var(--border);
   margin: 20px 0;
 }
 
@@ -524,13 +610,8 @@ function resetToDefaults() {
 .settings-section-label {
   font-size: 16px;
   font-weight: 600;
-  color: var(--text);
-}
-
-.settings-section-line {
-  border: none;
-  border-top: 1px solid var(--border-light);
-  margin: 8px 0 14px;
+  color: var(--waterfall-title);
+  margin-bottom: 14px;
 }
 
 /* ---- Setting rows ---- */
@@ -605,9 +686,6 @@ function resetToDefaults() {
 .advanced-body {
   margin-top: 14px;
   padding: 14px;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius);
-  background: var(--bg-card);
 }
 
 .advanced-body .setting-group {
