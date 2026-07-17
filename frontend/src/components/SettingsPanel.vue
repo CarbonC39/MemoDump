@@ -99,142 +99,47 @@
         </div>
 
         <div class="setting-row">
-          <span class="setting-row-label">{{ t('settings.defaultProportionalFont') }}</span>
-          <select
-            v-if="!customFields['defaultProportionalFont']"
-            class="input input-select"
-            :value="local.defaultProportionalFont"
-            @change="onFontSelect('defaultProportionalFont', $event.target.value)"
-          >
-            <option v-for="f in installedFonts" :key="f" :value="f">{{ f }}</option>
-            <option value="__custom__">Custom...</option>
+          <span class="setting-row-label">{{ t('settings.fontPreset') }}</span>
+          <select class="input input-select" v-model="local.editorProportional.mode" @change="onSettingChange">
+            <option value="system">{{ t('settings.fontPresetSystem') }}</option>
+            <option value="serif">{{ t('settings.fontPresetSerif') }}</option>
+            <option value="sans">{{ t('settings.fontPresetSans') }}</option>
+            <option value="custom">{{ t('settings.custom') }}</option>
           </select>
-          <div v-else class="custom-font-row">
-            <input
-              type="text"
-              class="input"
-              v-model="customValues['defaultProportionalFont']"
-              @input="onCustomInput('defaultProportionalFont')"
-            />
-            <button class="btn btn-ghost btn-sm" @click="customFields['defaultProportionalFont'] = false">&#8617;</button>
-          </div>
+        </div>
+        <div class="setting-row" v-if="local.editorProportional.mode === 'custom'">
+          <span class="setting-row-label">{{ t('settings.fontCustomStack') }}</span>
+          <input type="text" class="input input-select" v-model="local.editorProportional.custom"
+                 :placeholder="t('settings.fontCustomStackHint')" @input="onSettingChange" />
         </div>
 
         <div class="setting-row">
           <span class="setting-row-label">{{ t('settings.monospaceFont') }}</span>
-          <select
-            v-if="!customFields['editorMonospace']"
-            class="input input-select"
-            :value="local.editorMonospace"
-            @change="onFontSelect('editorMonospace', $event.target.value)"
-          >
-            <option v-for="f in installedFonts" :key="f" :value="f">{{ f }}</option>
-            <option value="__custom__">Custom...</option>
+          <select class="input input-select" v-model="local.editorMonospace.mode" @change="onSettingChange">
+            <option value="preset">{{ t('settings.fontPresetMono') }}</option>
+            <option value="custom">{{ t('settings.custom') }}</option>
           </select>
-          <div v-else class="custom-font-row">
-            <input
-              type="text"
-              class="input"
-              v-model="customValues['editorMonospace']"
-              @input="onCustomInput('editorMonospace')"
-            />
-            <button class="btn btn-ghost btn-sm" @click="customFields['editorMonospace'] = false">&#8617;</button>
-          </div>
+        </div>
+        <div class="setting-row" v-if="local.editorMonospace.mode === 'custom'">
+          <span class="setting-row-label">{{ t('settings.fontCustomName') }}</span>
+          <input type="text" class="input input-select" v-model="local.editorMonospace.custom"
+                 :placeholder="'Consolas'" @input="onSettingChange" />
         </div>
       </div>
 
       <hr class="settings-divider" />
 
-      <!-- Advanced Typography (collapsed) -->
-      <details class="settings-advanced" :open="advancedOpen" @toggle="advancedOpen = $event.target.open">
-        <summary>
-          <span class="material-icons-outlined">chevron_right</span>
-          {{ t('settings.advancedTypography') }}
-        </summary>
-        <div class="advanced-body">
-          <!-- Writing System Selector -->
-          <div class="setting-group">
-            <label class="setting-label">{{ t('settings.fontsFor') }}</label>
-            <select class="input" v-model="selectedSystem">
-              <option value="latin">Latin</option>
-              <option value="sc">简体中文</option>
-              <option value="tcHK">繁體中文（香港）</option>
-              <option value="tcTW">繁體中文（臺灣）</option>
-            </select>
-          </div>
-
-          <!-- Proportional toggle -->
-          <div class="setting-group">
-            <label class="setting-label">{{ t('settings.proportional') }}</label>
-            <div class="radio-row">
-              <label class="radio-label">
-                <input
-                  type="radio"
-                  value="sans-serif"
-                  :checked="currentFonts.proportional === 'sans-serif'"
-                  @change="setProportional('sans-serif')"
-                />
-                {{ t('settings.sansSerif') }}
-              </label>
-              <label class="radio-label">
-                <input
-                  type="radio"
-                  value="serif"
-                  :checked="currentFonts.proportional === 'serif'"
-                  @change="setProportional('serif')"
-                />
-                {{ t('settings.serif') }}
-              </label>
-            </div>
-          </div>
-
-          <!-- Sans-serif font dropdown -->
-          <div class="setting-group">
-            <label class="setting-label">{{ t('settings.sansSerifFont') }}</label>
-            <select
-              v-if="!customFields[sansSerifKey]"
-              class="input"
-              :value="currentFonts.sansSerif"
-              @change="onFontSelect(sansSerifKey, $event.target.value)"
-            >
-              <option v-for="f in installedFonts" :key="f" :value="f">{{ f }}</option>
-              <option value="__custom__">Custom...</option>
-            </select>
-            <div v-else class="custom-font-row">
-              <input
-                type="text"
-                class="input"
-                v-model="customValues[sansSerifKey]"
-                @input="onCustomInput(sansSerifKey)"
-              />
-              <button class="btn btn-ghost btn-sm" @click="customFields[sansSerifKey] = false">&#8617;</button>
-            </div>
-          </div>
-
-          <!-- Serif font dropdown -->
-          <div class="setting-group">
-            <label class="setting-label">{{ t('settings.serifFont') }}</label>
-            <select
-              v-if="!customFields[serifKey]"
-              class="input"
-              :value="currentFonts.serif"
-              @change="onFontSelect(serifKey, $event.target.value)"
-            >
-              <option v-for="f in installedFonts" :key="f" :value="f">{{ f }}</option>
-              <option value="__custom__">Custom...</option>
-            </select>
-            <div v-else class="custom-font-row">
-              <input
-                type="text"
-                class="input"
-                v-model="customValues[serifKey]"
-                @input="onCustomInput(serifKey)"
-              />
-              <button class="btn btn-ghost btn-sm" @click="customFields[serifKey] = false">&#8617;</button>
-            </div>
-          </div>
-        </div>
-      </details>
+      <!-- Custom CSS -->
+      <div class="settings-section">
+        <div class="settings-section-label">{{ t('settings.customCss') }}</div>
+        <textarea
+          class="input custom-css-input"
+          v-model="local.customCss"
+          :placeholder="t('settings.customCssHint')"
+          spellcheck="false"
+          @input="onCustomCssInput"
+        ></textarea>
+      </div>
 
       <hr class="settings-divider" />
 
@@ -257,10 +162,8 @@ const emit = defineEmits(['close'])
 // Must NOT define props.visible — visibility is controlled by parent v-show.
 
 const previewMode = ref('wysiwyg')
-const advancedOpen = ref(false)
 
-// Preview sample text: tied to selected writing system when advanced is open,
-// otherwise tied to UI language.
+// Preview sample text: tied to UI language.
 const PREVIEW_SAMPLES = {
   latin: {
     paragraphs: [
@@ -280,32 +183,9 @@ const PREVIEW_SAMPLES = {
     ],
     heading: '示例标题',
   },
-  tcHK: {
-    paragraphs: [
-      '敏捷嘅棕色狐狸跳過咗懶狗。',
-      ['strong', '粗體文字'], ['em', '斜體文字'],
-      ['code', '內聯代碼示例'],
-      '香港繁體中文排版示例。',
-    ],
-    heading: '示例標題',
-  },
-  tcTW: {
-    paragraphs: [
-      '敏捷的棕色狐狸跳過了懶狗。',
-      ['strong', '粗體文字'], ['em', '斜體文字'],
-      ['code', '內聯代碼示例'],
-      '臺灣正體中文排版示例。',
-    ],
-    heading: '示例標題',
-  },
 }
 
-const activePreviewLang = computed(() => {
-  if (advancedOpen.value) {
-    return selectedSystem.value
-  }
-  return locale.value === 'zh-CN' ? 'sc' : 'latin'
-})
+const activePreviewLang = computed(() => locale.value === 'zh-CN' ? 'sc' : 'latin')
 
 const previewLines = computed(() => {
   const base = PREVIEW_SAMPLES[activePreviewLang.value]
@@ -322,37 +202,22 @@ const previewLines = computed(() => {
   return lines
 })
 
-// --- Fonts to detect ---
-const FONTS_TO_DETECT = [
-  'Arial', 'Helvetica', 'Helvetica Neue', 'Inter', 'Segoe UI', 'Roboto', 'Open Sans',
-  'Verdana', 'Tahoma', 'Georgia', 'Times New Roman', 'Palatino', 'Garamond',
-  'Cambria', 'Merriweather', 'Roboto Mono', 'Consolas', 'Menlo', 'Monaco',
-  'Courier New', 'Source Code Pro', 'Fira Code', 'JetBrains Mono', 'Cascadia Code',
-  'SF Mono', 'Inconsolata',
-  'PingFang SC', 'PingFang TC', 'PingFang HK',
-  'Microsoft YaHei', 'Microsoft JhengHei',
-  'Noto Sans CJK SC', 'Noto Sans CJK TC', 'Noto Sans CJK HK',
-  'Noto Serif CJK SC', 'Noto Serif CJK TC', 'Noto Serif CJK HK',
-  'Noto Sans Mono CJK SC', 'Noto Sans Mono CJK TC', 'Noto Sans Mono CJK HK',
-  'Hiragino Sans GB', 'Hiragino Sans CNS',
-  'Heiti SC', 'Heiti TC', 'STHeiti',
-  'Songti SC', 'Songti TC', 'STSong',
-  'SimSun', 'SimHei', 'KaiTi',
-]
+// --- CSS font stacks keyed by preset name ---
+const FONT_STACKS = {
+  system: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif",
+  serif: "Georgia, 'Times New Roman', 'Noto Serif CJK SC', 'Songti SC', 'SimSun', serif",
+  sans: "'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif",
+  mono: "'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, Menlo, monospace",
+}
 
 // --- Defaults ---
 const DEFAULTS = Object.freeze({
   appFontSize: 14,
   editorWysiwygFontSize: 16,
   editorRawFontSize: 14,
-  defaultProportionalFont: 'Arial',
-  editorMonospace: 'Consolas',
-  editorFonts: {
-    latin:    { proportional: 'sans-serif', serif: 'Georgia',            sansSerif: 'Arial' },
-    sc:       { proportional: 'sans-serif', serif: 'Noto Serif CJK SC', sansSerif: 'PingFang SC' },
-    tcHK:     { proportional: 'sans-serif', serif: 'Noto Serif CJK HK', sansSerif: 'PingFang HK' },
-    tcTW:     { proportional: 'sans-serif', serif: 'Noto Serif CJK TC', sansSerif: 'PingFang TC' },
-  },
+  editorProportional: { mode: 'system', custom: '' },
+  editorMonospace: { mode: 'preset', custom: '' },
+  customCss: '',
 })
 
 // --- Load settings from localStorage ---
@@ -384,107 +249,53 @@ function deepMerge(defaults, overrides) {
 // --- Reactive local state ---
 const local = reactive(loadSettings())
 
-// --- Font detection ---
-const installedFonts = ref([])
-function detectFonts() {
-  const detected = new Set()
-  for (const font of FONTS_TO_DETECT) {
-    try {
-      if (document.fonts.check('12px "' + font + '"')) {
-        detected.add(font)
-      }
-    } catch (_) {}
-  }
-  installedFonts.value = [...detected].sort()
-}
 onMounted(() => {
-  detectFonts()
   // Apply CSS variables on initial load so settings take effect before any user interaction
   applySettings()
+  applyCustomCss()
 })
 
-// --- Custom font mode tracking ---
-const customFields = reactive({})
-const customValues = reactive({})
-
-// --- Font value helpers ---
-function setFontValue(fieldKey, value) {
-  if (fieldKey === 'editorMonospace') {
-    local.editorMonospace = value
-  } else if (fieldKey === 'defaultProportionalFont') {
-    local.defaultProportionalFont = value
-  } else {
-    const [system, prop] = fieldKey.split('.')
-    local.editorFonts[system][prop] = value
-  }
-  onSettingChange()
-}
-
-function getFontValue(fieldKey) {
-  if (fieldKey === 'editorMonospace') return local.editorMonospace
-  if (fieldKey === 'defaultProportionalFont') return local.defaultProportionalFont
-  const [system, prop] = fieldKey.split('.')
-  return local.editorFonts[system][prop]
-}
-
-function onFontSelect(fieldKey, val) {
-  if (val === '__custom__') {
-    customFields[fieldKey] = true
-    customValues[fieldKey] = getFontValue(fieldKey)
-  } else {
-    customFields[fieldKey] = false
-    setFontValue(fieldKey, val)
-  }
-}
-
-function onCustomInput(fieldKey) {
-  setFontValue(fieldKey, customValues[fieldKey])
-}
-
-// --- Apply CSS variables to :root ---
-// Moved from MainView.vue — SettingsPanel owns the full settings lifecycle.
+// --- Apply CSS variables to #app-settings <style> ---
+// Batched into one :root { … } block written to #app-settings.textContent so
+// user CSS in #app-custom can override app-set variables by source order.
 function applySettings() {
   try {
     const raw = localStorage.getItem('memodump_settings')
-    if (!raw) return
-    const s = JSON.parse(raw)
-    const root = document.documentElement
+    const s = raw ? JSON.parse(raw) : {}
+    const decls = []
+    decls.push(`--app-zoom: ${((s.appFontSize || 14) / 14).toFixed(2)}`)
+    decls.push(`--editor-wysiwyg-font-size: ${(s.editorWysiwygFontSize || 16)}px`)
+    decls.push(`--editor-raw-font-size: ${(s.editorRawFontSize || 14)}px`)
 
-    root.style.setProperty('--app-zoom', ((s.appFontSize || 14) / 14).toFixed(2))
-    root.style.setProperty('--editor-wysiwyg-font-size', (s.editorWysiwygFontSize || 16) + 'px')
-    root.style.setProperty('--editor-raw-font-size', (s.editorRawFontSize || 14) + 'px')
-
-    if (s.editorFonts) {
-      // Per-script overrides (only applies when advanced typography has been expanded and configured)
-      const overrideKeys = ['latin', 'sc', 'tcHK', 'tcTW']
-      const hasOverrides = overrideKeys.some(k => {
-        const fs = s.editorFonts[k]
-        return fs && (fs.sansSerif && fs.sansSerif !== DEFAULTS.editorFonts[k]?.sansSerif ||
-                      fs.serif && fs.serif !== DEFAULTS.editorFonts[k]?.serif)
-      })
-
-      if (hasOverrides) {
-        const proportionalParts = []
-        for (const key of overrideKeys) {
-          const fs = s.editorFonts[key]
-          if (!fs) continue
-          const fontName = fs.proportional === 'serif' ? fs.serif : fs.sansSerif
-          if (fontName) proportionalParts.push(fontName.includes(' ') ? `"${fontName}"` : fontName)
-        }
-        proportionalParts.push('sans-serif')
-        root.style.setProperty('--editor-font-proportional', proportionalParts.join(', '))
-      } else if (s.defaultProportionalFont) {
-        // Fall back to global proportional font setting
-        const name = s.defaultProportionalFont.includes(' ') ? `"${s.defaultProportionalFont}"` : s.defaultProportionalFont
-        root.style.setProperty('--editor-font-proportional', `${name}, sans-serif`)
-      }
+    const ep = s.editorProportional
+    if (ep) {
+      const stack = (ep.mode === 'custom' && ep.custom) ? ep.custom : (FONT_STACKS[ep.mode] || FONT_STACKS.system)
+      decls.push(`--editor-font-proportional: ${stack}`)
     }
-
-    if (s.editorMonospace) {
-      const name = s.editorMonospace.includes(' ') ? `"${s.editorMonospace}"` : s.editorMonospace
-      root.style.setProperty('--editor-font-monospace', `${name}, monospace`)
+    const em = s.editorMonospace
+    if (em) {
+      const stack = (em.mode === 'custom' && em.custom) ? `${em.custom}, monospace` : FONT_STACKS.mono
+      decls.push(`--editor-font-monospace: ${stack}`)
     }
-  } catch (e) { console.warn('Failed to apply font settings:', e) }
+    const el = document.getElementById('app-settings')
+    if (el) el.textContent = `:root{\n${decls.join(';\n')};\n}`
+  } catch (e) { console.warn('Failed to apply settings:', e) }
+}
+
+// --- Apply user custom CSS to #app-custom <style> ---
+function applyCustomCss() {
+  const el = document.getElementById('app-custom')
+  if (el) el.textContent = local.customCss || ''
+}
+
+// Debounced save + apply for custom CSS textarea
+let cssTimer = null
+function onCustomCssInput() {
+  if (cssTimer) clearTimeout(cssTimer)
+  cssTimer = setTimeout(() => {
+    saveSettings()
+    applyCustomCss()
+  }, 300)
 }
 
 // --- Persist to localStorage ---
@@ -510,31 +321,9 @@ function clamp(field, min, max) {
   applySettings()
 }
 
-// --- Writing system selection (advanced typography) ---
-const selectedSystem = ref('latin')
-
-const currentFonts = computed(() => {
-  return local.editorFonts[selectedSystem.value]
-})
-
-const sansSerifKey = computed(() => selectedSystem.value + '.sansSerif')
-const serifKey = computed(() => selectedSystem.value + '.serif')
-
-function setProportional(val) {
-  local.editorFonts[selectedSystem.value].proportional = val
-  onSettingChange()
-}
-
 // --- Reset ---
 function resetToDefaults() {
-  const fresh = JSON.parse(JSON.stringify(DEFAULTS))
-  for (const key of Object.keys(customFields)) {
-    delete customFields[key]
-  }
-  for (const key of Object.keys(customValues)) {
-    delete customValues[key]
-  }
-  Object.assign(local, fresh)
+  Object.assign(local, JSON.parse(JSON.stringify(DEFAULTS)))
   onSettingChange()
 }
 </script>
@@ -659,84 +448,14 @@ function resetToDefaults() {
   padding: 6px 8px;
 }
 
-/* ---- Advanced typography ---- */
-.settings-advanced {
-  padding: 0;
-}
-.settings-advanced > summary {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  cursor: pointer;
-  list-style: none;
-  padding: 2px 0;
-}
-.settings-advanced > summary::-webkit-details-marker { display: none; }
-.settings-advanced > summary .material-icons-outlined {
-  font-size: 18px;
-  transition: transform 0.15s;
-}
-.settings-advanced[open] > summary .material-icons-outlined {
-  transform: rotate(90deg);
-}
-
-.advanced-body {
-  margin-top: 14px;
-  padding: 14px;
-}
-
-.advanced-body .setting-group {
-  margin-bottom: 12px;
-}
-.advanced-body .setting-group:last-child { margin-bottom: 0; }
-
-.advanced-body .setting-label {
-  display: block;
+/* ---- Custom CSS textarea ---- */
+.custom-css-input {
+  width: 100%;
+  min-height: 120px;
+  font-family: var(--editor-font-monospace);
   font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.advanced-body .input {
-  font-size: 13px;
-  padding: 6px 8px;
-}
-
-.radio-row {
-  display: flex;
-  gap: 16px;
-}
-
-.radio-label {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  color: var(--text);
-  cursor: pointer;
-}
-
-.radio-label input[type="radio"] {
-  accent-color: var(--primary);
-}
-
-.custom-font-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-.custom-font-row .input { flex: 1; }
-.custom-font-row .btn-sm {
-  padding: 4px 8px;
-  font-size: 14px;
-  line-height: 1;
-  flex-shrink: 0;
+  resize: vertical;
+  padding: 8px;
 }
 
 /* ---- Reset button ---- */

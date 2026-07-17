@@ -21,6 +21,13 @@
     "back": "返回",
     "allNotes": "全部笔记"
   },
+  "status": {
+    "offline": "离线 · 已保存到本地",
+    "offlineTitle": "当前离线。编辑内容已保存在本机，恢复连接后将自动同步。",
+    "syncedTitle": "所有更改已保存",
+    "dirtyTitle": "有未保存的更改",
+    "errorTitle": "保存失败 — 将重试"
+  },
   "login": {
     "brand": "MemoDump",
     "account": "账号",
@@ -38,19 +45,22 @@
     "editorSection": "编辑器",
     "editorWysiwygFontSize": "富文本字体大小",
     "editorRawFontSize": "代码编辑器字体大小",
-    "fontsFor": "书写系统",
-    "proportional": "比例字体：",
-    "sansSerif": "无衬线体",
-    "serif": "衬线体",
-    "sansSerifFont": "无衬线字体：",
-    "serifFont": "衬线字体：",
     "monospaceFont": "等宽字体：",
     "resetToDefaults": "恢复默认设置",
-    "advancedTypography": "高级排版",
     "preview": "预览",
-    "defaultProportionalFont": "比例字体",
     "previewProportional": "比例字体",
-    "previewMonospace": "等宽字体"
+    "previewMonospace": "等宽字体",
+    "fontPreset": "编辑器字体",
+    "fontPresetSystem": "系统",
+    "fontPresetSerif": "衬线（阅读）",
+    "fontPresetSans": "无衬线",
+    "fontPresetMono": "等宽",
+    "fontCustomName": "自定义字体名",
+    "fontCustomStack": "自定义字体栈",
+    "fontCustomStackHint": "任意 CSS font-family，例如 Georgia, 'Noto Serif CJK SC', serif",
+    "custom": "自定义…",
+    "customCss": "自定义 CSS",
+    "customCssHint": "可覆盖应用样式。支持 :root、body[data-build=\"server\"] 等选择器。"
   },
   "modals": {
     "cancel": "取消",

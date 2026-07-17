@@ -200,10 +200,11 @@
             <button class="btn btn-sm btn-icon btn-ghost" @click="toggleEditorMode" :title="editorMode === 'wysiwyg' ? t('editor.switchToRaw') : t('editor.switchToRich')">
               <span class="material-icons-outlined" style="font-size:16px">{{ editorMode === 'wysiwyg' ? 'code' : 'visibility' }}</span>
             </button>
-            <button class="save-btn" :class="{ dirty: isDirty }" @click="saveNote">
-              <span class="save-dot" v-if="isDirty"></span>
-              {{ t('editor.save') }}
-            </button>
+            <button class="save-btn" @click="saveNote">{{ t('editor.save') }}</button>
+            <span class="save-status" :class="saveStatus" :title="statusTitle">
+              <span class="material-icons-outlined">{{ statusIcon }}</span>
+              <span v-if="saveStatus === 'offline'" class="save-status-label">{{ t('status.offline') }}</span>
+            </span>
             <button class="btn btn-sm btn-icon btn-danger-subtle" v-if="editingNote.path" @click="deleteCurrentNote" :title="t('editor.deleteNote')">
               <span class="material-icons-outlined" style="font-size:16px">delete_outline</span>
             </button>
@@ -479,6 +480,7 @@ import { useDialogs } from '../composables/useDialogs'
 import { useAutosave } from '../composables/useAutosave'
 import { useFileImport } from '../composables/useFileImport'
 import { useContextMenu } from '../composables/useContextMenu'
+import { outboxPut, outboxAll, buildEntry } from '../composables/outbox.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -663,8 +665,22 @@ function openSearchPanel() {
   updateUrl()
 }
 
-const { showDraftRestoredBanner } = useAutosave({
+const { showDraftRestoredBanner, saveStatus, saveError, replayAll } = useAutosave({
   editingNote, isDirty, editContent, editName, editTags, editFolder, saveNote,
+  reload: loadAll, ping: () => apiClient.ping(),
+})
+
+const statusIcon = computed(() => ({
+  synced: 'cloud_done', dirty: 'cloud_upload', offline: 'cloud_off', error: 'sync_problem',
+}[saveStatus.value] || 'cloud_done'))
+
+const statusTitle = computed(() => {
+  switch (saveStatus.value) {
+    case 'offline': return t('status.offlineTitle')
+    case 'dirty': return t('status.dirtyTitle')
+    case 'error': return saveError.value || t('status.errorTitle')
+    default: return t('status.syncedTitle')
+  }
 })
 
 function handleGlobalKeydown(e) {
@@ -727,26 +743,33 @@ onMounted(async () => {
   window.addEventListener('keydown', handleGlobalKeydown)
   await loadAll()
 
-  // Restore draft saved before session-expiry redirect
-  const rawDraft = localStorage.getItem('memodump_draft')
-  if (rawDraft) {
-    try {
-      const draft = JSON.parse(rawDraft)
-      localStorage.removeItem('memodump_draft')
+  // Restore pending offline writes from a previous session (replaces the old
+  // single-slot localStorage draft). Most recent entry goes back into the
+  // editor with a banner; everything (including it) is then replayed if online.
+  let restored = false
+  try {
+    const entries = await outboxAll()
+    if (entries.length) {
+      const latest = entries[entries.length - 1]
       _editorReady = false
-      editingNote.value = { content: draft.content || '', path: draft.path || '' }
-      editName.value = draft.name || ''
-      editTags.value = draft.tags || []
-      editContent.value = draft.content || ''
-      editFolder.value = draft.folder || ''
+      editingNote.value = {
+        content: latest.content || '',
+        path: latest.path || '',
+        clientId: latest.clientId || (latest.op === 'create' ? latest.key : uid()),
+      }
+      editName.value = latest.name || ''
+      editTags.value = [...(latest.tags || [])]
+      editContent.value = latest.content || ''
+      editFolder.value = latest.folder || ''
       isDirty.value = true
       editorKey.value++
       showDraftRestoredBanner.value = true
-      return  // skip URL-based restore so draft takes priority
-    } catch (_) {}
-  }
+      restored = true
+    }
+  } catch (_) {}
 
-  await restoreFromUrl()
+  if (!restored) await restoreFromUrl()
+  if (typeof navigator === 'undefined' || navigator.onLine) replayAll()
 })
 
 onBeforeUnmount(() => {
@@ -776,6 +799,11 @@ async function loadAll() {
 // Flag: whether editor has finished its initial load (suppress first markdownUpdated)
 let _editorReady = false
 
+function uid() {
+  try { if (crypto.randomUUID) return crypto.randomUUID() } catch (_) {}
+  return Date.now().toString(36) + Math.random().toString(36).slice(2)
+}
+
 function confirmLeave() {
   if (!isDirty.value) return true
   return confirm(t('modals.unsavedChanges'))
@@ -786,7 +814,7 @@ function _forceNewNote() {
   prevView.folder = currentFolder.value
   prevView.search = searchOpen.value
   _editorReady = false
-  editingNote.value = { content: '', path: '' }
+  editingNote.value = { content: '', path: '', clientId: uid() }
   editName.value = ''
   editTags.value = []
   editFolder.value = currentFolder.value
@@ -852,60 +880,71 @@ function addTag() {
   tagInput.value = ''
 }
 
-async function saveNote({ silent = false } = {}) {
+async function saveNote({ silent = false, skipReload = false, replay = null } = {}) {
+  const fromReplay = !!replay
+  const content = fromReplay ? replay.content : editContent.value
+  const tags = fromReplay ? replay.tags : [...(editTags.value || [])]
+  const name = fromReplay ? replay.name : editName.value
+  const folder = fromReplay ? replay.folder : editFolder.value
+  const path = fromReplay ? replay.path : editingNote.value?.path
   try {
-    let resultNode;
-    if (editingNote.value.path) {
-      const originalTitle = isTimestampName(editingNote.value.name) ? '' : (editingNote.value.name || '');
-      const payload = {
-        content: editContent.value,
-        tags: editTags.value,
-      };
-      if (editName.value !== originalTitle) {
-        payload.rename = editName.value;
-      }
-      let res = await apiClient.updateNote(editingNote.value.path, payload)
+    let resultNode
+    if (path) {
+      const originalTitle = fromReplay
+        ? ''
+        : (isTimestampName(editingNote.value.name) ? '' : (editingNote.value.name || ''))
+      const payload = { content, tags }
+      if (name !== originalTitle) payload.rename = name
+      let res = await apiClient.updateNote(path, payload)
       resultNode = res.data
       const parts = resultNode.path.split('/')
       const curDir = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
-      if (editFolder.value !== curDir) {
-        res = await apiClient.moveNote(resultNode.path, editFolder.value)
+      if (folder !== curDir) {
+        res = await apiClient.moveNote(resultNode.path, folder)
         resultNode = res.data
       }
     } else {
-      let res = await apiClient.createNote({
-        content: editContent.value,
-        name: editName.value || '',
-        folder: editFolder.value,
-        tags: editTags.value,
-      })
+      let res = await apiClient.createNote({ content, name: name || '', folder, tags })
       resultNode = res.data
     }
-    await loadAll()
-    // Keep it open, just update metadata properly so further saves work
-    editingNote.value.path = resultNode.path
-    editName.value = isTimestampName(resultNode.name) ? '' : (resultNode.name || '')
-    const parts = resultNode.path.split('/')
-    editFolder.value = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
-    isDirty.value = false
-    updateUrl()
+    if (!skipReload) await loadAll()
+    if (!fromReplay) {
+      editingNote.value.path = resultNode.path
+      editName.value = isTimestampName(resultNode.name) ? '' : (resultNode.name || '')
+      const parts = resultNode.path.split('/')
+      editFolder.value = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+      isDirty.value = false
+      saveError.value = null
+      updateUrl()
+    } else if (editingNote.value && (
+      (!path && replay.clientId && editingNote.value.clientId === replay.clientId) ||
+      (path && editingNote.value.path === path)
+    )) {
+      // The replayed entry IS the note currently open in the editor — adopt the
+      // server path so the next save updates rather than creating a duplicate,
+      // and mark it clean. (Matches a create by clientId, an update by path.)
+      editingNote.value.path = resultNode.path
+      editName.value = isTimestampName(resultNode.name) ? '' : (resultNode.name || '')
+      const parts = resultNode.path.split('/')
+      editFolder.value = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+      isDirty.value = false
+    }
+    return resultNode
   } catch (e) {
-    if (e.response?.status === 401) {
-      // Session expired — persist draft before the interceptor redirects to login
-      try {
-        localStorage.setItem('memodump_draft', JSON.stringify({
-          content: editContent.value,
-          name: editName.value,
-          tags: editTags.value,
-          folder: editFolder.value,
-          path: editingNote.value?.path || '',
-        }))
-      } catch (_) {}
-      // The api interceptor will redirect to /login automatically
+    if (e?.response?.status === 401) {
+      if (!fromReplay) {
+        try { await outboxPut(buildEntry({ editingNote, editContent, editName, editTags, editFolder })) } catch (_) {}
+      }
       return
     }
+    if (fromReplay) throw e
     if (silent) throw e
-    alert(t('errors.saveFailed') + (e.response?.data?.error || e.message))
+    if (!e.response) {
+      // Network / unreachable — queue calmly, no alert.
+      try { await outboxPut(buildEntry({ editingNote, editContent, editName, editTags, editFolder })) } catch (_) {}
+    } else {
+      saveError.value = e.response?.data?.error || e.message
+    }
   }
 }
 
@@ -1341,7 +1380,6 @@ provide('dnd', dnd)
 .save-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
   padding: 5px 14px;
   border: 1.5px solid var(--primary);
   border-radius: 100px;
@@ -1350,27 +1388,24 @@ provide('dnd', dnd)
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition: background 0.15s, color 0.15s;
   flex-shrink: 0;
 }
-.save-btn:hover {
-  background: var(--primary-bg);
-}
-.save-btn.dirty {
-  background: var(--primary);
-  color: #fff;
-}
-.save-btn.dirty:hover {
-  background: var(--primary-dark);
-}
-.save-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.85);
+.save-btn:hover { background: var(--primary-bg); }
+
+/* Calm static save-status indicator — no animation. */
+.save-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
   flex-shrink: 0;
 }
+.save-status .material-icons-outlined { font-size: 16px; }
+.save-status.dirty { color: var(--primary); }
+.save-status.error { color: var(--danger); }
+.save-status-label { line-height: 1; }
 
 /* ======= HEADER METADATA SCROLL ======= */
 .header-meta-scroll {

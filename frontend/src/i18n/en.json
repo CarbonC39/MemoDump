@@ -21,6 +21,13 @@
     "back": "Back",
     "allNotes": "All Notes"
   },
+  "status": {
+    "offline": "Offline · saved locally",
+    "offlineTitle": "You're offline. Edits are saved on this device and sync when reconnected.",
+    "syncedTitle": "All changes saved",
+    "dirtyTitle": "Unsaved changes",
+    "errorTitle": "Save failed — will retry"
+  },
   "login": {
     "brand": "MemoDump",
     "account": "Account",
@@ -38,19 +45,22 @@
     "editorSection": "Editor",
     "editorWysiwygFontSize": "Rich Text Font Size",
     "editorRawFontSize": "Raw Editor Font Size",
-    "fontsFor": "Writing system",
-    "proportional": "Proportional:",
-    "sansSerif": "Sans-serif",
-    "serif": "Serif",
-    "sansSerifFont": "Sans-serif font:",
-    "serifFont": "Serif font:",
     "monospaceFont": "Monospace font:",
     "resetToDefaults": "Reset to Defaults",
-    "advancedTypography": "Advanced Typography",
     "preview": "Preview",
-    "defaultProportionalFont": "Proportional font",
     "previewProportional": "Proportional",
-    "previewMonospace": "Monospace"
+    "previewMonospace": "Monospace",
+    "fontPreset": "Editor font",
+    "fontPresetSystem": "System",
+    "fontPresetSerif": "Serif (reading)",
+    "fontPresetSans": "Sans-serif",
+    "fontPresetMono": "Monospace",
+    "fontCustomName": "Custom font name",
+    "fontCustomStack": "Custom font stack",
+    "fontCustomStackHint": "Any CSS font-family, e.g. Georgia, 'Noto Serif CJK SC', serif",
+    "custom": "Custom…",
+    "customCss": "Custom CSS",
+    "customCssHint": "Overrides app styles. Targets like :root and body[data-build=\"server\"] work."
   },
   "modals": {
     "cancel": "Cancel",
