@@ -30,7 +30,12 @@ A lightweight, single-binary Markdown notes app. Run it as a self-hosted web ser
 - **Single binary** — Go backend with embedded Vue 3 frontend. Drop it anywhere and run.
 - **Markdown editor** — [Milkdown](https://milkdown.dev/) WYSIWYG editor with full Markdown support.
 - **Folder organisation** — Hierarchical folders with drag-and-drop and `.md` file import.
-- **Full-text search** — Fast in-memory search across all notes.
+- **Full-text search** — Fast in-memory AND-mode search across note bodies and tags.
+- **Waterfall card view** — Visual masonry-style note browser alongside the folder tree.
+- **Autosave & offline outbox** — Calm autosave backed by IndexedDB; edits queued while offline replay automatically when connectivity returns.
+- **Font presets & typography** — Choose from system, serif, and sans font families; custom CSS font stacks; independent font sizes for app UI, WYSIWYG editor, and raw editor.
+- **Settings panel** — Full-page settings view with live preview card, numeric inputs, and typography controls.
+- **Custom CSS** — Inject a stylesheet via `--css` CLI flag, or edit custom CSS directly in the settings panel.
 - **Flexible auth** — Username/password session auth, or no-auth mode for personal/trusted-network use.
 - **Config layering** — Flags → environment variables → `.env` file (any combination works).
 - **Desktop app** — Native window via Wails — same codebase, no browser required.
@@ -126,16 +131,16 @@ The Wails build wraps the same backend in a native window — no browser or open
 
 ## Docker
 
-Pre-built images are published to GitHub Container Registry on every tagged release: `ghcr.io/carbonc/memodump`. The image runs the headless CLI server only (the Wails desktop build doesn't apply in a container).
+Pre-built images are published to GitHub Container Registry on every tagged release: `ghcr.io/carbonc39/memodump`. The image runs the headless CLI server only (the Wails desktop build doesn't apply in a container).
 
 ```sh
 # No authentication
-docker run -d -p 8080:8080 -v ./notes:/data ghcr.io/carbonc/memodump:latest
+docker run -d -p 8080:8080 -v ./notes:/data ghcr.io/carbonc39/memodump:latest
 
 # With credentials and a custom port
 docker run -d -p 9090:9090 -v ./notes:/data \
   -e MEMODUMP_USER=alice -e MEMODUMP_PASS=secret -e MEMODUMP_PORT=9090 \
-  ghcr.io/carbonc/memodump:latest
+  ghcr.io/carbonc39/memodump:latest
 ```
 
 The data volume mounts to `/data` (set via `MEMODUMP_DATA=/data` inside the image). Available tags: `latest`, `vX.Y.Z`, `vX.Y`. All [CLI environment variables](#configuration-sources) work the same way inside the container.
@@ -237,8 +242,14 @@ Gated to `v*` tags / manual dispatch (native macOS/Windows/Linux runners bill mo
 
 ### `docker` — Docker image
 
-Also gated to `v*` tags / manual dispatch. Builds `linux/amd64` + `linux/arm64` and pushes to `ghcr.io/carbonc/memodump`, tagged `latest`, `vX.Y.Z`, and `vX.Y`.
+Also gated to `v*` tags / manual dispatch. Builds `linux/amd64` + `linux/arm64` and pushes to `ghcr.io/carbonc39/memodump`, tagged `latest`, `vX.Y.Z`, and `vX.Y`.
 
 ### `release` — GitHub Release + Codeberg sync
 
 Triggered only on `v*` tags. Collects every build artifact onto a GitHub Release, then mirrors the release (and its assets) to Codeberg via the Forgejo API.
+
+---
+
+<p align="center">
+  If you find MemoDump useful, consider <a href="https://ko-fi.com/carbonc">buying me a hot chocolate ☕</a>
+</p>

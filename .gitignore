@@ -7,3 +7,5 @@ memodump
 package.json.md5
 docs/
 .DS_Store
+.playwright-mcp/
+build/bin/

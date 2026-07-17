@@ -174,7 +174,7 @@ jobs:
         with:
           # Hardcoded lowercase: ghcr.io repo names must be lowercase, and
           # github.repository_owner here is "CarbonC" (mixed case).
-          images: ghcr.io/carbonc/memodump
+          images: ghcr.io/carbonc39/memodump
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

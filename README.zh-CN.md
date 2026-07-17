@@ -30,7 +30,12 @@
 - **单文件二进制** —— Go 后端内嵌 Vue 3 前端，放到任意位置即可运行。
 - **Markdown 编辑器** —— 基于 [Milkdown](https://milkdown.dev/) 的所见即所得编辑器，支持完整 Markdown 语法。
 - **文件夹组织** —— 支持拖拽的层级文件夹结构，以及 `.md` 文件导入。
-- **全文搜索** —— 基于内存的快速全文搜索。
+- **全文搜索** —— 基于内存的快速全文搜索，支持同时对正文和标签进行 AND 查询。
+- **瀑布流卡片视图** —— 可视化瀑布流式笔记浏览，与文件夹树并列展示。
+- **自动保存与离线队列** —— 静默自动保存，底层使用 IndexedDB 存储；离线时产生的编辑会在网络恢复后自动回放。
+- **字体预设与排版控制** —— 内置 system、serif、sans 三种字体族预设，支持自定义 CSS 栈，可独立调整应用界面、WYSIWYG 编辑器和纯文本编辑器的字号。
+- **设置面板** —— 全页设置视图，带实时预览卡片、数值输入框和排版控制。
+- **自定义 CSS** —— 可通过 `--css` 命令行参数注入样式表，也可在设置面板中直接在线编辑自定义 CSS。
 - **灵活的鉴权方式** —— 支持用户名/密码会话鉴权，也可在个人/可信网络环境下使用无鉴权模式。
 - **分层配置** —— 命令行参数 → 环境变量 → `.env` 文件（可任意组合）。
 - **桌面应用** —— 通过 Wails 提供原生窗口，复用同一套代码，无需浏览器。
@@ -126,16 +131,16 @@ Wails 构建版本将同一套后端包装进原生窗口——无需浏览器�
 
 ## Docker
 
-每次打 tag 发布时，预构建镜像都会发布到 GitHub Container Registry：`ghcr.io/carbonc/memodump`。该镜像只包含无界面的 CLI 服务器（Wails 桌面版不适用于容器场景）。
+每次打 tag 发布时，预构建镜像都会发布到 GitHub Container Registry：`ghcr.io/carbonc39/memodump`。该镜像只包含无界面的 CLI 服务器（Wails 桌面版不适用于容器场景）。
 
 ```sh
 # 无鉴权
-docker run -d -p 8080:8080 -v ./notes:/data ghcr.io/carbonc/memodump:latest
+docker run -d -p 8080:8080 -v ./notes:/data ghcr.io/carbonc39/memodump:latest
 
 # 带账号密码和自定义端口
 docker run -d -p 9090:9090 -v ./notes:/data \
   -e MEMODUMP_USER=alice -e MEMODUMP_PASS=secret -e MEMODUMP_PORT=9090 \
-  ghcr.io/carbonc/memodump:latest
+  ghcr.io/carbonc39/memodump:latest
 ```
 
 数据卷挂载到镜像内的 `/data`（镜像内已设置 `MEMODUMP_DATA=/data`）。可用标签：`latest`、`vX.Y.Z`、`vX.Y`。所有 [CLI 环境变量](#配置来源) 在容器内同样适用。
@@ -237,8 +242,14 @@ CI 运行在 **GitHub Actions**（`.github/workflows/build.yml`），在每次�
 
 ### `docker` —— Docker 镜像
 
-同样仅在打 `v*` tag 或手动触发时运行。构建 `linux/amd64` + `linux/arm64`，推送到 `ghcr.io/carbonc/memodump`，标签为 `latest`、`vX.Y.Z` 和 `vX.Y`。
+同样仅在打 `v*` tag 或手动触发时运行。构建 `linux/amd64` + `linux/arm64`，推送到 `ghcr.io/carbonc39/memodump`，标签为 `latest`、`vX.Y.Z` 和 `vX.Y`。
 
 ### `release` —— GitHub Release 并同步到 Codeberg
 
 仅在打 `v*` tag 时触发。将所有构建产物收集到一个 GitHub Release 中，然后通过 Forgejo API 将该 Release（及其附件）同步到 Codeberg。
+
+---
+
+<p align="center">
+  如果 MemoDump 对你有所帮助，不妨<a href="https://ko-fi.com/carbonc">请我喝杯热巧 ☕</a>
+</p>
