@@ -45,7 +45,7 @@
     "editorSection": "编辑器",
     "editorWysiwygFontSize": "富文本字体大小",
     "editorRawFontSize": "代码编辑器字体大小",
-    "monospaceFont": "等宽字体：",
+    "monospaceFont": "等宽字体",
     "resetToDefaults": "恢复默认设置",
     "preview": "预览",
     "previewProportional": "比例字体",
@@ -54,13 +54,13 @@
     "fontPresetSystem": "系统",
     "fontPresetSerif": "衬线（阅读）",
     "fontPresetSans": "无衬线",
-    "fontPresetMono": "等宽",
-    "fontCustomName": "自定义字体名",
+    "fontPresetMono": "内置",
     "fontCustomStack": "自定义字体栈",
-    "fontCustomStackHint": "任意 CSS font-family，例如 Georgia, 'Noto Serif CJK SC', serif",
+    "fontCustomStackHint": "CSS font-family，例如 Georgia, 'Noto Serif CJK SC', serif",
     "custom": "自定义…",
     "customCss": "自定义 CSS",
-    "customCssHint": "可覆盖应用样式。支持 :root、body[data-build=\"server\"] 等选择器。"
+    "customCssHint": "可覆盖应用样式。支持 :root、body[data-build=\"server\"] 等选择器。",
+    "applyCss": "应用 CSS"
   },
   "modals": {
     "cancel": "取消",

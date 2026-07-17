@@ -259,63 +259,59 @@ onBeforeUnmount(() => {
 }
 
 /* ===== Fix code block spacing + font ===== */
-.crepe-editor :deep(.editor pre) {
-  margin: 0.6em 0;
-  font-family: 'Roboto Mono', 'Consolas', 'Menlo', monospace;
-}
 .crepe-editor :deep(.editor code) {
-  font-family: 'Roboto Mono', 'Consolas', 'Menlo', monospace;
+  font-family: var(--editor-font-monospace);
 }
 
-/* ===== Crepe code fence (CodeMirror) dark theme ===== */
-.crepe-editor :deep(.code-fence) {
-  background: #1E293B;
+/* ===== Code block: match inline code color scheme =====
+   Background goes on .codemirror-host (sibling of .tools, parent of .cm-editor)
+   so the tools bar keeps its native surface bg while the code area gets the
+   inline-code purple tint. Tool bar buttons inherit font from here. */
+.crepe-editor :deep(.milkdown-code-block) {
   border-radius: 8px;
-  overflow: hidden;
   margin: 0.7em 0;
 }
-.crepe-editor :deep(.code-fence-language),
-.crepe-editor :deep(.code-fence-language-select) {
-  background: #162032;
-  color: #64748B;
-  font-family: 'Roboto Mono', monospace;
-  font-size: 12px;
-  border: none;
-  padding: 5px 12px;
+
+.crepe-editor :deep(.milkdown-code-block .codemirror-host) {
+  background: var(--md-code-bg);
+  border-radius: 8px;
 }
-.crepe-editor :deep(.cm-editor) {
-  background: #1E293B !important;
+
+.crepe-editor :deep(.milkdown-code-block .cm-editor) {
+  background: transparent !important;
 }
-.crepe-editor :deep(.cm-editor.cm-focused) {
+.crepe-editor :deep(.milkdown-code-block .cm-editor.cm-focused) {
   outline: none;
 }
-.crepe-editor :deep(.cm-scroller) {
-  background: #1E293B;
-  font-family: 'Roboto Mono', 'Consolas', 'Menlo', monospace !important;
+.crepe-editor :deep(.milkdown-code-block .cm-scroller) {
+  font-family: var(--editor-font-monospace) !important;
   font-size: 13.5px;
   line-height: 1.7;
 }
-.crepe-editor :deep(.cm-content) {
-  font-family: 'Roboto Mono', 'Consolas', 'Menlo', monospace !important;
-  color: #CBD5E1;
-  caret-color: #6495ED;
+.crepe-editor :deep(.milkdown-code-block .cm-content),
+.crepe-editor :deep(.milkdown-code-block .cm-content .cm-line) {
+  font-family: var(--editor-font-monospace) !important;
+  color: var(--md-code-fg);
+  caret-color: var(--primary);
 }
-.crepe-editor :deep(.cm-line) {
-  color: #CBD5E1;
+.crepe-editor :deep(.milkdown-code-block .cm-gutters) {
+  background: transparent !important;
+  border-right: 1px solid var(--border);
+  color: var(--text-muted);
 }
-.crepe-editor :deep(.cm-gutters) {
-  background: #162032 !important;
-  border-right: 1px solid #2D3F56;
-  color: #475569;
+.crepe-editor :deep(.milkdown-code-block .cm-activeLineGutter) {
+  background: var(--crepe-color-hover) !important;
 }
-.crepe-editor :deep(.cm-activeLineGutter) {
-  background: #1A2A3E !important;
+.crepe-editor :deep(.milkdown-code-block .cm-activeLine) {
+  background: var(--crepe-color-selected) !important;
 }
-.crepe-editor :deep(.cm-activeLine) {
-  background: rgba(100, 149, 237, 0.06) !important;
+.crepe-editor :deep(.milkdown-code-block .cm-cursor) {
+  border-left-color: var(--primary);
 }
-.crepe-editor :deep(.cm-cursor) {
-  border-left-color: #6495ED;
+
+/* Tools bar: use code font for language/copy labels */
+.crepe-editor :deep(.milkdown-code-block .tools .language-button) {
+  font-family: var(--editor-font-monospace);
 }
 
 /* ===== Fix horizontal rule: one solid blue line, not a translucent double line ===== */

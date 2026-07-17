@@ -45,7 +45,7 @@
     "editorSection": "Editor",
     "editorWysiwygFontSize": "Rich Text Font Size",
     "editorRawFontSize": "Raw Editor Font Size",
-    "monospaceFont": "Monospace font:",
+    "monospaceFont": "Monospace font",
     "resetToDefaults": "Reset to Defaults",
     "preview": "Preview",
     "previewProportional": "Proportional",
@@ -54,13 +54,13 @@
     "fontPresetSystem": "System",
     "fontPresetSerif": "Serif (reading)",
     "fontPresetSans": "Sans-serif",
-    "fontPresetMono": "Monospace",
-    "fontCustomName": "Custom font name",
+    "fontPresetMono": "Built-in",
     "fontCustomStack": "Custom font stack",
-    "fontCustomStackHint": "Any CSS font-family, e.g. Georgia, 'Noto Serif CJK SC', serif",
+    "fontCustomStackHint": "CSS font-family, e.g. Georgia, 'Noto Serif CJK SC', serif",
     "custom": "Custom…",
     "customCss": "Custom CSS",
-    "customCssHint": "Overrides app styles. Targets like :root and body[data-build=\"server\"] work."
+    "customCssHint": "Overrides app styles. Targets like :root and body[data-build=\"server\"] work.",
+    "applyCss": "Apply CSS"
   },
   "modals": {
     "cancel": "Cancel",

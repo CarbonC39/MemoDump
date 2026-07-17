@@ -121,9 +121,9 @@
           </select>
         </div>
         <div class="setting-row" v-if="local.editorMonospace.mode === 'custom'">
-          <span class="setting-row-label">{{ t('settings.fontCustomName') }}</span>
+          <span class="setting-row-label">{{ t('settings.fontCustomStack') }}</span>
           <input type="text" class="input input-select" v-model="local.editorMonospace.custom"
-                 :placeholder="'Consolas'" @input="onSettingChange" />
+                 :placeholder="t('settings.fontCustomStackHint')" @input="onSettingChange" />
         </div>
       </div>
 
@@ -139,6 +139,10 @@
           spellcheck="false"
           @input="onCustomCssInput"
         ></textarea>
+        <button class="btn btn-sm btn-outline css-apply-btn" @click="applyCustomCssNow">
+          <span class="material-icons-outlined">play_arrow</span>
+          {{ t('settings.applyCss') }}
+        </button>
       </div>
 
       <hr class="settings-divider" />
@@ -274,7 +278,15 @@ function applySettings() {
     }
     const em = s.editorMonospace
     if (em) {
-      const stack = (em.mode === 'custom' && em.custom) ? `${em.custom}, monospace` : FONT_STACKS.mono
+      let stack
+      if (em.mode === 'custom' && em.custom) {
+        const trimmed = em.custom.trim()
+        // Accept full font-family; only append , monospace if no generic fallback yet
+        stack = /,\s*(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-sans-serif|ui-monospace)\s*$/i.test(trimmed)
+          ? trimmed : trimmed + ', monospace'
+      } else {
+        stack = FONT_STACKS.mono
+      }
       decls.push(`--editor-font-monospace: ${stack}`)
     }
     const el = document.getElementById('app-settings')
@@ -288,14 +300,18 @@ function applyCustomCss() {
   if (el) el.textContent = local.customCss || ''
 }
 
-// Debounced save + apply for custom CSS textarea
+// Debounced save to localStorage for custom CSS (never auto-apply)
 let cssTimer = null
 function onCustomCssInput() {
   if (cssTimer) clearTimeout(cssTimer)
   cssTimer = setTimeout(() => {
     saveSettings()
-    applyCustomCss()
   }, 300)
+}
+
+// Explicit apply button — only then inject into #app-custom
+function applyCustomCssNow() {
+  applyCustomCss()
 }
 
 // --- Persist to localStorage ---
@@ -456,6 +472,15 @@ function resetToDefaults() {
   font-size: 12px;
   resize: vertical;
   padding: 8px;
+}
+
+.css-apply-btn {
+  margin-top: 8px;
+  font-size: 12px;
+  padding: 4px 12px;
+}
+.css-apply-btn .material-icons-outlined {
+  font-size: 14px;
 }
 
 /* ---- Reset button ---- */

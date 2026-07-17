@@ -232,24 +232,6 @@ a {
   font-family: var(--editor-font-monospace);
 }
 
-/* Fallback pre/code for cases where CodeMirror isn't used */
-.milkdown .editor pre {
-  background: #1E293B;
-  color: #E2E8F0;
-  padding: 16px;
-  border-radius: var(--radius);
-  overflow-x: auto;
-  margin: 0.6em 0;
-  font-family: var(--editor-font-monospace);
-}
-
-.milkdown .editor pre code {
-  background: none;
-  color: inherit;
-  padding: 0;
-  font-size: 0.9em;
-}
-
 /* Strikethrough */
 .milkdown .editor s,
 .milkdown .editor del {
@@ -330,6 +312,13 @@ a {
   font-size: 16px !important;
 }
 
+/* Section / dialog titles — shared across all panels */
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
 /* Buttons */
 .btn {
   display: inline-flex;
@@ -378,6 +367,17 @@ a {
   height: 32px;
   padding: 0;
   border-radius: var(--radius);
+}
+
+.btn-outline {
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  background: transparent;
+}
+.btn-outline:hover {
+  border-color: var(--primary);
+  color: var(--primary-dark);
+  background: var(--primary-bg);
 }
 
 /* Input */

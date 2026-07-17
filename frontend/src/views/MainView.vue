@@ -120,7 +120,7 @@
 
         <!-- Settings header (replaces normal header when open) -->
         <template v-if="showSettings">
-          <span class="header-settings-title">{{ t('settings.title') }}</span>
+          <span class="section-title header-settings-title">{{ t('settings.title') }}</span>
           <div class="header-right">
             <button class="btn btn-icon btn-ghost" @click="showSettings = false">
               <span class="material-icons-outlined">close</span>
@@ -166,7 +166,12 @@
             </div>
           </div>
 
-          <!-- Not editing: static breadcrumb -->
+          <!-- Search mode: title in header -->
+          <div v-else-if="searchOpen" class="header-left">
+            <span class="section-title">{{ t('search.searchNotes') }}</span>
+          </div>
+
+          <!-- Not editing, not search: static breadcrumb -->
           <div v-else class="header-left">
             <span v-if="currentFolder" class="header-folder-display">
               <span class="material-icons-outlined" style="font-size:16px;opacity:0.6">folder_open</span>
@@ -174,8 +179,26 @@
             </span>
           </div>
 
-          <!-- Right: sort order + new note shortcut when browsing waterfall -->
-          <div class="header-right" v-if="!editingNote && !searchOpen">
+          <!-- Header-right: depends on current mode -->
+          <div class="header-right" v-if="searchOpen">
+            <button class="btn btn-icon btn-ghost" @click="searchOpen = false">
+              <span class="material-icons-outlined">close</span>
+            </button>
+          </div>
+          <div class="header-right" v-else-if="editingNote">
+            <button class="btn btn-sm btn-icon btn-ghost" @click="toggleEditorMode" :title="editorMode === 'wysiwyg' ? t('editor.switchToRaw') : t('editor.switchToRich')">
+              <span class="material-icons-outlined" style="font-size:16px">{{ editorMode === 'wysiwyg' ? 'code' : 'visibility' }}</span>
+            </button>
+            <button class="save-btn" @click="saveNote">{{ t('editor.save') }}</button>
+            <span class="save-status" :class="saveStatus" :title="statusTitle">
+              <span v-if="saveStatus !== 'synced'" class="material-icons-outlined">{{ statusIcon }}</span>
+              <span v-if="saveStatus === 'offline'" class="save-status-label">{{ t('status.offline') }}</span>
+            </span>
+            <button class="btn btn-sm btn-icon btn-danger-subtle" v-if="editingNote.path" @click="deleteCurrentNote" :title="t('editor.deleteNote')">
+              <span class="material-icons-outlined" style="font-size:16px">delete_outline</span>
+            </button>
+          </div>
+          <div class="header-right" v-else>
             <div class="sort-control">
               <button class="btn btn-icon header-sort-btn" :class="{ active: sortMenuOpen }" @click.stop="sortMenuOpen = !sortMenuOpen" :title="t('notes.sortOrder')">
                 <span class="material-icons-outlined">sort</span>
@@ -194,21 +217,6 @@
               <span class="material-icons-outlined">add</span>
             </button>
           </div>
-
-          <!-- Fixed right: save & delete — do NOT scroll -->
-          <div class="header-right" v-else-if="editingNote">
-            <button class="btn btn-sm btn-icon btn-ghost" @click="toggleEditorMode" :title="editorMode === 'wysiwyg' ? t('editor.switchToRaw') : t('editor.switchToRich')">
-              <span class="material-icons-outlined" style="font-size:16px">{{ editorMode === 'wysiwyg' ? 'code' : 'visibility' }}</span>
-            </button>
-            <button class="save-btn" @click="saveNote">{{ t('editor.save') }}</button>
-            <span class="save-status" :class="saveStatus" :title="statusTitle">
-              <span class="material-icons-outlined">{{ statusIcon }}</span>
-              <span v-if="saveStatus === 'offline'" class="save-status-label">{{ t('status.offline') }}</span>
-            </span>
-            <button class="btn btn-sm btn-icon btn-danger-subtle" v-if="editingNote.path" @click="deleteCurrentNote" :title="t('editor.deleteNote')">
-              <span class="material-icons-outlined" style="font-size:16px">delete_outline</span>
-            </button>
-          </div>
         </template>
       </header>
 
@@ -220,12 +228,6 @@
         <div v-show="!showSettings">
           <!-- Search results (right-side panel) -->
           <div v-if="searchOpen" class="search-results-view">
-          <div class="search-results-header">
-            <h2>{{ t('search.searchNotes') }}</h2>
-            <button class="btn btn-icon btn-ghost" @click="searchOpen = false">
-              <span class="material-icons-outlined">close</span>
-            </button>
-          </div>
           <div class="search-inputs-wrap">
             <input v-model="searchQuery" class="input" :placeholder="t('search.searchContent')" @input="doSearch" />
             <input v-model="searchTag" class="input" :placeholder="t('search.searchTags')" @input="doSearch" />
@@ -355,7 +357,7 @@
     <div v-if="folderPicker.visible" class="modal-overlay" @click.self="closeFolderPicker">
       <div class="folder-picker-modal">
         <div class="folder-picker-head">
-          <h3>{{ t('modals.moveToFolder') }}</h3>
+          <h3 class="section-title">{{ t('modals.moveToFolder') }}</h3>
           <button class="btn-new-folder" @click="startCreateFolderInPicker" :title="t('modals.newFolder')">
             <span class="material-icons-outlined">create_new_folder</span>
             {{ t('modals.newFolder') }}
@@ -415,7 +417,7 @@
     <!-- Prompt Modal -->
     <div v-if="promptVisible" class="modal-overlay" @click.self="cancelPrompt">
       <div class="prompt-modal">
-        <h3>{{ promptTitle }}</h3>
+        <h3 class="section-title">{{ promptTitle }}</h3>
         <input v-model="promptValue" class="input" :placeholder="promptTitle" @keydown.enter="submitPrompt" ref="promptInputRef" />
         <div class="prompt-actions">
           <button class="btn btn-ghost" @click="cancelPrompt">{{ t('modals.cancel') }}</button>
@@ -427,7 +429,7 @@
     <!-- Confirm Modal -->
     <div v-if="confirmDialog.visible" class="modal-overlay" @click.self="cancelConfirm">
       <div class="prompt-modal">
-        <h3>{{ confirmDialog.title }}</h3>
+        <h3 class="section-title">{{ confirmDialog.title }}</h3>
         <p class="confirm-message" v-if="confirmDialog.message">{{ confirmDialog.message }}</p>
         <div class="prompt-actions">
           <button class="btn btn-ghost" @click="cancelConfirm">{{ t('modals.cancel') }}</button>
@@ -439,7 +441,7 @@
     <!-- Copy Dialog (iOS PWA fallback) -->
     <div v-if="copyDialog.visible" class="modal-overlay" @click.self="copyDialog.visible = false">
       <div class="prompt-modal">
-        <h3>{{ t('modals.copyText') }}</h3>
+        <h3 class="section-title">{{ t('modals.copyText') }}</h3>
         <p style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">{{ t('modals.copyInstruction') }}</p>
         <textarea
           ref="copyDialogTextarea"
@@ -634,6 +636,7 @@ const {
 
 async function handleAllClick() {
   if (!confirmLeave()) return
+  showSettings.value = false
   editingNote.value = null
   isDirty.value = false
   searchOpen.value = false
@@ -659,6 +662,7 @@ async function goBack() {
 
 function openSearchPanel() {
   if (!confirmLeave()) return
+  showSettings.value = false
   searchOpen.value = true
   editingNote.value = null
   isDirty.value = false
@@ -811,6 +815,7 @@ function confirmLeave() {
 
 // Internal helper: create new note without confirmLeave check (used after delete/startup)
 function _forceNewNote() {
+  showSettings.value = false
   prevView.folder = currentFolder.value
   prevView.search = searchOpen.value
   _editorReady = false
@@ -983,6 +988,7 @@ function doSearch() {
 
 async function selectFolder(folderPath) {
   if (!confirmLeave()) return
+  showSettings.value = false
   currentFolder.value = folderPath
   editingNote.value = null
   isDirty.value = false
@@ -1339,12 +1345,9 @@ provide('dnd', dnd)
   text-overflow: ellipsis;
 }
 
-/* Settings header title — replaces breadcrumb when settings open */
+/* Settings header title — flex to fill header space */
 .header-settings-title {
-  font-size: 16px;
-  font-weight: 700;
   flex: 1;
-  color: var(--waterfall-title);
 }
 
 /* Back button in editor header — always visible on desktop and mobile */
@@ -1555,16 +1558,6 @@ provide('dnd', dnd)
 /* Search results */
 .search-results-view {
   padding: 20px 24px;
-}
-.search-results-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-.search-results-header h2 {
-  font-size: 18px;
-  font-weight: 600;
 }
 .search-inputs-wrap {
   display: flex;
@@ -1787,8 +1780,6 @@ provide('dnd', dnd)
 }
 .folder-picker-modal h3 {
   margin-bottom: 0;
-  font-size: 16px;
-  font-weight: 600;
   flex-shrink: 0;
 }
 .folder-picker-head {
@@ -1904,8 +1895,6 @@ provide('dnd', dnd)
 }
 .prompt-modal h3 {
   margin-bottom: 16px;
-  font-size: 16px;
-  font-weight: 600;
 }
 .prompt-actions {
   display: flex;
