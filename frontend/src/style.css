@@ -46,6 +46,36 @@
   --editor-font-monospace: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Menlo', 'Monaco', 'Courier New', monospace;
 }
 
+/* Dark theme — blue-purple night palette */
+[data-theme="dark"] {
+  --bg: #2B2838;
+  --bg-card: #333041;
+  --bg-sidebar: #242233;
+  --primary: #8AAAEB;
+  --primary-light: #A8C2F4;
+  --primary-dark: #6B91E0;
+  --primary-bg: #353247;
+  --text: #E8E4F2;
+  --text-secondary: #B5AEC8;
+  --text-muted: #867F9A;
+  --border: #3E3A4D;
+  --border-light: #353145;
+  --danger: #D48282;
+  --danger-light: #453440;
+  --success: #4ADE80;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.15);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --waterfall-title: #B9ADE0;
+  --md-blue: #9ABCED;
+  --md-bold: #9ABCED;
+  --md-link: #C4A5EA;
+  --md-code-bg: #3A364B;
+  --md-code-fg: #CCBDF0;
+  --md-quote-border: #A090D4;
+  --md-quote-bg: #302C40;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -313,10 +343,18 @@ a {
 }
 
 /* Section / dialog titles — shared across all panels */
-.section-title {
+h2 {
   font-size: 16px;
   font-weight: 600;
-  color: var(--text);
+  color: var(--waterfall-title);
+  margin: 0 0 16px 0;
+}
+
+h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--waterfall-title);
+  margin: 0 0 14px 0;
 }
 
 /* Buttons */

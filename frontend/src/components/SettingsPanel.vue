@@ -34,9 +34,39 @@
 
       <hr class="settings-divider" />
 
-      <!-- Interface section -->
+      <!-- Appearance section -->
       <div class="settings-section">
-        <div class="settings-section-label">{{ t('settings.language') }}</div>
+        <h3>{{ t('settings.appearance') }}</h3>
+
+        <div class="setting-row">
+          <span class="setting-row-label">{{ t('settings.theme') }}</span>
+          <div class="theme-toggle-group">
+            <button
+              class="theme-option-btn"
+              :class="{ active: theme === 'light' }"
+              @click="setTheme('light')"
+            >
+              <span class="material-icons-outlined">light_mode</span>
+              {{ t('settings.themeLight') }}
+            </button>
+            <button
+              class="theme-option-btn"
+              :class="{ active: theme === 'dark' }"
+              @click="setTheme('dark')"
+            >
+              <span class="material-icons-outlined">dark_mode</span>
+              {{ t('settings.themeDark') }}
+            </button>
+            <button
+              class="theme-option-btn"
+              :class="{ active: theme === 'system' }"
+              @click="setTheme('system')"
+            >
+              <span class="material-icons-outlined">settings_brightness</span>
+              {{ t('settings.themeSystem') }}
+            </button>
+          </div>
+        </div>
 
         <div class="setting-row">
           <span class="setting-row-label">{{ t('settings.language') }}</span>
@@ -66,7 +96,7 @@
 
       <!-- Editor section -->
       <div class="settings-section">
-        <div class="settings-section-label">{{ t('settings.editorSection') }}</div>
+        <h3>{{ t('settings.editorSection') }}</h3>
 
         <div class="setting-row">
           <span class="setting-row-label">{{ t('settings.editorWysiwygFontSize') }}</span>
@@ -131,7 +161,7 @@
 
       <!-- Custom CSS -->
       <div class="settings-section">
-        <div class="settings-section-label">{{ t('settings.customCss') }}</div>
+        <h3>{{ t('settings.customCss') }}</h3>
         <textarea
           class="input custom-css-input"
           v-model="local.customCss"
@@ -140,8 +170,7 @@
           @input="onCustomCssInput"
         ></textarea>
         <button class="btn btn-sm btn-outline css-apply-btn" @click="applyCustomCssNow">
-          <span class="material-icons-outlined">play_arrow</span>
-          {{ t('settings.applyCss') }}
+          {{ t('editor.save') }}
         </button>
       </div>
 
@@ -160,6 +189,9 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useI18n } from '../i18n'
 const { t, locale, setLocale } = useI18n()
+
+import { useTheme } from '../composables/useTheme.js'
+const { theme, setTheme } = useTheme()
 
 const emit = defineEmits(['close'])
 
@@ -359,7 +391,7 @@ function resetToDefaults() {
 
 /* ---- Preview card (matches waterfall card style) ---- */
 .preview-card {
-  background: #FFFFFF;
+  background: var(--bg-card);
   border: 1px solid rgba(0, 0, 0, 0.04);
   border-radius: 14px;
   padding: 16px 18px;
@@ -409,14 +441,6 @@ function resetToDefaults() {
   border: none;
   border-top: 1px solid var(--border);
   margin: 20px 0;
-}
-
-/* ---- Section headers ---- */
-.settings-section-label {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--waterfall-title);
-  margin-bottom: 14px;
 }
 
 /* ---- Setting rows ---- */
@@ -501,4 +525,43 @@ function resetToDefaults() {
   background: var(--danger-light);
 }
 .reset-btn .material-icons-outlined { font-size: 16px; }
+
+/* ---- Theme segmented control ---- */
+.theme-toggle-group {
+  display: flex;
+  gap: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.theme-option-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  border-right: 1px solid var(--border);
+}
+
+.theme-option-btn:last-child { border-right: none; }
+
+.theme-option-btn .material-icons-outlined {
+  font-size: 14px;
+}
+
+.theme-option-btn.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.theme-option-btn:not(.active):hover {
+  background: var(--primary-bg);
+}
 </style>

@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'
 import { useI18n } from './i18n'
+import { initTheme } from './composables/useTheme.js'
 import 'material-icons/iconfont/outlined.css'
 import './style.css'
 
@@ -49,5 +50,8 @@ const customCssLink = document.querySelector('link[rel="stylesheet"][href="/cust
 ensureStyle('app-settings', customCssLink)
 ensureStyle('app-custom')
 document.body.dataset.build = (typeof window.go !== 'undefined') ? 'desktop' : 'server'
+
+// Apply persisted theme (FOUC prevention handled in index.html inline script)
+initTheme()
 
 app.mount('#app')

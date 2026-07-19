@@ -40,6 +40,11 @@
   },
   "settings": {
     "title": "Settings",
+    "appearance": "Appearance",
+    "theme": "Theme",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "themeSystem": "System",
     "language": "Language",
     "appFontSize": "App Font Size",
     "editorSection": "Editor",

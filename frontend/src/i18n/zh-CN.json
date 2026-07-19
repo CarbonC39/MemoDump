@@ -40,6 +40,11 @@
   },
   "settings": {
     "title": "设置",
+    "appearance": "界面",
+    "theme": "主题",
+    "themeLight": "白天",
+    "themeDark": "黑夜",
+    "themeSystem": "系统",
     "language": "语言",
     "appFontSize": "应用字体大小",
     "editorSection": "编辑器",
