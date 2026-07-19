@@ -232,7 +232,7 @@
         <SettingsPanel v-show="showSettings" @close="showSettings = false" />
 
         <!-- Normal content: hidden when settings is open -->
-        <div v-show="!showSettings">
+        <div v-show="!showSettings" class="content-inner">
           <!-- Search results (right-side panel) -->
           <div v-if="searchOpen" class="search-results-view">
           <div class="search-inputs-wrap">
@@ -1544,6 +1544,8 @@ provide('dnd', dnd)
 }
 .content-area.is-editing {
   background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
 }
 
 .editor-wrap {
@@ -1554,6 +1556,12 @@ provide('dnd', dnd)
   min-height: 100%;
   display: flex;
   flex-direction: column;
+}
+
+/* Editing mode: only change height so raw textarea fills viewport.
+   Do NOT change the waterfall/search layout — those remain block. */
+.content-area.is-editing .content-inner {
+  height: 100%;
 }
 .raw-editor {
   flex: 1;
