@@ -8,6 +8,9 @@
       <div class="sidebar-header">
         <img src="/favicon.ico" width="22" height="22" alt="Logo" style="border-radius: 4px; margin-right: 8px;" />
         <span class="brand">{{ t('login.brand') }}</span>
+          <button class="btn btn-icon btn-ghost theme-toggle-sidebar" @click="toggleTheme" :title="themeIcon === 'light_mode' ? 'Switch to light' : 'Switch to dark'">
+            <span class="material-icons-outlined">{{ themeIcon }}</span>
+          </button>
       </div>
 
       <div class="sidebar-scroll">
@@ -120,7 +123,7 @@
 
         <!-- Settings header (replaces normal header when open) -->
         <template v-if="showSettings">
-          <span class="section-title header-settings-title">{{ t('settings.title') }}</span>
+          <h2 style="flex:1; margin:0">{{ t('settings.title') }}</h2>
           <div class="header-right">
             <button class="btn btn-icon btn-ghost" @click="showSettings = false">
               <span class="material-icons-outlined">close</span>
@@ -168,7 +171,7 @@
 
           <!-- Search mode: title in header -->
           <div v-else-if="searchOpen" class="header-left">
-            <span class="section-title">{{ t('search.searchNotes') }}</span>
+            <h2 style="margin:0">{{ t('search.searchNotes') }}</h2>
           </div>
 
           <!-- Not editing, not search: static breadcrumb -->
@@ -189,11 +192,15 @@
             <button class="btn btn-sm btn-icon btn-ghost" @click="toggleEditorMode" :title="editorMode === 'wysiwyg' ? t('editor.switchToRaw') : t('editor.switchToRich')">
               <span class="material-icons-outlined" style="font-size:16px">{{ editorMode === 'wysiwyg' ? 'code' : 'visibility' }}</span>
             </button>
-            <button class="save-btn" @click="saveNote">{{ t('editor.save') }}</button>
-            <span class="save-status" :class="saveStatus" :title="statusTitle">
-              <span v-if="saveStatus !== 'synced'" class="material-icons-outlined">{{ statusIcon }}</span>
-              <span v-if="saveStatus === 'offline'" class="save-status-label">{{ t('status.offline') }}</span>
-            </span>
+            <button
+              class="save-btn"
+              :class="saveBtnClass"
+              @click="saveNote"
+              :title="saveBtnTitle"
+            >
+              <span v-if="saveStatus === 'error' || saveStatus === 'offline'" class="material-icons-outlined save-btn-icon">cloud_off</span>
+              {{ t('editor.save') }}
+            </button>
             <button class="btn btn-sm btn-icon btn-danger-subtle" v-if="editingNote.path" @click="deleteCurrentNote" :title="t('editor.deleteNote')">
               <span class="material-icons-outlined" style="font-size:16px">delete_outline</span>
             </button>
@@ -357,7 +364,7 @@
     <div v-if="folderPicker.visible" class="modal-overlay" @click.self="closeFolderPicker">
       <div class="folder-picker-modal">
         <div class="folder-picker-head">
-          <h3 class="section-title">{{ t('modals.moveToFolder') }}</h3>
+          <h2 style="margin:0">{{ t('modals.moveToFolder') }}</h2>
           <button class="btn-new-folder" @click="startCreateFolderInPicker" :title="t('modals.newFolder')">
             <span class="material-icons-outlined">create_new_folder</span>
             {{ t('modals.newFolder') }}
@@ -417,7 +424,7 @@
     <!-- Prompt Modal -->
     <div v-if="promptVisible" class="modal-overlay" @click.self="cancelPrompt">
       <div class="prompt-modal">
-        <h3 class="section-title">{{ promptTitle }}</h3>
+        <h2 style="margin:0 0 16px 0">{{ promptTitle }}</h2>
         <input v-model="promptValue" class="input" :placeholder="promptTitle" @keydown.enter="submitPrompt" ref="promptInputRef" />
         <div class="prompt-actions">
           <button class="btn btn-ghost" @click="cancelPrompt">{{ t('modals.cancel') }}</button>
@@ -429,7 +436,7 @@
     <!-- Confirm Modal -->
     <div v-if="confirmDialog.visible" class="modal-overlay" @click.self="cancelConfirm">
       <div class="prompt-modal">
-        <h3 class="section-title">{{ confirmDialog.title }}</h3>
+        <h2 style="margin:0 0 16px 0">{{ confirmDialog.title }}</h2>
         <p class="confirm-message" v-if="confirmDialog.message">{{ confirmDialog.message }}</p>
         <div class="prompt-actions">
           <button class="btn btn-ghost" @click="cancelConfirm">{{ t('modals.cancel') }}</button>
@@ -441,7 +448,7 @@
     <!-- Copy Dialog (iOS PWA fallback) -->
     <div v-if="copyDialog.visible" class="modal-overlay" @click.self="copyDialog.visible = false">
       <div class="prompt-modal">
-        <h3 class="section-title">{{ t('modals.copyText') }}</h3>
+        <h2 style="margin:0 0 16px 0">{{ t('modals.copyText') }}</h2>
         <p style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">{{ t('modals.copyInstruction') }}</p>
         <textarea
           ref="copyDialogTextarea"
@@ -483,10 +490,12 @@ import { useAutosave } from '../composables/useAutosave'
 import { useFileImport } from '../composables/useFileImport'
 import { useContextMenu } from '../composables/useContextMenu'
 import { outboxPut, outboxAll, buildEntry } from '../composables/outbox.js'
+import { useTheme } from '../composables/useTheme.js'
 
 const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
+const { themeIcon, setTheme, theme } = useTheme()
 
 const { isWailsApp, isLocalBuild, wailsDataDir, serverNoAuth, mobileSidebar, openSections, toggleSection, initWails, changeDataDir, doLogout } = useAppInit()
 
@@ -670,15 +679,16 @@ function openSearchPanel() {
 }
 
 const { showDraftRestoredBanner, saveStatus, saveError, replayAll } = useAutosave({
-  editingNote, isDirty, editContent, editName, editTags, editFolder, saveNote,
+  editingNote, isDirty, saveNote,
   reload: loadAll, ping: () => apiClient.ping(),
 })
 
-const statusIcon = computed(() => ({
-  synced: 'cloud_done', dirty: 'cloud_upload', offline: 'cloud_off', error: 'sync_problem',
-}[saveStatus.value] || 'cloud_done'))
+const saveBtnClass = computed(() => {
+  // Clean/synced: outlined. Dirty/error/offline: filled blue.
+  return (saveStatus.value === 'synced') ? 'save-btn-clean' : 'save-btn-dirty'
+})
 
-const statusTitle = computed(() => {
+const saveBtnTitle = computed(() => {
   switch (saveStatus.value) {
     case 'offline': return t('status.offlineTitle')
     case 'dirty': return t('status.dirtyTitle')
@@ -686,6 +696,13 @@ const statusTitle = computed(() => {
     default: return t('status.syncedTitle')
   }
 })
+
+function toggleTheme() {
+  // If currently dark (DOM has data-theme="dark"), switch to light.
+  // If currently light, switch to dark. Simple binary toggle.
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+  setTheme(isDark ? 'light' : 'dark')
+}
 
 function handleGlobalKeydown(e) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -1345,11 +1362,6 @@ provide('dnd', dnd)
   text-overflow: ellipsis;
 }
 
-/* Settings header title — flex to fill header space */
-.header-settings-title {
-  flex: 1;
-}
-
 /* Back button in editor header — always visible on desktop and mobile */
 .editor-back-btn {
   display: flex;
@@ -1383,32 +1395,35 @@ provide('dnd', dnd)
 .save-btn {
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   padding: 5px 14px;
-  border: 1.5px solid var(--primary);
   border-radius: 100px;
-  background: transparent;
-  color: var(--primary-dark);
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
   flex-shrink: 0;
 }
-.save-btn:hover { background: var(--primary-bg); }
 
-/* Calm static save-status indicator — no animation. */
-.save-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--text-muted);
-  font-size: 12px;
-  flex-shrink: 0;
+/* Clean / synced — outlined */
+.save-btn-clean {
+  border: 1.5px solid var(--primary);
+  background: transparent;
+  color: var(--primary-dark);
 }
-.save-status .material-icons-outlined { font-size: 16px; }
-.save-status.dirty { color: var(--primary); }
-.save-status.error { color: var(--danger); }
-.save-status-label { line-height: 1; }
+.save-btn-clean:hover { background: var(--primary-bg); }
+
+/* Dirty / error / offline — filled blue, prominent */
+.save-btn-dirty {
+  border: 1.5px solid var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+.save-btn-dirty:hover { background: var(--primary-dark); border-color: var(--primary-dark); }
+
+.save-btn-icon {
+  font-size: 14px;
+}
 
 /* ======= HEADER METADATA SCROLL ======= */
 .header-meta-scroll {
@@ -1528,14 +1543,14 @@ provide('dnd', dnd)
   background: var(--bg);
 }
 .content-area.is-editing {
-  background: #FFFFFF;
+  background: var(--bg-card);
 }
 
 .editor-wrap {
   max-width: 860px;
   margin: 0 auto;
   padding: 20px 60px;
-  background: #FFFFFF;
+  background: var(--bg-card);
   min-height: 100%;
   display: flex;
   flex-direction: column;
@@ -1597,7 +1612,7 @@ provide('dnd', dnd)
 }
 .waterfall-card {
   position: relative;
-  background: #FFFFFF;
+  background: var(--bg-card);
   border: 1px solid rgba(0, 0, 0, 0.04);
   border-radius: 14px;
   padding: 16px 18px;
@@ -1708,7 +1723,7 @@ provide('dnd', dnd)
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
-  background: #fff;
+  background: var(--bg-card);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-md);
   border-radius: 8px;
@@ -1985,7 +2000,7 @@ provide('dnd', dnd)
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--bg-card);
   border: 2px dashed var(--primary);
   border-radius: var(--radius-lg);
   padding: 48px 64px;

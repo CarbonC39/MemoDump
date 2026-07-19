@@ -75,12 +75,12 @@ async function doLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #EDF2FC 0%, #F8FAFD 100%);
+  background: var(--bg);
 }
 .login-card {
   width: 100%;
   max-width: 380px;
-  background: #fff;
+  background: var(--bg-card);
   border-radius: var(--radius-lg);
   padding: 40px 32px;
   box-shadow: var(--shadow-md);

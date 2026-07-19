@@ -1,15 +1,13 @@
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { outboxPut, outboxAll, outboxDelete, outboxCount, buildEntry } from './outbox.js'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { outboxCount } from './outbox.js'
 
-const AUTOSAVE_DELAY_MS = 5000
-const REPLAY_GAP_MS = 50
 const PING_INTERVAL_MS = 30000
 
-// Autosave with an offline-resilient outbox. Online edits are pushed to the
-// server debounced and silently. When a save can't reach the server the write
-// is queued in IndexedDB and replayed on reconnect. The UI shows a calm static
-// status icon instead of any alert/animation.
-export function useAutosave({ editingNote, isDirty, editContent, editName, editTags, editFolder, saveNote, reload, ping }) {
+// Manual-save-only mode: no debounced autosave, no visibility-change flush.
+// The outbox is the safety net — writes that fail (network down / server
+// unreachable) are queued in IndexedDB and replayed on reconnect via the
+// periodic ping timer. beforeunload warns if there are unsaved changes.
+export function useAutosave({ editingNote, isDirty, saveNote, reload, ping }) {
   const showDraftRestoredBanner = ref(false)
   const online = ref(typeof navigator === 'undefined' ? true : navigator.onLine)
   const saveError = ref(null)
@@ -21,66 +19,30 @@ export function useAutosave({ editingNote, isDirty, editContent, editName, editT
     return 'synced'
   })
 
-  let autosaveTimer = null
-  let autosaving = false
   let replaying = false
-
-  async function enqueueCurrent() {
-    try { await outboxPut(buildEntry({ editingNote, editContent, editName, editTags, editFolder })) } catch (_) {}
-  }
-
-  function scheduleAutosave() {
-    if (autosaveTimer) clearTimeout(autosaveTimer)
-    autosaveTimer = setTimeout(() => {
-      if (isDirty.value && editingNote.value && !autosaving) runAutosave()
-    }, AUTOSAVE_DELAY_MS)
-  }
-
-  async function runAutosave() {
-    autosaving = true
-    try {
-      // Offline or already have pending writes -> just update the queue, no network spam.
-      if (!online.value || outboxCount.value > 0) { await enqueueCurrent(); return }
-      await saveNote()
-    } finally {
-      autosaving = false
-    }
-  }
-
-  watch(isDirty, (dirty) => { if (dirty) { saveError.value = null; scheduleAutosave() } })
-
-  async function flushSaveOrFallback() {
-    if (!isDirty.value || !editingNote.value || autosaving) return
-    autosaving = true
-    try {
-      if (!online.value) { await enqueueCurrent(); return }
-      await saveNote({ silent: true })
-    } catch (e) {
-      if (!e.response) await enqueueCurrent()
-    } finally {
-      autosaving = false
-    }
-  }
 
   function delay(ms) { return new Promise(r => setTimeout(r, ms)) }
 
   async function replayAll() {
     if (replaying) return
     if (typeof navigator !== 'undefined' && !navigator.onLine) return
+
+    const { outboxAll, outboxDelete } = await import('./outbox.js')
     let entries
     try { entries = await outboxAll() } catch (_) { return }
     if (!entries.length) return
+
     replaying = true
     try {
       for (const entry of entries) {
         try {
           await saveNote({ replay: entry, skipReload: true })
         } catch (e) {
-          if (e?.response?.status === 401) return   // session expired — stop, login flow takes over
-          break                                    // still offline/unreachable — retry later
+          if (e?.response?.status === 401) return
+          break
         }
         try { await outboxDelete(entry.key) } catch (_) {}
-        await delay(REPLAY_GAP_MS)
+        await delay(50)
       }
       try { await reload() } catch (_) {}
       saveError.value = null
@@ -89,22 +51,21 @@ export function useAutosave({ editingNote, isDirty, editContent, editName, editT
     }
   }
 
-  function onWindowOnline() { online.value = true; replayAll() }
-  function onWindowOffline() { online.value = false }
-  let pingTimer = null
-
-  function handleVisibilityChange() { if (document.hidden) flushSaveOrFallback() }
-  function handlePageHide() { flushSaveOrFallback() }
+  // Browser close warning — pure client-side, no network request
   function handleBeforeUnload(e) {
     if (isDirty.value) { e.preventDefault(); e.returnValue = '' }
   }
 
+  // Online/offline tracking for saveStatus display
+  function onOnline() { online.value = true }
+  function onOffline() { online.value = false }
+
+  let pingTimer = null
+
   onMounted(() => {
     window.addEventListener('beforeunload', handleBeforeUnload)
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    window.addEventListener('pagehide', handlePageHide)
-    window.addEventListener('online', onWindowOnline)
-    window.addEventListener('offline', onWindowOffline)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
     pingTimer = setInterval(async () => {
       if (outboxCount.value > 0 && navigator.onLine) {
         try { await ping(); replayAll() } catch (_) {}
@@ -114,11 +75,8 @@ export function useAutosave({ editingNote, isDirty, editContent, editName, editT
 
   onBeforeUnmount(() => {
     window.removeEventListener('beforeunload', handleBeforeUnload)
-    document.removeEventListener('visibilitychange', handleVisibilityChange)
-    window.removeEventListener('pagehide', handlePageHide)
-    window.removeEventListener('online', onWindowOnline)
-    window.removeEventListener('offline', onWindowOffline)
-    if (autosaveTimer) clearTimeout(autosaveTimer)
+    window.removeEventListener('online', onOnline)
+    window.removeEventListener('offline', onOffline)
     if (pingTimer) clearInterval(pingTimer)
   })
 

@@ -39,9 +39,9 @@ defineEmits(['edit', 'copy', 'duplicate', 'download', 'move', 'delete', 'close']
 }
 .context-menu {
   position: fixed;
-  background: #fff;
+  background: var(--bg-card);
   border: 1px solid var(--border);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  box-shadow: var(--shadow-md);
   border-radius: 8px;
   padding: 4px 0;
   min-width: 170px;
