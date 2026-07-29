@@ -69,4 +69,40 @@ describe('useWorkspaceNavigation', () => {
 
     expect(router.replace).toHaveBeenCalledWith({ query: { note: 'folder/note.md' } })
   })
+
+  it('marks the editor ready before the background note list finishes', async () => {
+    let finishList
+    const listLoad = new Promise(resolve => { finishList = resolve })
+    const onReady = vi.fn()
+
+    const editor = useNoteEditor()
+    const instance = useWorkspaceNavigation({
+      router: { replace: vi.fn() },
+      route: { query: {} },
+      editor,
+      browser: {
+        currentFolder: ref(''),
+        displayNotes: ref([]),
+        allNotes: ref([]),
+        loadFolderPage: vi.fn(),
+      },
+      searchOpen: ref(false),
+      showSettings: ref(false),
+      mobileSidebar: ref(false),
+      openSections: reactive({ storage: false }),
+      openDocument: vi.fn(),
+      deleteCurrent: vi.fn(),
+      loadAll: vi.fn(() => listLoad),
+      readOutbox: vi.fn().mockResolvedValue([]),
+      replayAll: vi.fn(),
+      showDraftRestoredBanner: ref(false),
+      showConfirm: vi.fn(),
+      t: key => key,
+    })
+
+    const initialization = instance.initialize({ onReady })
+    await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce())
+    finishList()
+    await initialization
+  })
 })
