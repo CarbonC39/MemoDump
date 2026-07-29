@@ -576,3 +576,27 @@ Replace the aggregate `@milkdown/crepe` import with the public modular API:
 Compare the minified/gzip size of the generated Milkdown entry before and after.
 The main application entry must not absorb the editor dependencies, and tests
 plus the production build must pass before committing.
+
+## MainView extraction tranche: browse and search results
+
+This tranche removes note-result rendering from `MainView.vue` without moving
+request ownership yet:
+
+1. Extract the repeated waterfall columns and note-card markup into
+   `NoteWaterfall.vue`.
+2. Keep measurement and overflow behavior inside that presentation boundary,
+   using the existing provided card-layout service rather than passing DOM
+   directives through `MainView`.
+3. Extract `BrowseNotesView.vue` to own the browse empty state, load-more
+   affordance and presentation-only events.
+4. Extract `SearchNotesView.vue` to own search inputs, search empty states and
+   result rendering. Query/tag values remain controlled by the parent in this
+   tranche so request/debounce behavior does not change.
+5. Move only component-specific CSS. Shared card tokens and genuinely
+   page-level responsive layout may remain in `MainView` until their final
+   owner is clear.
+
+The extracted components must not call APIs, mutate note data, or own route
+state. Existing open, drag, context-menu, expand, load-more and search events
+must be forwarded explicitly. Tests and the production build must pass before
+the implementation commit.
