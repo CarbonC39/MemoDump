@@ -684,3 +684,32 @@ This tranche moves list/search business state into composables:
 The extraction must preserve the 50-item API defaults, current folder fallback,
 lazy folder expansion, stable note presentation fields, search debounce,
 sorting persistence and existing 401 handling.
+
+## MainView final business-logic cleanup
+
+Complete the orchestration split in three reviewable commits:
+
+1. `useNotePersistence`
+   - open/create/update/move/delete persistence;
+   - manual-save single-flight behavior;
+   - in-flight edit preservation;
+   - offline outbox enqueue/replay compatibility;
+   - server-error status.
+2. `useFolderActions`
+   - prompted create/rename/delete;
+   - current-folder identity migration;
+   - root/tree refresh and error presentation.
+3. `useWorkspaceNavigation`
+   - dirty navigation guard;
+   - all/search/folder/editor transitions;
+   - previous-view behavior;
+   - URL encoding/restoration and startup draft restoration.
+
+`MainView` should finish as composition and event wiring: instantiate services,
+connect component events, install page-level keyboard handling, and render the
+two small page feedback overlays. It must not call note/folder CRUD endpoints,
+interpret persistence responses, manipulate outbox entries, or implement route
+restoration.
+
+Add tests around save single-flight, edits made during save, offline enqueue,
+folder rename ancestry, dirty navigation cancellation and URL restoration.
