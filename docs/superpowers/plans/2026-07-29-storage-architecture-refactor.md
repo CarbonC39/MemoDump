@@ -2,7 +2,7 @@
 
 Date: 2026-07-29  
 Branch: `refactor/storage-architecture`  
-Status: reviewed in part — implementation must not begin until the remaining API-version decision is resolved
+Status: reviewed — implementation may begin in the documented phases
 
 ## Goals
 
@@ -125,50 +125,40 @@ Today `path` is not merely a location. It simultaneously acts as:
 
 Folder paths additionally encode ancestry and are used for prefix-based move/delete checks. Renaming or moving therefore changes identity everywhere.
 
-### UUID decision and migration risk
+### Identity decision: opaque path IDs
 
-Introduce stable UUIDs for notes in this refactor, while retaining `path` as an explicit mutable location:
+This version does not introduce persistent UUIDs. MemoDump keeps the vault as a clean, ordinary folder tree containing ordinary Markdown files:
+
+- no UUID in Markdown front matter;
+- no hidden identity index inside the vault;
+- no external UUID database required to interpret a vault;
+- copying the folder remains sufficient to copy the notes.
+
+The domain still uses an opaque `id` boundary:
 
 ```ts
-interface NoteIdentity {
-  id: string       // stable UUID
-  path: string     // mutable normalized storage location
-  parentId: string
-  name: string
-}
+type NoteId = string
 ```
 
-Risks that must be handled deliberately:
+For this version, `id` is the normalized relative path. UI code must not parse, concatenate, or derive parent/name data from it. Repository implementations own path semantics and return the new ID after a rename or move.
 
-1. **Existing files contain no UUID.** A migration must assign IDs without making notes disappear or duplicate on the next scan.
-2. **External file operations bypass the app.** If a user renames/moves a Markdown file in Finder/Explorer, the app must reconcile it with the existing UUID rather than treating it as delete + create.
-3. **Metadata placement affects portability.** UUID in Markdown front matter is portable but modifies user files; UUID in an application index keeps Markdown clean but needs backup and reconciliation.
-4. **Deep links and queued writes currently contain paths.** Migration must accept legacy path links/outbox entries and resolve them to UUIDs.
-5. **Both backends need atomic migration.** IndexedDB requires a schema-version upgrade; filesystem mode needs a crash-safe index migration.
-6. **Copy semantics must be explicit.** Duplicate creates a new UUID; rename/move retains it; importing the same external file twice must not accidentally alias identities.
-7. **Cloned vaults matter later.** Copying a vault should preserve note UUIDs, while creating a new note from another note should not.
+Consequences:
 
-Recommended metadata strategy for this version:
-
-- add an application-owned, crash-safe local metadata index under the MemoDump data directory;
-- keep UUIDs out of Markdown front matter for now;
-- store `id ↔ path`, a content hash, and minimal reconciliation data;
-- rebuild/reconcile the index when files are changed externally;
-- keep legacy path lookup as a temporary compatibility route;
-- treat folders as path-addressed in the first migration, while keeping folder identity behind a domain type.
-
-This keeps Markdown files clean, but makes the metadata index part of a complete MemoDump backup. An individually exported Markdown file remains portable and receives a new UUID when imported elsewhere.
+- rename/move changes the note ID;
+- caches, selection, URL state and outbox entries must migrate from old ID to new ID explicitly;
+- a future first-generation cloud sync may represent rename/move as delete-old + create-new;
+- stable cross-device rename detection is deliberately deferred;
+- UUIDs can be reconsidered only if future requirements such as stable sharing, note-to-note references, or multi-device rename identity justify metadata.
 
 ### Canonical domain types
 
 Define the contract once in `docs/api-contract.md` and encode it as fixtures/tests:
 
 ```ts
-type NoteId = string // stable UUID
+type NoteId = string // opaque normalized relative path in this version
 
 interface NoteSummary {
   id: NoteId
-  path: string
   name: string
   parentId: string
   tags: string[]
@@ -195,7 +185,7 @@ interface ApiError {
 }
 ```
 
-The UI uses `id` for identity, cache keys, selection, outbox coalescing and routes. Only repository/storage code interprets `path`. Rename and move update `path` while retaining `id`.
+The UI uses `id` for identity, cache keys, selection, outbox coalescing and routes. Only repository/storage code interprets it as a path. Rename and move return a new ID and an explicit old-to-new identity transition.
 
 ### Required semantic decisions
 
@@ -411,7 +401,7 @@ This version does not add remote-sync behavior, provider metadata, conflict reso
 The only preparation is:
 
 - HTTP handlers depend on a local `NoteRepository`, not directly on `os.*`;
-- note identity is stable across rename/move;
+- rename/move identity transitions are returned explicitly;
 - successful mutations can later emit an application event without changing handler semantics;
 - repository methods accept `context.Context`;
 - provider-specific concepts such as ETag, cursor and OAuth token do not leak into note domain types.
@@ -503,7 +493,7 @@ Content hashes should be calculated from canonical stored bytes. Provider clocks
 
 - Extract Go filesystem repository and application service.
 - Remove direct handler dependency on globals and `os.*`.
-- Add stable UUID/path metadata and a future mutation-event seam.
+- Keep opaque path IDs and add a future mutation-event seam.
 - Do not add remote implementations, sync metadata, provider configuration, credentials, or background workers.
 
 ## Commit strategy
@@ -533,11 +523,9 @@ Tests and build must pass at every commit. Avoid mixing API contract changes wit
 
 ## Recorded decisions
 
-1. Introduce stable note UUIDs in this refactor, subject to the migration/reconciliation controls above.
+1. Do not introduce persistent UUIDs; preserve the pure Markdown folder structure and use opaque path IDs.
 2. Use 50 notes as the default page size.
 3. Milkdown loading has no failure timeout and never automatically switches to Raw mode.
 4. This version prepares only the minimum local repository/event seam for a future remote-sync major version.
 
-## Remaining review decision
-
-Add `/api/v2`, or evolve the current endpoints with compatibility parameters? The recommendation remains `/api/v2` because UUID identity and paginated response envelopes materially change route and response semantics.
+5. Add `/api/v2` for paginated response envelopes and the opaque-ID contract, while retaining current endpoints during migration.
