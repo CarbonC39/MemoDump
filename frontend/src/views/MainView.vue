@@ -196,6 +196,7 @@
               class="save-btn"
               :class="saveBtnClass"
               @click="saveNote"
+              :disabled="isSaving"
               :title="saveBtnTitle"
             >
               <span v-if="saveStatus === 'error' || saveStatus === 'offline'" class="material-icons-outlined save-btn-icon">cloud_off</span>
@@ -538,6 +539,7 @@ const tagInput = ref('')
 const editorKey = ref(0)
 // Dirty state: tracks whether the editor has unsaved changes
 const isDirty = ref(false)
+const isSaving = ref(false)
 
 const editorMode = ref('wysiwyg') // 'wysiwyg' | 'raw'
 
@@ -902,13 +904,18 @@ function addTag() {
   tagInput.value = ''
 }
 
-async function saveNote({ silent = false, skipReload = false, replay = null } = {}) {
+async function saveNote({ silent = false, replay = null } = {}) {
   const fromReplay = !!replay
+  // Manual saves are single-flight. This prevents a double click (or repeated
+  // Ctrl/Cmd+S) from creating the same new note more than once.
+  if (!fromReplay && isSaving.value) return
+
   const content = fromReplay ? replay.content : editContent.value
   const tags = fromReplay ? replay.tags : [...(editTags.value || [])]
   const name = fromReplay ? replay.name : editName.value
   const folder = fromReplay ? replay.folder : editFolder.value
   const path = fromReplay ? replay.path : editingNote.value?.path
+  if (!fromReplay) isSaving.value = true
   try {
     let resultNode
     if (path) {
@@ -929,13 +936,25 @@ async function saveNote({ silent = false, skipReload = false, replay = null } = 
       let res = await apiClient.createNote({ content, name: name || '', folder, tags })
       resultNode = res.data
     }
-    if (!skipReload) await loadAll()
     if (!fromReplay) {
+      const normalizedName = isTimestampName(resultNode.name) ? '' : (resultNode.name || '')
+      const resultParts = resultNode.path.split('/')
+      const normalizedFolder = resultParts.length > 1 ? resultParts.slice(0, -1).join('/') : ''
+      const unchanged =
+        editContent.value === content &&
+        editName.value === name &&
+        editFolder.value === folder &&
+        JSON.stringify(editTags.value || []) === JSON.stringify(tags)
+
       editingNote.value.path = resultNode.path
-      editName.value = isTimestampName(resultNode.name) ? '' : (resultNode.name || '')
-      const parts = resultNode.path.split('/')
-      editFolder.value = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
-      isDirty.value = false
+      editingNote.value.name = resultNode.name
+      editingNote.value.tags = [...tags]
+      editingNote.value.content = content
+      // Preserve fields changed while the request was in flight. Only normalize
+      // the server-returned title/folder when the user has not edited them again.
+      if (editName.value === name) editName.value = normalizedName
+      if (editFolder.value === folder) editFolder.value = normalizedFolder
+      isDirty.value = !unchanged
       saveError.value = null
       updateUrl()
     } else if (editingNote.value && (
@@ -944,16 +963,26 @@ async function saveNote({ silent = false, skipReload = false, replay = null } = 
     )) {
       // The replayed entry IS the note currently open in the editor — adopt the
       // server path so the next save updates rather than creating a duplicate,
-      // and mark it clean. (Matches a create by clientId, an update by path.)
+      // but only mark it clean if no newer local edits exist.
       editingNote.value.path = resultNode.path
-      editName.value = isTimestampName(resultNode.name) ? '' : (resultNode.name || '')
-      const parts = resultNode.path.split('/')
-      editFolder.value = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
-      isDirty.value = false
+      editingNote.value.name = resultNode.name
+      const replayStillCurrent =
+        editContent.value === content &&
+        editName.value === name &&
+        editFolder.value === folder &&
+        JSON.stringify(editTags.value || []) === JSON.stringify(tags)
+      if (replayStillCurrent) {
+        editName.value = isTimestampName(resultNode.name) ? '' : (resultNode.name || '')
+        const parts = resultNode.path.split('/')
+        editFolder.value = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+        isDirty.value = false
+      }
     }
     return resultNode
   } catch (e) {
     if (e?.response?.status === 401) {
+      // replayAll must retain the queued write until authentication succeeds.
+      if (fromReplay) throw e
       if (!fromReplay) {
         try { await outboxPut(buildEntry({ editingNote, editContent, editName, editTags, editFolder })) } catch (_) {}
       }
@@ -967,6 +996,8 @@ async function saveNote({ silent = false, skipReload = false, replay = null } = 
     } else {
       saveError.value = e.response?.data?.error || e.message
     }
+  } finally {
+    if (!fromReplay) isSaving.value = false
   }
 }
 
@@ -1403,6 +1434,10 @@ provide('dnd', dnd)
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
   flex-shrink: 0;
+}
+.save-btn:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 /* Clean / synced — outlined */

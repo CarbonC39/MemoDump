@@ -67,6 +67,18 @@ describe('note CRUD', () => {
     expect((await localApi.getNote('fresh.md')).data.content).toBe('body')
   })
 
+  it('refuses to overwrite an existing note during rename', async () => {
+    await localApi.createNote({ name: 'source', content: 'source body' })
+    await localApi.createNote({ name: 'target', content: 'target body' })
+    await expect(localApi.updateNote('source.md', {
+      content: 'changed',
+      tags: [],
+      rename: 'target',
+    })).rejects.toMatchObject({ response: { status: 409 } })
+    expect((await localApi.getNote('source.md')).data.content).toBe('source body')
+    expect((await localApi.getNote('target.md')).data.content).toBe('target body')
+  })
+
   it('deletes a note', async () => {
     await localApi.createNote({ name: 'gone', content: 'x' })
     await localApi.deleteNote('gone.md')
@@ -304,5 +316,9 @@ describe('parseFrontMatter', () => {
   })
   it('returns whole content when no front matter', () => {
     expect(parseFrontMatter('# just text')).toEqual({ tags: [], body: '# just text' })
+  })
+  it('preserves commas and quotes inside JSON-encoded tags', () => {
+    expect(parseFrontMatter('---\ntags: ["one,two", "say \\"hi\\""]\n---\nbody'))
+      .toEqual({ tags: ['one,two', 'say "hi"'], body: 'body' })
   })
 })

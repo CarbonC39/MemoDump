@@ -119,9 +119,19 @@ export function parseFrontMatter(content) {
   const tags = []
   const tm = TAG_RE.exec(m[1])
   if (tm) {
-    for (const raw of tm[1].split(',')) {
-      const t = raw.trim()
-      if (t) tags.push(t)
+    const arrayText = `[${tm[1]}]`
+    try {
+      const parsed = JSON.parse(arrayText)
+      for (const tag of parsed) {
+        const value = String(tag).trim()
+        if (value) tags.push(value)
+      }
+    } catch (_) {
+      // Backward compatibility with older, unquoted `tags: [a, b]` files.
+      for (const raw of tm[1].split(',')) {
+        const value = raw.trim().replace(/^['"]|['"]$/g, '')
+        if (value) tags.push(value)
+      }
     }
   }
   return { tags, body }
@@ -232,13 +242,16 @@ const localApi = {
 
     let targetPath = path
     if (data.rename != null) {
-      let newName = (data.rename || '').trim() || timestampName()
+      let newName = sanitizeName((data.rename || '').trim()) || timestampName()
       if (!newName.endsWith('.md')) newName += '.md'
       const dir = dirname(path)
       targetPath = dir ? dir + '/' + newName : newName
     }
 
     if (targetPath !== path) {
+      if (await getNoteRec(targetPath)) {
+        return apiError(409, 'A note with that name already exists')
+      }
       const moved = { ...rec, path: targetPath }
       await write((notes) => {
         notes.delete(path)

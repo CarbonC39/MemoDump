@@ -125,15 +125,17 @@ func parseFrontMatter(content string) (tags []string, body string) {
 		}
 
 		val := strings.TrimSpace(line[5:])
-		val = strings.TrimPrefix(val, "[")
-		val = strings.TrimSuffix(val, "]")
-
-		for tag := range strings.SplitSeq(val, ",") {
-			// Strip a surrounding quote pair written by buildFrontMatter; older
-			// files with unquoted tags are unaffected.
-			tag = strings.Trim(strings.TrimSpace(tag), `"'`)
-			if tag != "" {
-				tags = append(tags, tag)
+		// buildFrontMatter writes a JSON-compatible array. Decode that first so
+		// commas, quotes and backslashes inside tags round-trip correctly.
+		if err := json.Unmarshal([]byte(val), &tags); err != nil {
+			// Backward compatibility with older unquoted `tags: [a, b]` files.
+			val = strings.TrimPrefix(val, "[")
+			val = strings.TrimSuffix(val, "]")
+			for tag := range strings.SplitSeq(val, ",") {
+				tag = strings.Trim(strings.TrimSpace(tag), `"'`)
+				if tag != "" {
+					tags = append(tags, tag)
+				}
 			}
 		}
 		break
@@ -415,7 +417,7 @@ func handleUpdateNote(w http.ResponseWriter, r *http.Request) {
 	// Determine target path upfront (rename if requested)
 	targetPath := fullPath
 	if req.Rename != nil {
-		newName := *req.Rename
+		newName := sanitizeUploadName(*req.Rename)
 		if newName == "" {
 			newName = time.Now().Format("2006-01-02_150405")
 		}
@@ -429,12 +431,40 @@ func handleUpdateNote(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		targetPath = newPath
+		if targetPath != fullPath {
+			if _, err := os.Stat(targetPath); err == nil {
+				http.Error(w, `{"error":"A note with that name already exists"}`, http.StatusConflict)
+				return
+			} else if !os.IsNotExist(err) {
+				http.Error(w, `{"error":"Failed to check target note"}`, http.StatusInternalServerError)
+				return
+			}
+		}
 	}
 
-	// Atomic write: write to .tmp then rename to target, eliminating the
-	// race where content is overwritten but the subsequent rename fails.
-	tmpPath := targetPath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(finalContent), 0644); err != nil {
+	// Use a unique temporary file so concurrent saves never share target+".tmp".
+	tmpFile, err := os.CreateTemp(filepath.Dir(targetPath), ".memodump-*.tmp")
+	if err != nil {
+		http.Error(w, `{"error":"Failed to save note"}`, http.StatusInternalServerError)
+		return
+	}
+	tmpPath := tmpFile.Name()
+	cleanupTmp := func() {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+	}
+	if err := tmpFile.Chmod(0644); err != nil {
+		cleanupTmp()
+		http.Error(w, `{"error":"Failed to save note"}`, http.StatusInternalServerError)
+		return
+	}
+	if _, err := tmpFile.Write([]byte(finalContent)); err != nil {
+		cleanupTmp()
+		http.Error(w, `{"error":"Failed to save note"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
 		http.Error(w, `{"error":"Failed to save note"}`, http.StatusInternalServerError)
 		return
 	}

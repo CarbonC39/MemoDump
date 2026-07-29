@@ -36,7 +36,7 @@ export function useAutosave({ editingNote, isDirty, saveNote, reload, ping }) {
     try {
       for (const entry of entries) {
         try {
-          await saveNote({ replay: entry, skipReload: true })
+          await saveNote({ replay: entry })
         } catch (e) {
           if (e?.response?.status === 401) return
           break
