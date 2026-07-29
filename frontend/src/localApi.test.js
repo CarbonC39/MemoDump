@@ -139,6 +139,29 @@ describe('listNotes scoping & sort', () => {
   })
 })
 
+describe('v2 lazy listings', () => {
+  it('paginates direct notes with opaque cursors', async () => {
+    await localApi.createNote({ name: 'one', folder: 'a', content: '1' })
+    await localApi.createNote({ name: 'two', folder: 'a', content: '2' })
+    await localApi.createNote({ name: 'deep', folder: 'a/deep', content: '3' })
+    const first = (await localApi.listNotesV2('a', { limit: 1 })).data
+    expect(first.items).toHaveLength(1)
+    expect(first.nextCursor).toBeTruthy()
+    const second = (await localApi.listNotesV2('a', { limit: 1, cursor: first.nextCursor })).data
+    expect(second.items).toHaveLength(1)
+    expect(second.items[0].id).not.toBe(first.items[0].id)
+    expect([...first.items, ...second.items].some(n => n.id.includes('/deep/'))).toBe(false)
+  })
+
+  it('lists direct child folders only', async () => {
+    await localApi.createFolder('a/deep')
+    await localApi.createFolder('a/other/nested')
+    const page = (await localApi.listFoldersV2('a')).data
+    expect(page.items.map(f => f.id)).toEqual(['a/deep', 'a/other'])
+    expect(page.items.find(f => f.id === 'a/other').hasChildren).toBe(true)
+  })
+})
+
 describe('moveNote', () => {
   it('moves a note into a folder', async () => {
     await localApi.createNote({ name: 'm', content: 'x' })

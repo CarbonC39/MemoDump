@@ -58,6 +58,14 @@ const remoteApi = {
     listFolders() {
         return api.get('/folders')
     },
+    listNotesV2(parent = '', { cursor = '', limit = 50 } = {}) {
+        const params = { parent, limit }
+        if (cursor) params.cursor = cursor
+        return api.get('/v2/notes', { params })
+    },
+    listFoldersV2(parent = '') {
+        return api.get('/v2/folders', { params: { parent } })
+    },
     createFolder(path) {
         return api.post('/folders', { path })
     },

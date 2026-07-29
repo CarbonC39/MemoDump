@@ -108,3 +108,57 @@ func TestUpdateNoteRenameDoesNotOverwrite(t *testing.T) {
 		t.Fatalf("source content = %q, want source", source)
 	}
 }
+
+func TestV2ListingsAreDirectAndPaginated(t *testing.T) {
+	oldDataDir := dataDir
+	dataDir = t.TempDir()
+	t.Cleanup(func() { dataDir = oldDataDir })
+
+	for _, dir := range []string{"a", "a/deep", "b"} {
+		if err := os.MkdirAll(filepath.Join(dataDir, dir), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{"a/one.md", "a/two.md", "a/deep/hidden.md"} {
+		if err := os.WriteFile(filepath.Join(dataDir, path), []byte(path), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	folderReq := httptest.NewRequest(http.MethodGet, "/api/v2/folders?parent=a", nil)
+	folderRec := httptest.NewRecorder()
+	handleV2ListFolders(folderRec, folderReq)
+	if folderRec.Code != http.StatusOK {
+		t.Fatalf("folder status = %d; body=%s", folderRec.Code, folderRec.Body.String())
+	}
+	var folders folderPageV2
+	if err := json.Unmarshal(folderRec.Body.Bytes(), &folders); err != nil {
+		t.Fatal(err)
+	}
+	if len(folders.Items) != 1 || folders.Items[0].ID != "a/deep" {
+		t.Fatalf("folders = %#v", folders.Items)
+	}
+
+	firstReq := httptest.NewRequest(http.MethodGet, "/api/v2/notes?parent=a&limit=1", nil)
+	firstRec := httptest.NewRecorder()
+	handleV2ListNotes(firstRec, firstReq)
+	var first notePageV2
+	if err := json.Unmarshal(firstRec.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 1 || first.NextCursor == nil {
+		t.Fatalf("first page = %#v", first)
+	}
+
+	secondReq := httptest.NewRequest(http.MethodGet,
+		"/api/v2/notes?parent=a&limit=1&cursor="+*first.NextCursor, nil)
+	secondRec := httptest.NewRecorder()
+	handleV2ListNotes(secondRec, secondReq)
+	var second notePageV2
+	if err := json.Unmarshal(secondRec.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 1 || second.Items[0].ID == first.Items[0].ID {
+		t.Fatalf("second page = %#v, first = %#v", second, first)
+	}
+}

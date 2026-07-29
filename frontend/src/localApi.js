@@ -108,6 +108,20 @@ function timestampName(d = new Date()) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
 }
 
+function encodeCursor(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value))
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+}
+
+function decodeCursor(value) {
+  const padded = value.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - value.length % 4) % 4)
+  const binary = atob(padded)
+  const bytes = Uint8Array.from(binary, ch => ch.charCodeAt(0))
+  return JSON.parse(new TextDecoder().decode(bytes))
+}
+
 // ---- front matter (mirrors api.go parseFrontMatter / buildFrontMatter) ----
 const FM_RE = /^---\n([\s\S]*?)\n---\n?/
 const TAG_RE = /^tags:\s*\[([^\]]*)\]/m
@@ -342,6 +356,50 @@ const localApi = {
     roots.sort((a, b) => a.name.localeCompare(b.name))
     roots.forEach(sortNode)
     return { data: roots }
+  },
+
+  async listNotesV2(parent = '', { cursor = '', limit = 50 } = {}) {
+    const notes = (await this.listNotes(parent)).data.map(n => ({
+      id: n.path,
+      name: n.name,
+      parentId: parent,
+      tags: n.tags || [],
+      modifiedAt: n.modTime || 0,
+      preview: n.preview || '',
+    }))
+    let start = 0
+    if (cursor) {
+      const decoded = decodeCursor(cursor)
+      start = notes.findIndex(n =>
+        n.modifiedAt < decoded.modifiedAt ||
+        (n.modifiedAt === decoded.modifiedAt && n.id > decoded.id))
+      if (start < 0) start = notes.length
+    }
+    const size = Math.min(200, Math.max(1, Number(limit) || 50))
+    const items = notes.slice(start, start + size)
+    const last = items.at(-1)
+    const next = start + size < notes.length && last
+      ? encodeCursor({ modifiedAt: last.modifiedAt, id: last.id })
+      : null
+    return { data: { items, nextCursor: next } }
+  },
+
+  async listFoldersV2(parent = '') {
+    const folders = await allOf('folders')
+    const notes = await allOf('notes')
+    const ids = new Set()
+    for (const folder of folders) for (const ancestor of ancestors(folder.path)) ids.add(ancestor)
+    for (const note of notes) for (const ancestor of ancestors(dirname(note.path))) ids.add(ancestor)
+    const items = [...ids]
+      .filter(id => dirname(id) === parent)
+      .sort((a, b) => basename(a).localeCompare(basename(b)))
+      .map(id => ({
+        id,
+        name: basename(id),
+        parentId: parent,
+        hasChildren: [...ids].some(candidate => dirname(candidate) === id),
+      }))
+    return { data: { items } }
   },
 
   async createFolder(path) {
