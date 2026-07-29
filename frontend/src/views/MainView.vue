@@ -116,118 +116,39 @@
       @dragover="onMainDragOver"
       @drop="onMainDrop"
     >
-      <!-- Header -->
-      <header class="main-header">
-        <button class="btn btn-icon btn-ghost menu-toggle" @click="mobileSidebar = !mobileSidebar">
-          <span class="material-icons-outlined">menu</span>
-        </button>
-
-        <!-- Settings header (replaces normal header when open) -->
-        <template v-if="showSettings">
-          <h2 style="flex:1; margin:0">{{ t('settings.title') }}</h2>
-          <div class="header-right">
-            <button class="btn btn-icon btn-ghost" @click="showSettings = false">
-              <span class="material-icons-outlined">close</span>
-            </button>
-          </div>
-        </template>
-
-        <!-- Normal header (hidden when settings open) -->
-        <template v-if="!showSettings">
-          <!-- Back button: always visible when editing (desktop + PWA).
-               With no previous view to return to, it becomes a Home button → All Notes. -->
-          <button v-if="editingNote" class="btn btn-icon btn-ghost editor-back-btn" @click="goBack" :title="hasPrevPage ? t('editor.back') : t('editor.allNotes')">
-            <span class="material-icons-outlined">{{ hasPrevPage ? 'arrow_back' : 'home' }}</span>
-          </button>
-
-          <!-- Editing: horizontally scrollable metadata (title · folder · tags) -->
-          <div v-if="editingNote" class="header-meta-scroll">
-            <input
-              ref="titleInputRef"
-              class="header-title-input"
-              v-model="editName"
-              :style="{ width: titleInputWidth + 'px' }"
-              :placeholder="t('editor.untitled')"
-              @input="isDirty = true"
-            />
-            <span ref="titleMirrorRef" class="header-title-mirror" aria-hidden="true">{{ editName || t('editor.untitled') }}</span>
-            <span class="header-meta-sep">·</span>
-            <button class="note-folder-btn" @click="pickEditFolder">
-              <span class="material-icons-outlined">{{ editFolder ? 'folder' : 'home' }}</span>
-              <span class="note-folder-label">{{ editFolder || t('notes.root') }}</span>
-            </button>
-            <span class="header-meta-sep">·</span>
-            <div class="note-tags-inline">
-              <span class="tag" v-for="(t, i) in editTags" :key="i">
-                {{ t }}<span class="remove" @click="editTags.splice(i, 1); isDirty = true">×</span>
-              </span>
-              <input
-                class="tag-inline-input"
-                v-model="tagInput"
-                :placeholder="t('notes.tagPlaceholder')"
-                @keydown.enter.prevent="addTag"
-              />
-            </div>
-          </div>
-
-          <!-- Search mode: title in header -->
-          <div v-else-if="searchOpen" class="header-left">
-            <h2 style="margin:0">{{ t('search.searchNotes') }}</h2>
-          </div>
-
-          <!-- Not editing, not search: static breadcrumb -->
-          <div v-else class="header-left">
-            <span v-if="currentFolder" class="header-folder-display">
-              <span class="material-icons-outlined" style="font-size:16px;opacity:0.6">folder_open</span>
-              {{ currentFolder }}
-            </span>
-          </div>
-
-          <!-- Header-right: depends on current mode -->
-          <div class="header-right" v-if="searchOpen">
-            <button class="btn btn-icon btn-ghost" @click="searchOpen = false">
-              <span class="material-icons-outlined">close</span>
-            </button>
-          </div>
-          <div class="header-right" v-else-if="editingNote">
-            <button class="btn btn-sm btn-icon btn-ghost" @click="toggleEditorMode" :title="editorMode === 'wysiwyg' ? t('editor.switchToRaw') : t('editor.switchToRich')">
-              <span class="material-icons-outlined" style="font-size:16px">{{ editorMode === 'wysiwyg' ? 'code' : 'visibility' }}</span>
-            </button>
-            <button
-              class="save-btn"
-              :class="saveBtnClass"
-              @click="saveNote"
-              :disabled="isSaving"
-              :title="saveBtnTitle"
-            >
-              <span v-if="saveStatus === 'error' || saveStatus === 'offline'" class="material-icons-outlined save-btn-icon">cloud_off</span>
-              {{ t('editor.save') }}
-            </button>
-            <button class="btn btn-sm btn-icon btn-danger-subtle" v-if="editingNote.path" @click="deleteCurrentNote" :title="t('editor.deleteNote')">
-              <span class="material-icons-outlined" style="font-size:16px">delete_outline</span>
-            </button>
-          </div>
-          <div class="header-right" v-else>
-            <div class="sort-control">
-              <button class="btn btn-icon header-sort-btn" :class="{ active: sortMenuOpen }" @click.stop="sortMenuOpen = !sortMenuOpen" :title="t('notes.sortOrder')">
-                <span class="material-icons-outlined">sort</span>
-              </button>
-              <div v-if="sortMenuOpen" class="sort-overlay" @click="sortMenuOpen = false"></div>
-              <div v-if="sortMenuOpen" class="sort-menu">
-                <div class="sort-menu-item" :class="{ active: sortMode === 'modified-desc' }" @click="setSort('modified-desc')">
-                  <span class="material-icons-outlined sort-check">check</span><span>{{ t('notes.recentlyModified') }}</span>
-                </div>
-                <div class="sort-menu-item" :class="{ active: sortMode === 'modified-asc' }" @click="setSort('modified-asc')">
-                  <span class="material-icons-outlined sort-check">check</span><span>{{ t('notes.oldestModified') }}</span>
-                </div>
-              </div>
-            </div>
-            <button class="btn btn-icon header-new-btn" @click="createNewNoteIn(currentFolder)" :title="t('editor.newNote')">
-              <span class="material-icons-outlined">add</span>
-            </button>
-          </div>
-        </template>
-      </header>
+      <MainHeader
+        :show-settings="showSettings"
+        :editing="Boolean(editingNote)"
+        :search-open="searchOpen"
+        :has-prev-page="hasPrevPage"
+        :current-folder="currentFolder"
+        :name="editName"
+        :folder="editFolder"
+        :tags="editTags"
+        :tag-input="tagInput"
+        :editor-mode="editorMode"
+        :is-saving="isSaving"
+        :can-delete="Boolean(editingNote?.path)"
+        :save-button-class="saveBtnClass"
+        :save-button-title="saveBtnTitle"
+        :save-problem="saveStatus === 'error' || saveStatus === 'offline'"
+        :sort-mode="sortMode"
+        @toggle-mobile-menu="mobileSidebar = !mobileSidebar"
+        @close-settings="showSettings = false"
+        @back="goBack"
+        @update:name="editName = $event"
+        @update:tags="editTags = $event"
+        @update:tag-input="tagInput = $event"
+        @dirty="isDirty = true"
+        @pick-folder="pickEditFolder"
+        @add-tag="addTag"
+        @toggle-mode="toggleEditorMode"
+        @save="saveNote"
+        @delete="deleteCurrentNote"
+        @close-search="searchOpen = false"
+        @sort="setSort"
+        @new-note="createNewNoteIn(currentFolder)"
+      />
 
       <div class="content-area" :class="{ 'is-editing': editingNote }">
         <!-- Settings page (v-show: editor stays mounted behind) -->
@@ -409,11 +330,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, reactive, nextTick, watch, provide } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, reactive, watch, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import apiClient from '../api'
 import { stripMarkdown, isTimestampName } from '../utils'
 import NoteEditorView from '../components/NoteEditorView.vue'
+import MainHeader from '../components/MainHeader.vue'
 import BrowseNotesView from '../components/BrowseNotesView.vue'
 import SearchNotesView from '../components/SearchNotesView.vue'
 import FolderNode from '../components/FolderNode.vue'
@@ -448,12 +370,6 @@ provide('layout', layout)
 
 const searchOpen = ref(false)
 
-const titleInputRef = ref(null)
-
-function focusTitleInput() {
-  nextTick(() => { if (titleInputRef.value) titleInputRef.value.focus() })
-}
-
 // Data
 const allNotes = ref([])
 const folders = ref([])
@@ -481,20 +397,6 @@ watch(editingNote, (note) => {
   if (note) editorEverMounted.value = true
 }, { immediate: true })
 
-// Title input width tracks the actual rendered text width (via a hidden
-// mirror span) instead of the HTML `size` attribute, which only approximates
-// width by character count and drifts badly with a proportional font.
-const titleMirrorRef = ref(null)
-const titleInputWidth = ref(80)
-
-function updateTitleInputWidth() {
-  if (!titleMirrorRef.value) return
-  // +12px so the caret has room past the last character
-  titleInputWidth.value = Math.max(60, titleMirrorRef.value.scrollWidth + 12)
-}
-
-watch(editName, () => nextTick(updateTitleInputWidth), { immediate: true })
-
 let searchDebounceTimer = null
 
 // View context captured before entering the editor, used by the back button.
@@ -510,7 +412,6 @@ const nextNotesCursor = ref(null)
 const loadingMoreNotes = ref(false)
 
 // ===== Waterfall sort order =====
-const sortMenuOpen = ref(false)
 const sortMode = ref('modified-desc')
 try {
   const saved = localStorage.getItem('memodump_sort')
@@ -519,7 +420,6 @@ try {
 
 function setSort(mode) {
   sortMode.value = mode
-  sortMenuOpen.value = false
   try { localStorage.setItem('memodump_sort', mode) } catch (_) {}
 }
 
@@ -705,7 +605,6 @@ function handleGlobalKeydown(e) {
   }
   if (e.key === 'Escape') {
     closeContextMenu()
-    sortMenuOpen.value = false
   }
 }
 
@@ -1281,236 +1180,6 @@ provide('dnd', dnd)
   overflow: hidden;
   min-width: 0;
 }
-.main-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 12px 0 8px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-card);
-  gap: 8px;
-  height: var(--header-height);
-  flex-shrink: 0;
-}
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-}
-.menu-toggle { display: none; }
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-/* Title / folder shown inline in header */
-.header-title-display {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  padding: 4px 6px;
-  border-radius: 6px;
-  transition: background 0.15s;
-}
-.header-title-display:hover {
-  background: var(--border-light);
-}
-.header-folder-display {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Back button in editor header — always visible on desktop and mobile */
-.editor-back-btn {
-  display: flex;
-  flex-shrink: 0;
-}
-
-/* New note shortcut in header (waterfall view) */
-.header-new-btn {
-  width: 28px;
-  height: 28px;
-  color: var(--primary);
-  border-radius: var(--radius);
-}
-.header-new-btn:hover {
-  background: var(--primary-bg);
-}
-.header-new-btn .material-icons-outlined {
-  font-size: 22px;
-}
-
-/* Danger-subtle button (delete, not as alarming as red bg) */
-.btn-danger-subtle {
-  color: var(--text-muted);
-}
-.btn-danger-subtle:hover {
-  color: var(--danger);
-  background: var(--danger-light);
-}
-
-/* ======= SAVE BUTTON ======= */
-.save-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 14px;
-  border-radius: 100px;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-  flex-shrink: 0;
-}
-.save-btn:disabled {
-  cursor: wait;
-  opacity: 0.65;
-}
-
-/* Clean / synced — outlined */
-.save-btn-clean {
-  border: 1.5px solid var(--primary);
-  background: transparent;
-  color: var(--primary-dark);
-}
-.save-btn-clean:hover { background: var(--primary-bg); }
-
-/* Dirty / error / offline — filled blue, prominent */
-.save-btn-dirty {
-  border: 1.5px solid var(--primary);
-  background: var(--primary);
-  color: #fff;
-}
-.save-btn-dirty:hover { background: var(--primary-dark); border-color: var(--primary-dark); }
-
-.save-btn-icon {
-  font-size: 14px;
-}
-
-/* ======= HEADER METADATA SCROLL ======= */
-.header-meta-scroll {
-  flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  display: flex;
-  align-items: center;
-  scrollbar-width: none;
-  -webkit-overflow-scrolling: touch;
-}
-.header-meta-scroll::-webkit-scrollbar { display: none; }
-
-.header-title-input {
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-  padding: 4px 4px;
-  flex-shrink: 0;
-  font-family: inherit;
-  caret-color: var(--primary);
-  min-width: 60px;
-  transition: width 0.1s ease;
-}
-.header-title-mirror {
-  position: absolute;
-  visibility: hidden;
-  white-space: pre;
-  font-size: 14px;
-  font-weight: 600;
-  font-family: inherit;
-  padding: 4px 4px;
-  pointer-events: none;
-}
-.header-title-input::placeholder {
-  color: var(--text-muted);
-}
-.header-meta-sep {
-  color: var(--border);
-  font-size: 14px;
-  margin: 0 6px;
-  flex-shrink: 0;
-  user-select: none;
-}
-.note-folder-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px 2px 4px;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.12s, color 0.12s;
-  font-family: inherit;
-}
-.note-folder-btn:hover {
-  background: var(--primary-bg);
-  color: var(--primary-dark);
-}
-.note-folder-btn .material-icons-outlined {
-  font-size: 14px;
-  color: var(--primary);
-}
-.note-folder-label {
-  max-width: 140px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.note-tags-inline {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-.note-tags-inline :deep(.tag),
-.note-tags-inline .tag {
-  font-size: 13px;
-}
-.tag-inline-input {
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-muted);
-  width: 48px;
-  padding: 2px 4px;
-  font-family: inherit;
-  flex-shrink: 0;
-  transition: color 0.12s, width 0.15s;
-}
-.tag-inline-input::placeholder {
-  color: var(--text-muted);
-  opacity: 0.6;
-}
-.tag-inline-input:focus {
-  color: var(--primary-dark);
-  width: 72px;
-}
-
 /* ======= CONTENT AREA ======= */
 .content-area {
   flex: 1;
@@ -1533,60 +1202,6 @@ provide('dnd', dnd)
   min-height: 100%;
   background: var(--bg);
 }
-
-/* ======= SORT CONTROL ======= */
-.sort-control {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-.header-sort-btn {
-  width: 28px;
-  height: 28px;
-  color: var(--text-secondary);
-  border-radius: var(--radius);
-}
-.header-sort-btn:hover,
-.header-sort-btn.active {
-  background: var(--primary-bg);
-  color: var(--primary-dark);
-}
-.header-sort-btn .material-icons-outlined { font-size: 20px; }
-.sort-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-}
-.sort-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-md);
-  border-radius: 8px;
-  padding: 4px 0;
-  min-width: 184px;
-  z-index: 1001;
-}
-.sort-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 9px 14px 9px 8px;
-  font-size: 13px;
-  color: var(--text);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.sort-menu-item:hover { background: var(--primary-bg); }
-.sort-menu-item.active { color: var(--primary-dark); font-weight: 500; }
-.sort-check {
-  font-size: 16px;
-  opacity: 0;
-  color: var(--primary);
-}
-.sort-menu-item.active .sort-check { opacity: 1; }
 
 /* Draft Restored Banner */
 .draft-banner {
@@ -1791,15 +1406,8 @@ provide('dnd', dnd)
     z-index: 99;
     background: rgba(0,0,0,0.25);
   }
-  .menu-toggle { display: flex; }
-  /* Header stays single row on mobile */
-  .main-header {
-    padding: 0 8px;
-  }
   /* Prevent iOS zoom on input focus by ensuring font-size >= 16px */
   .input,
-  .header-title-input,
-  .tag-inline-input,
   select { font-size: 16px !important; }
 }
 
