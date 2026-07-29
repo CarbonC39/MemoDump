@@ -184,7 +184,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, reactive, watch, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import apiClient from '../api'
-import { stripMarkdown, isTimestampName } from '../utils'
+import { isTimestampName } from '../utils'
 import NoteEditorView from '../components/NoteEditorView.vue'
 import MainHeader from '../components/MainHeader.vue'
 import BrowseNotesView from '../components/BrowseNotesView.vue'
@@ -204,6 +204,8 @@ import { useContextMenu } from '../composables/useContextMenu'
 import { outboxPut, outboxAll, buildEntry } from '../composables/outbox.js'
 import { useTheme } from '../composables/useTheme.js'
 import { useNoteEditor } from '../composables/useNoteEditor.js'
+import { useNoteBrowser } from '../composables/useNoteBrowser.js'
+import { useNoteSearch } from '../composables/useNoteSearch.js'
 import { preloadMilkdownEditor } from '../components/milkdownLoader.js'
 
 const router = useRouter()
@@ -221,15 +223,17 @@ preloadMilkdownEditor().catch(() => {})
 const layout = useCardLayout()
 provide('layout', layout)
 
-const searchOpen = ref(false)
+const {
+  searchOpen, searchResults, searchQuery, searchTag, doSearch,
+} = useNoteSearch({ api: apiClient })
 
-// Data
-const allNotes = ref([])
-const folders = ref([])
-const searchResults = ref([])
-const searchQuery = ref('')
-const searchTag = ref('')
-const currentFolder = ref('')
+const {
+  allNotes, folders, currentFolder, displayNotes,
+  nextNotesCursor, loadingMoreNotes, sortMode,
+  sortedDisplayNotes, flatFoldersForPicker,
+  setSort, loadFolderNode, loadMoreNotes, loadFolderPage,
+  loadAll, refreshRootFolders,
+} = useNoteBrowser({ api: apiClient })
 
 const {
   confirmDialog, showConfirm, acceptConfirm, cancelConfirm,
@@ -250,138 +254,12 @@ watch(editingNote, (note) => {
   if (note) editorEverMounted.value = true
 }, { immediate: true })
 
-let searchDebounceTimer = null
-
 // View context captured before entering the editor, used by the back button.
 const prevView = reactive({ folder: '', search: false })
 
 // True when there is a prior view (folder/search) to return to; otherwise the
 // back button acts as a Home button that goes to All Notes.
 const hasPrevPage = computed(() => prevView.search || !!prevView.folder)
-
-// Display notes
-const displayNotes = ref([])
-const nextNotesCursor = ref(null)
-const loadingMoreNotes = ref(false)
-
-// ===== Waterfall sort order =====
-const sortMode = ref('modified-desc')
-try {
-  const saved = localStorage.getItem('memodump_sort')
-  if (saved) sortMode.value = saved
-} catch (_) {}
-
-function setSort(mode) {
-  sortMode.value = mode
-  try { localStorage.setItem('memodump_sort', mode) } catch (_) {}
-}
-
-const sortedDisplayNotes = computed(() => {
-  const arr = displayNotes.value.slice()
-  if (sortMode.value === 'modified-asc') {
-    arr.sort((a, b) => (a.modTime || 0) - (b.modTime || 0))
-  } else {
-    arr.sort((a, b) => (b.modTime || 0) - (a.modTime || 0))
-  }
-  return arr
-})
-
-const flatFolders = computed(() => {
-  const result = []
-  function walk(list) {
-    for (const f of list) {
-      result.push(f.path)
-      if (f.children) walk(f.children)
-    }
-  }
-  walk(folders.value)
-  return result
-})
-
-const flatFoldersForPicker = computed(() => {
-  const result = []
-  function walk(list, depth) {
-    for (const f of list) {
-      result.push({ path: f.path, name: f.name, depth })
-      if (f.children && f.children.length) walk(f.children, depth + 1)
-    }
-  }
-  walk(folders.value, 0)
-  return result
-})
-
-
-function enrichNotes(notes) {
-  return notes.map(n => ({
-    ...n,
-    hasCustomName: !isTimestampName(n.name),
-    plainPreview: stripMarkdown(n.preview),
-  }))
-}
-
-function fromV2Note(note) {
-  return {
-    path: note.id,
-    name: note.name,
-    tags: note.tags || [],
-    modTime: note.modifiedAt || 0,
-    preview: note.preview || '',
-  }
-}
-
-function fromV2Folder(folder) {
-  return {
-    path: folder.id,
-    name: folder.name,
-    hasChildren: folder.hasChildren,
-    loaded: false,
-    loading: false,
-    children: [],
-    notes: [],
-  }
-}
-
-function findFolderNode(nodes, path) {
-  for (const node of nodes) {
-    if (node.path === path) return node
-    const nested = findFolderNode(node.children || [], path)
-    if (nested) return nested
-  }
-  return null
-}
-
-async function loadFolderNode(path, { force = false } = {}) {
-  const node = findFolderNode(folders.value, path)
-  if (!node || (node.loaded && !force)) return
-  node.loading = true
-  try {
-    const [foldersRes, notesRes] = await Promise.all([
-      apiClient.listFoldersV2(path),
-      apiClient.listNotesV2(path),
-    ])
-    node.children = foldersRes.data.items.map(fromV2Folder)
-    node.notes = enrichNotes(notesRes.data.items.map(fromV2Note))
-    node.loaded = true
-  } finally {
-    node.loading = false
-  }
-}
-
-async function loadMoreNotes() {
-  if (!nextNotesCursor.value || loadingMoreNotes.value) return
-  loadingMoreNotes.value = true
-  try {
-    const res = await apiClient.listNotesV2(currentFolder.value, {
-      cursor: nextNotesCursor.value,
-    })
-    const more = enrichNotes(res.data.items.map(fromV2Note))
-    displayNotes.value = [...displayNotes.value, ...more]
-    if (!currentFolder.value) allNotes.value = displayNotes.value
-    nextNotesCursor.value = res.data.nextCursor
-  } finally {
-    loadingMoreNotes.value = false
-  }
-}
 
 const {
   contextMenu, openContextMenuBtn, closeContextMenu, menuEditNote, menuCopyContent,
@@ -483,12 +361,9 @@ async function restoreFromUrl() {
     } catch (_) { /* fall through */ }
   }
   if (folder) {
-    currentFolder.value = folder
     openSections.storage = true
     try {
-      const res = await apiClient.listNotesV2(folder)
-      displayNotes.value = enrichNotes(res.data.items.map(fromV2Note))
-      nextNotesCursor.value = res.data.nextCursor
+      await loadFolderPage(folder)
     } catch (_) {
       displayNotes.value = allNotes.value
     }
@@ -525,29 +400,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
-  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
 })
-
-async function loadAll() {
-  try {
-    const [notesRes, foldersRes] = await Promise.all([
-      apiClient.listNotesV2(''),
-      apiClient.listFoldersV2(''),
-    ])
-    allNotes.value = enrichNotes(notesRes.data.items.map(fromV2Note))
-    nextNotesCursor.value = notesRes.data.nextCursor
-    folders.value = foldersRes.data.items.map(fromV2Folder)
-    if (currentFolder.value) {
-      const folderNotesRes = await apiClient.listNotesV2(currentFolder.value)
-      displayNotes.value = enrichNotes(folderNotesRes.data.items.map(fromV2Note))
-      nextNotesCursor.value = folderNotesRes.data.nextCursor
-    } else {
-      displayNotes.value = allNotes.value
-    }
-  } catch (e) {
-    // 401 is handled globally by the api interceptor (redirects to login).
-  }
-}
 
 function confirmLeave() {
   if (!isDirty.value) return true
@@ -707,37 +560,16 @@ async function deleteCurrentNote() {
   }
 }
 
-function doSearch() {
-  clearTimeout(searchDebounceTimer)
-  if (!searchQuery.value && !searchTag.value) {
-    searchResults.value = []
-    return
-  }
-  searchDebounceTimer = setTimeout(async () => {
-    try {
-      const res = await apiClient.searchV2(searchQuery.value, searchTag.value)
-      searchResults.value = enrichNotes(res.data.items.map(fromV2Note))
-    } catch (e) {
-      searchResults.value = []
-    }
-  }, 300)
-}
-
 async function selectFolder(folderPath) {
   if (!confirmLeave()) return
   showSettings.value = false
-  currentFolder.value = folderPath
   editingNote.value = null
   isDirty.value = false
   searchOpen.value = false
   mobileSidebar.value = false
   try {
-    const res = await apiClient.listNotesV2(folderPath)
-    displayNotes.value = enrichNotes(res.data.items.map(fromV2Note))
-    nextNotesCursor.value = res.data.nextCursor
-  } catch (e) {
-    displayNotes.value = []
-  }
+    await loadFolderPage(folderPath)
+  } catch (_) {}
   updateUrl()
 }
 
@@ -748,10 +580,7 @@ async function promptNewFolder(parentPath) {
   try {
     await apiClient.createFolder(path)
     if (parentPath) await loadFolderNode(parentPath, { force: true })
-    else {
-      const res = await apiClient.listFoldersV2('')
-      folders.value = res.data.items.map(fromV2Folder)
-    }
+    else await refreshRootFolders()
   } catch (e) { alert(t('errors.failed')) }
 }
 
