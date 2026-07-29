@@ -220,7 +220,7 @@ memodump/
 
 ## CI / CD
 
-CI runs on **GitHub Actions** (`.github/workflows/build.yml`), triggered on every push/PR to `public`/`main` and on `v*` tags. A Forgejo Actions workflow (`.forgejo/workflows/build.yml`) is kept on Codeberg for manual/reference runs only and no longer triggers automatically.
+CI runs on **GitHub Actions** (`.github/workflows/build.yml`), triggered on every push/PR to `public` and on `v*` tags.
 
 ### `build-cli` — CLI cross-compilation
 
@@ -244,9 +244,9 @@ Gated to `v*` tags / manual dispatch (native macOS/Windows/Linux runners bill mo
 
 Also gated to `v*` tags / manual dispatch. Builds `linux/amd64` + `linux/arm64` and pushes to `ghcr.io/carbonc39/memodump`, tagged `latest`, `vX.Y.Z`, and `vX.Y`.
 
-### `release` — GitHub Release + Codeberg sync
+### `release` — GitHub Release
 
-Triggered only on `v*` tags. Collects every build artifact onto a GitHub Release, then mirrors the release (and its assets) to Codeberg via the Forgejo API.
+Triggered only on `v*` tags. Collects every build artifact onto a GitHub Release.
 
 ---
 

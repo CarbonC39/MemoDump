@@ -220,7 +220,7 @@ memodump/
 
 ## CI / CD
 
-CI 运行在 **GitHub Actions**（`.github/workflows/build.yml`），在每次推送/PR 到 `public`/`main` 分支以及打 `v*` tag 时触发。Codeberg 上的 Forgejo Actions 工作流（`.forgejo/workflows/build.yml`）仅保留用于手动/参考运行，不再自动触发。
+CI 运行在 **GitHub Actions**（`.github/workflows/build.yml`），在每次推送/PR 到 `public` 分支以及打 `v*` tag 时触发。
 
 ### `build-cli` —— CLI 交叉编译
 
@@ -244,9 +244,9 @@ CI 运行在 **GitHub Actions**（`.github/workflows/build.yml`），在每次�
 
 同样仅在打 `v*` tag 或手动触发时运行。构建 `linux/amd64` + `linux/arm64`，推送到 `ghcr.io/carbonc39/memodump`，标签为 `latest`、`vX.Y.Z` 和 `vX.Y`。
 
-### `release` —— GitHub Release 并同步到 Codeberg
+### `release` —— GitHub Release
 
-仅在打 `v*` tag 时触发。将所有构建产物收集到一个 GitHub Release 中，然后通过 Forgejo API 将该 Release（及其附件）同步到 Codeberg。
+仅在打 `v*` tag 时触发。将所有构建产物收集到一个 GitHub Release 中。
 
 ---
 

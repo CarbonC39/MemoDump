@@ -2,12 +2,31 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 )
+
+func verifyServerFrontend(frontend fs.FS) error {
+	data, err := fs.ReadFile(frontend, "build-mode.json")
+	if err != nil {
+		return fmt.Errorf("frontend build marker missing: run npm run build in frontend: %w", err)
+	}
+	var marker struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.Unmarshal(data, &marker); err != nil {
+		return fmt.Errorf("invalid frontend build marker: %w", err)
+	}
+	if marker.Mode != "server" {
+		return fmt.Errorf("frontend was built in %q mode; embedded server binaries require npm run build", marker.Mode)
+	}
+	return nil
+}
 
 // Package-level config vars — shared by CLI (main_cli.go) and Wails (main_wails.go).
 var (

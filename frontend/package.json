@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "build:local": "VITE_LOCAL=1 vite build",
+    "verify:server-build": "node -e \"const fs=require('fs');const value=JSON.parse(fs.readFileSync('dist/build-mode.json'));if(value.mode!=='server')throw new Error('frontend/dist is not a server build')\"",
     "preview": "vite preview",
     "test": "vitest run"
   },

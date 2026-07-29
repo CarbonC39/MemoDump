@@ -114,6 +114,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load frontend resources: %v", err)
 	}
+	if err := verifyServerFrontend(distFS); err != nil {
+		log.Fatal(err)
+	}
 	fileServer := http.FileServer(http.FS(distFS))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
