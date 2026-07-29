@@ -100,21 +100,25 @@ func noteToSummaryV2(note Note) noteSummaryV2 {
 	}
 }
 
-func sortNotesV2(notes []noteSummaryV2) {
+func sortNotesV2(notes []noteSummaryV2, order string) {
 	sort.Slice(notes, func(i, j int) bool {
 		if notes[i].ModifiedAt != notes[j].ModifiedAt {
+			if order == "modified-asc" {
+				return notes[i].ModifiedAt < notes[j].ModifiedAt
+			}
 			return notes[i].ModifiedAt > notes[j].ModifiedAt
 		}
 		return notes[i].ID < notes[j].ID
 	})
 }
 
-func pageNotesV2(notes []noteSummaryV2, cursor *noteCursorV2, limit int) notePageV2 {
+func pageNotesV2(notes []noteSummaryV2, cursor *noteCursorV2, limit int, order string) notePageV2 {
 	start := 0
 	if cursor != nil {
 		start = len(notes)
 		for i, note := range notes {
-			if note.ModifiedAt < cursor.ModifiedAt ||
+			if (order == "modified-desc" && note.ModifiedAt < cursor.ModifiedAt) ||
+				(order == "modified-asc" && note.ModifiedAt > cursor.ModifiedAt) ||
 				(note.ModifiedAt == cursor.ModifiedAt && note.ID > cursor.ID) {
 				start = i
 				break
@@ -134,22 +138,30 @@ func pageNotesV2(notes []noteSummaryV2, cursor *noteCursorV2, limit int) notePag
 	return page
 }
 
-func v2ListArgs(w http.ResponseWriter, r *http.Request) (int, *noteCursorV2, bool) {
+func v2ListArgs(w http.ResponseWriter, r *http.Request) (int, *noteCursorV2, string, bool) {
 	limit, ok := parseV2Limit(r)
 	if !ok {
 		writeV2Error(w, http.StatusBadRequest, "invalid_limit", "limit must be a positive integer")
-		return 0, nil, false
+		return 0, nil, "", false
+	}
+	order := r.URL.Query().Get("sort")
+	if order == "" {
+		order = "modified-desc"
+	}
+	if order != "modified-desc" && order != "modified-asc" {
+		writeV2Error(w, http.StatusBadRequest, "invalid_sort", "sort must be modified-desc or modified-asc")
+		return 0, nil, "", false
 	}
 	cursor, err := decodeV2Cursor(r.URL.Query().Get("cursor"))
 	if err != nil {
 		writeV2Error(w, http.StatusBadRequest, "invalid_cursor", "cursor is invalid")
-		return 0, nil, false
+		return 0, nil, "", false
 	}
-	return limit, cursor, true
+	return limit, cursor, order, true
 }
 
 func handleV2ListNotes(w http.ResponseWriter, r *http.Request) {
-	limit, cursor, ok := v2ListArgs(w, r)
+	limit, cursor, order, ok := v2ListArgs(w, r)
 	if !ok {
 		return
 	}
@@ -178,8 +190,8 @@ func handleV2ListNotes(w http.ResponseWriter, r *http.Request) {
 			notes = append(notes, noteToSummaryV2(*note))
 		}
 	}
-	sortNotesV2(notes)
-	writeJSON(w, http.StatusOK, pageNotesV2(notes, cursor, limit))
+	sortNotesV2(notes, order)
+	writeJSON(w, http.StatusOK, pageNotesV2(notes, cursor, limit, order))
 }
 
 func handleV2ListFolders(w http.ResponseWriter, r *http.Request) {
@@ -225,7 +237,7 @@ func handleV2ListFolders(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleV2Search(w http.ResponseWriter, r *http.Request) {
-	limit, cursor, ok := v2ListArgs(w, r)
+	limit, cursor, order, ok := v2ListArgs(w, r)
 	if !ok {
 		return
 	}
@@ -258,6 +270,6 @@ func handleV2Search(w http.ResponseWriter, r *http.Request) {
 		notes = append(notes, noteToSummaryV2(*note))
 		return nil
 	})
-	sortNotesV2(notes)
-	writeJSON(w, http.StatusOK, pageNotesV2(notes, cursor, limit))
+	sortNotesV2(notes, order)
+	writeJSON(w, http.StatusOK, pageNotesV2(notes, cursor, limit, order))
 }

@@ -358,7 +358,10 @@ const localApi = {
     return { data: roots }
   },
 
-  async listNotesV2(parent = '', { cursor = '', limit = 50 } = {}) {
+  async listNotesV2(parent = '', { cursor = '', limit = 50, sort = 'modified-desc' } = {}) {
+    if (sort !== 'modified-desc' && sort !== 'modified-asc') {
+      return apiError(400, { code: 'invalid_sort', message: 'sort must be modified-desc or modified-asc' })
+    }
     const notes = (await this.listNotes(parent)).data.map(n => ({
       id: n.path,
       name: n.name,
@@ -367,11 +370,15 @@ const localApi = {
       modifiedAt: n.modTime || 0,
       preview: n.preview || '',
     }))
+    if (sort === 'modified-asc') {
+      notes.sort((a, b) => a.modifiedAt - b.modifiedAt || a.id.localeCompare(b.id))
+    }
     let start = 0
     if (cursor) {
       const decoded = decodeCursor(cursor)
       start = notes.findIndex(n =>
-        n.modifiedAt < decoded.modifiedAt ||
+        (sort === 'modified-desc' && n.modifiedAt < decoded.modifiedAt) ||
+        (sort === 'modified-asc' && n.modifiedAt > decoded.modifiedAt) ||
         (n.modifiedAt === decoded.modifiedAt && n.id > decoded.id))
       if (start < 0) start = notes.length
     }
@@ -402,7 +409,10 @@ const localApi = {
     return { data: { items } }
   },
 
-  async searchV2(q, tag, { cursor = '', limit = 50 } = {}) {
+  async searchV2(q, tag, { cursor = '', limit = 50, sort = 'modified-desc' } = {}) {
+    if (sort !== 'modified-desc' && sort !== 'modified-asc') {
+      return apiError(400, { code: 'invalid_sort', message: 'sort must be modified-desc or modified-asc' })
+    }
     const legacy = (await this.search(q, tag)).data
     const notes = legacy.map(n => ({
       id: n.path,
@@ -412,11 +422,15 @@ const localApi = {
       modifiedAt: n.modTime || 0,
       preview: n.preview || '',
     }))
+    if (sort === 'modified-asc') {
+      notes.sort((a, b) => a.modifiedAt - b.modifiedAt || a.id.localeCompare(b.id))
+    }
     let start = 0
     if (cursor) {
       const decoded = decodeCursor(cursor)
       start = notes.findIndex(n =>
-        n.modifiedAt < decoded.modifiedAt ||
+        (sort === 'modified-desc' && n.modifiedAt < decoded.modifiedAt) ||
+        (sort === 'modified-asc' && n.modifiedAt > decoded.modifiedAt) ||
         (n.modifiedAt === decoded.modifiedAt && n.id > decoded.id))
       if (start < 0) start = notes.length
     }

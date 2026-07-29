@@ -79,6 +79,7 @@ export function buildEntry({ editingNote, editContent, editName, editTags, editF
     key: n.path || ('new::' + clientId),
     clientId,
     path: n.path || '',
+    originalName: n.name || '',
     content: editContent.value,
     name: editName.value,
     tags: [...(editTags.value || [])],

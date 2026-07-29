@@ -31,6 +31,27 @@ func loadNoteSemanticsFixture(t *testing.T) noteSemanticsFixture {
 	return fixture
 }
 
+func TestV2AscendingCursorPagination(t *testing.T) {
+	notes := []noteSummaryV2{
+		{ID: "new.md", ModifiedAt: 30},
+		{ID: "old.md", ModifiedAt: 10},
+		{ID: "middle.md", ModifiedAt: 20},
+	}
+	sortNotesV2(notes, "modified-asc")
+	first := pageNotesV2(notes, nil, 2, "modified-asc")
+	if len(first.Items) != 2 || first.Items[0].ID != "old.md" || first.NextCursor == nil {
+		t.Fatalf("first ascending page = %#v", first)
+	}
+	cursor, err := decodeV2Cursor(*first.NextCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := pageNotesV2(notes, cursor, 2, "modified-asc")
+	if len(second.Items) != 1 || second.Items[0].ID != "new.md" {
+		t.Fatalf("second ascending page = %#v", second)
+	}
+}
+
 func TestSharedNameSemantics(t *testing.T) {
 	fixture := loadNoteSemanticsFixture(t)
 	for _, testCase := range fixture.NameCases {

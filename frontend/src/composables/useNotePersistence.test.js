@@ -65,4 +65,30 @@ describe('useNotePersistence', () => {
     expect(persistence.saveError.value).toBeNull()
     expect(editor.isSaving.value).toBe(false)
   })
+
+  it('does not rename timestamp notes while replaying an offline update', async () => {
+    const api = {
+      updateNote: vi.fn().mockResolvedValue({
+        data: { path: '2026-07-29_120000.md', name: '2026-07-29_120000', tags: [] },
+      }),
+    }
+    const editor = useNoteEditor()
+    const persistence = useNotePersistence({ api, editor, enqueue: vi.fn() })
+
+    await persistence.saveNote({
+      replay: {
+        path: '2026-07-29_120000.md',
+        originalName: '2026-07-29_120000',
+        name: '',
+        content: 'offline edit',
+        tags: [],
+        folder: '',
+      },
+    })
+
+    expect(api.updateNote).toHaveBeenCalledWith(
+      '2026-07-29_120000.md',
+      { content: 'offline edit', tags: [] },
+    )
+  })
 })

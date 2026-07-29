@@ -49,7 +49,9 @@ export function useNotePersistence({
       let resultNode
       if (path) {
         const originalTitle = fromReplay
-          ? ''
+          ? (isTimestampName(replay.originalName)
+              ? ''
+              : (replay.originalName ?? name))
           : (isTimestampName(editingNote.value.name) ? '' : (editingNote.value.name || ''))
         const payload = { content, tags }
         if (name !== originalTitle) payload.rename = name

@@ -235,16 +235,21 @@ const {
   nextNotesCursor, loadingMoreNotes, sortMode,
   sortedDisplayNotes, flatFoldersForPicker,
   setSort, loadFolderNode, loadMoreNotes,
-  loadAll, refreshRootFolders,
+  loadAll, refreshRootFolders, loadFolderTreeForPicker,
 } = noteBrowser
 
 const {
   confirmDialog, showConfirm, acceptConfirm, cancelConfirm,
   promptVisible, promptTitle, promptValue, showPrompt, submitPrompt, cancelPrompt,
   copyDialog, copyFromDialog,
-  folderPicker, showFolderPicker, closeFolderPicker, confirmFolderPicker,
+  folderPicker, showFolderPicker: showFolderPickerDialog, closeFolderPicker, confirmFolderPicker,
   startCreateFolderInPicker, cancelNewFolderInPicker, submitNewFolderInPicker,
 } = useDialogs({ folders })
+
+async function showFolderPicker(...args) {
+  try { await loadFolderTreeForPicker() } catch (_) {}
+  return showFolderPickerDialog(...args)
+}
 
 const noteEditor = useNoteEditor()
 const {

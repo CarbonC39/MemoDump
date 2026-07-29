@@ -39,9 +39,10 @@ describe('useNoteBrowser', () => {
     expect(browser.sortedDisplayNotes.value.map(note => note.path)).toEqual(['new.md', 'old.md'])
     expect(browser.nextNotesCursor.value).toBe('next')
 
-    browser.setSort('modified-asc')
+    await browser.setSort('modified-asc')
     expect(browser.sortedDisplayNotes.value.map(note => note.path)).toEqual(['old.md', 'new.md'])
     expect(storage.setItem).toHaveBeenCalledWith('memodump_sort', 'modified-asc')
+    expect(api.listNotesV2).toHaveBeenLastCalledWith('', { sort: 'modified-asc' })
   })
 
   it('appends the next page using the opaque cursor', async () => {
@@ -56,7 +57,10 @@ describe('useNoteBrowser', () => {
     await browser.loadAll()
     await browser.loadMoreNotes()
 
-    expect(api.listNotesV2).toHaveBeenLastCalledWith('', { cursor: 'cursor-1' })
+    expect(api.listNotesV2).toHaveBeenLastCalledWith('', {
+      cursor: 'cursor-1',
+      sort: 'modified-desc',
+    })
     expect(browser.displayNotes.value.map(note => note.path)).toEqual(['a.md', 'b.md'])
     expect(browser.nextNotesCursor.value).toBeNull()
   })
@@ -76,5 +80,21 @@ describe('useNoteBrowser', () => {
     expect(browser.folders.value[0].children[0].path).toBe('work/sub')
     expect(browser.folders.value[0].notes[0].path).toBe('work/a.md')
     expect(browser.folders.value[0].loaded).toBe(true)
+  })
+
+  it('loads all folder destinations on demand for the picker', async () => {
+    const api = {
+      listNotesV2: vi.fn().mockResolvedValue(page([])),
+      listFoldersV2: vi.fn()
+        .mockResolvedValueOnce(page([{ id: 'work', name: 'work', hasChildren: true }]))
+        .mockResolvedValueOnce(page([{ id: 'work/deep', name: 'deep', hasChildren: false }])),
+    }
+    const browser = useNoteBrowser({ api, storage: null })
+
+    await browser.loadAll()
+    await browser.loadFolderTreeForPicker()
+
+    expect(browser.flatFoldersForPicker.value.map(folder => folder.path))
+      .toEqual(['work', 'work/deep'])
   })
 })

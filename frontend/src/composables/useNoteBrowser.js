@@ -83,9 +83,10 @@ export function useNoteBrowser({ api, storage = globalThis.localStorage } = {}) 
     return result
   })
 
-  function setSort(mode) {
+  async function setSort(mode) {
     sortMode.value = mode
     try { storage?.setItem('memodump_sort', mode) } catch (_) {}
+    await loadFolderPage(currentFolder.value)
   }
 
   async function loadFolderNode(path, { force = false } = {}) {
@@ -95,7 +96,7 @@ export function useNoteBrowser({ api, storage = globalThis.localStorage } = {}) 
     try {
       const [foldersRes, notesRes] = await Promise.all([
         api.listFoldersV2(path),
-        api.listNotesV2(path),
+        api.listNotesV2(path, { sort: sortMode.value }),
       ])
       node.children = foldersRes.data.items.map(presentV2Folder)
       node.notes = notesRes.data.items.map(presentV2Note)
@@ -105,12 +106,36 @@ export function useNoteBrowser({ api, storage = globalThis.localStorage } = {}) 
     }
   }
 
+  async function loadFolderTreeForPicker() {
+    async function expand(nodes) {
+      await Promise.all(nodes.map(async (node) => {
+        if (!node.hasChildren) return
+        const response = await api.listFoldersV2(node.path)
+        const existing = new Map((node.children || []).map(child => [child.path, child]))
+        node.children = response.data.items.map((folder) => {
+          const current = existing.get(folder.id)
+          if (!current) return presentV2Folder(folder)
+          return {
+            ...presentV2Folder(folder),
+            loaded: current.loaded,
+            loading: current.loading,
+            children: current.children,
+            notes: current.notes,
+          }
+        })
+        await expand(node.children)
+      }))
+    }
+    await expand(folders.value)
+  }
+
   async function loadMoreNotes() {
     if (!nextNotesCursor.value || loadingMoreNotes.value) return
     loadingMoreNotes.value = true
     try {
       const response = await api.listNotesV2(currentFolder.value, {
         cursor: nextNotesCursor.value,
+        sort: sortMode.value,
       })
       displayNotes.value = [
         ...displayNotes.value,
@@ -126,7 +151,7 @@ export function useNoteBrowser({ api, storage = globalThis.localStorage } = {}) 
   async function loadFolderPage(path) {
     currentFolder.value = path
     try {
-      const response = await api.listNotesV2(path)
+      const response = await api.listNotesV2(path, { sort: sortMode.value })
       displayNotes.value = response.data.items.map(presentV2Note)
       nextNotesCursor.value = response.data.nextCursor
     } catch (error) {
@@ -139,14 +164,14 @@ export function useNoteBrowser({ api, storage = globalThis.localStorage } = {}) 
   async function loadAll() {
     try {
       const [notesRes, foldersRes] = await Promise.all([
-        api.listNotesV2(''),
+        api.listNotesV2('', { sort: sortMode.value }),
         api.listFoldersV2(''),
       ])
       allNotes.value = notesRes.data.items.map(presentV2Note)
       nextNotesCursor.value = notesRes.data.nextCursor
       folders.value = foldersRes.data.items.map(presentV2Folder)
       if (currentFolder.value) {
-        const folderNotesRes = await api.listNotesV2(currentFolder.value)
+        const folderNotesRes = await api.listNotesV2(currentFolder.value, { sort: sortMode.value })
         displayNotes.value = folderNotesRes.data.items.map(presentV2Note)
         nextNotesCursor.value = folderNotesRes.data.nextCursor
       } else {
@@ -180,6 +205,7 @@ export function useNoteBrowser({ api, storage = globalThis.localStorage } = {}) 
     flatFoldersForPicker,
     setSort,
     loadFolderNode,
+    loadFolderTreeForPicker,
     loadMoreNotes,
     loadFolderPage,
     loadAll,
