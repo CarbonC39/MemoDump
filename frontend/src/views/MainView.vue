@@ -184,7 +184,6 @@
 import { ref, computed, onMounted, onBeforeUnmount, reactive, watch, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import apiClient from '../api'
-import { isTimestampName } from '../utils'
 import NoteEditorView from '../components/NoteEditorView.vue'
 import MainHeader from '../components/MainHeader.vue'
 import BrowseNotesView from '../components/BrowseNotesView.vue'
@@ -201,11 +200,12 @@ import { useDialogs } from '../composables/useDialogs'
 import { useAutosave } from '../composables/useAutosave'
 import { useFileImport } from '../composables/useFileImport'
 import { useContextMenu } from '../composables/useContextMenu'
-import { outboxPut, outboxAll, buildEntry } from '../composables/outbox.js'
+import { outboxAll } from '../composables/outbox.js'
 import { useTheme } from '../composables/useTheme.js'
 import { useNoteEditor } from '../composables/useNoteEditor.js'
 import { useNoteBrowser } from '../composables/useNoteBrowser.js'
 import { useNoteSearch } from '../composables/useNoteSearch.js'
+import { useNotePersistence } from '../composables/useNotePersistence.js'
 import { preloadMilkdownEditor } from '../components/milkdownLoader.js'
 
 const router = useRouter()
@@ -243,12 +243,13 @@ const {
   startCreateFolderInPicker, cancelNewFolderInPicker, submitNewFolderInPicker,
 } = useDialogs({ folders })
 
+const noteEditor = useNoteEditor()
 const {
   editingNote, editName, editTags, editFolder, editContent, tagInput,
   editorKey, isDirty, isSaving, editorMode,
   loadDocument, restoreDraft, createDocument, clearDocument,
   onEditorUpdate, onEditorReady, addTag, toggleEditorMode,
-} = useNoteEditor()
+} = noteEditor
 const editorEverMounted = ref(false)
 watch(editingNote, (note) => {
   if (note) editorEverMounted.value = true
@@ -260,6 +261,14 @@ const prevView = reactive({ folder: '', search: false })
 // True when there is a prior view (folder/search) to return to; otherwise the
 // back button acts as a Home button that goes to All Notes.
 const hasPrevPage = computed(() => prevView.search || !!prevView.folder)
+
+const {
+  saveError, openDocument, saveNote, deleteCurrent,
+} = useNotePersistence({
+  api: apiClient,
+  editor: noteEditor,
+  onSaved: updateUrl,
+})
 
 const {
   contextMenu, openContextMenuBtn, closeContextMenu, menuEditNote, menuCopyContent,
@@ -301,9 +310,9 @@ function openSearchPanel() {
   updateUrl()
 }
 
-const { showDraftRestoredBanner, saveStatus, saveError, replayAll } = useAutosave({
+const { showDraftRestoredBanner, saveStatus, replayAll } = useAutosave({
   editingNote, isDirty, saveNote,
-  reload: loadAll, ping: () => apiClient.ping(),
+  reload: loadAll, ping: () => apiClient.ping(), saveError,
 })
 
 const saveBtnClass = computed(() => {
@@ -435,111 +444,12 @@ async function openNote(note) {
   prevView.folder = currentFolder.value
   prevView.search = searchOpen.value
   try {
-    const res = await apiClient.getNote(note.path)
-    const data = res.data
-    loadDocument(data)
+    await openDocument(note)
     searchOpen.value = false
     mobileSidebar.value = false
     updateUrl()
   } catch (e) {
     console.error('Failed to open note', e)
-  }
-}
-
-async function saveNote({ silent = false, replay = null } = {}) {
-  const fromReplay = !!replay
-  // Manual saves are single-flight. This prevents a double click (or repeated
-  // Ctrl/Cmd+S) from creating the same new note more than once.
-  if (!fromReplay && isSaving.value) return
-
-  const content = fromReplay ? replay.content : editContent.value
-  const tags = fromReplay ? replay.tags : [...(editTags.value || [])]
-  const name = fromReplay ? replay.name : editName.value
-  const folder = fromReplay ? replay.folder : editFolder.value
-  const path = fromReplay ? replay.path : editingNote.value?.path
-  if (!fromReplay) isSaving.value = true
-  try {
-    let resultNode
-    if (path) {
-      const originalTitle = fromReplay
-        ? ''
-        : (isTimestampName(editingNote.value.name) ? '' : (editingNote.value.name || ''))
-      const payload = { content, tags }
-      if (name !== originalTitle) payload.rename = name
-      let res = await apiClient.updateNote(path, payload)
-      resultNode = res.data
-      const parts = resultNode.path.split('/')
-      const curDir = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
-      if (folder !== curDir) {
-        res = await apiClient.moveNote(resultNode.path, folder)
-        resultNode = res.data
-      }
-    } else {
-      let res = await apiClient.createNote({ content, name: name || '', folder, tags })
-      resultNode = res.data
-    }
-    if (!fromReplay) {
-      const normalizedName = isTimestampName(resultNode.name) ? '' : (resultNode.name || '')
-      const resultParts = resultNode.path.split('/')
-      const normalizedFolder = resultParts.length > 1 ? resultParts.slice(0, -1).join('/') : ''
-      const unchanged =
-        editContent.value === content &&
-        editName.value === name &&
-        editFolder.value === folder &&
-        JSON.stringify(editTags.value || []) === JSON.stringify(tags)
-
-      editingNote.value.path = resultNode.path
-      editingNote.value.name = resultNode.name
-      editingNote.value.tags = [...tags]
-      editingNote.value.content = content
-      // Preserve fields changed while the request was in flight. Only normalize
-      // the server-returned title/folder when the user has not edited them again.
-      if (editName.value === name) editName.value = normalizedName
-      if (editFolder.value === folder) editFolder.value = normalizedFolder
-      isDirty.value = !unchanged
-      saveError.value = null
-      updateUrl()
-    } else if (editingNote.value && (
-      (!path && replay.clientId && editingNote.value.clientId === replay.clientId) ||
-      (path && editingNote.value.path === path)
-    )) {
-      // The replayed entry IS the note currently open in the editor — adopt the
-      // server path so the next save updates rather than creating a duplicate,
-      // but only mark it clean if no newer local edits exist.
-      editingNote.value.path = resultNode.path
-      editingNote.value.name = resultNode.name
-      const replayStillCurrent =
-        editContent.value === content &&
-        editName.value === name &&
-        editFolder.value === folder &&
-        JSON.stringify(editTags.value || []) === JSON.stringify(tags)
-      if (replayStillCurrent) {
-        editName.value = isTimestampName(resultNode.name) ? '' : (resultNode.name || '')
-        const parts = resultNode.path.split('/')
-        editFolder.value = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
-        isDirty.value = false
-      }
-    }
-    return resultNode
-  } catch (e) {
-    if (e?.response?.status === 401) {
-      // replayAll must retain the queued write until authentication succeeds.
-      if (fromReplay) throw e
-      if (!fromReplay) {
-        try { await outboxPut(buildEntry({ editingNote, editContent, editName, editTags, editFolder })) } catch (_) {}
-      }
-      return
-    }
-    if (fromReplay) throw e
-    if (silent) throw e
-    if (!e.response) {
-      // Network / unreachable — queue calmly, no alert.
-      try { await outboxPut(buildEntry({ editingNote, editContent, editName, editTags, editFolder })) } catch (_) {}
-    } else {
-      saveError.value = e.response?.data?.error || e.message
-    }
-  } finally {
-    if (!fromReplay) isSaving.value = false
   }
 }
 
@@ -551,8 +461,7 @@ async function deleteCurrentNote() {
     danger: true,
   }))) return
   try {
-    await apiClient.deleteNote(editingNote.value.path)
-    isDirty.value = false
+    await deleteCurrent()
     await loadAll()
     _forceNewNote()
   } catch (e) {

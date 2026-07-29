@@ -7,11 +7,9 @@ const PING_INTERVAL_MS = 30000
 // The outbox is the safety net — writes that fail (network down / server
 // unreachable) are queued in IndexedDB and replayed on reconnect via the
 // periodic ping timer. beforeunload warns if there are unsaved changes.
-export function useAutosave({ editingNote, isDirty, saveNote, reload, ping }) {
+export function useAutosave({ editingNote, isDirty, saveNote, reload, ping, saveError = ref(null) }) {
   const showDraftRestoredBanner = ref(false)
   const online = ref(typeof navigator === 'undefined' ? true : navigator.onLine)
-  const saveError = ref(null)
-
   const saveStatus = computed(() => {
     if (outboxCount.value > 0 || !online.value) return 'offline'
     if (saveError.value) return 'error'
