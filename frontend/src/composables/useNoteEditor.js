@@ -66,6 +66,7 @@ export function useNoteEditor() {
 
   function onEditorUpdate(markdown) {
     if (!editorReady) return
+    if (markdown === editContent.value) return
     editContent.value = markdown
     isDirty.value = true
   }

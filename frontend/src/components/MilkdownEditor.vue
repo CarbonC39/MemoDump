@@ -70,6 +70,7 @@ let _handleKeyScroll = null
 let _created = false
 let _activeDocumentVersion = null
 let _replacingDocument = false
+let _latestMarkdown = props.initialContent
 
 function nextFrame() {
   return new Promise((resolve) => requestAnimationFrame(resolve))
@@ -128,7 +129,10 @@ onMounted(async () => {
 
   crepeInstance.on((listener) => {
     listener.markdownUpdated((_, markdown) => {
-      if (!_destroyed && !_replacingDocument) {
+      if (!_destroyed) {
+        _latestMarkdown = markdown
+      }
+      if (!_destroyed && _created && !_replacingDocument) {
         emit('update', markdown)
         requestAnimationFrame(doTypewriterScroll)
       }
@@ -155,8 +159,6 @@ onMounted(async () => {
   _activeDocumentVersion = startingDocumentVersion
   if (props.documentVersion !== _activeDocumentVersion) {
     replaceDocument()
-  } else {
-    emit('document-ready', props.initialContent)
   }
 
   // Crepe constructs the document progressively. Let styles and layout settle
@@ -164,6 +166,9 @@ onMounted(async () => {
   await nextFrame()
   await nextFrame()
   if (_destroyed) return
+  if (props.documentVersion === startingDocumentVersion) {
+    emit('document-ready', _latestMarkdown)
+  }
   editorReady.value = true
   emit('ready')
 

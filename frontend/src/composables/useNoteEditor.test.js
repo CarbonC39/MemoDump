@@ -38,6 +38,16 @@ describe('useNoteEditor', () => {
     expect(editor.isDirty.value).toBe(true)
   })
 
+  it('does not mark an unchanged editor callback as dirty', () => {
+    const editor = useNoteEditor()
+    editor.loadDocument({ path: 'n.md', name: 'n', tags: [], content: 'same' })
+    editor.onEditorReady('same')
+    editor.onEditorUpdate('same')
+
+    expect(editor.editContent.value).toBe('same')
+    expect(editor.isDirty.value).toBe(false)
+  })
+
   it('resets readiness when consecutive documents replace the editor content', () => {
     const editor = useNoteEditor()
     editor.loadDocument({ path: 'a.md', name: 'a', tags: [], content: 'a' })
