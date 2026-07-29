@@ -1,6 +1,8 @@
 import 'fake-indexeddb/auto'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import localApi, { _clear, parseFrontMatter } from './localApi'
+import { _sanitizeName } from './localApi'
+import semantics from '../../testdata/contracts/note_semantics.json'
 
 beforeEach(async () => {
   await _clear()
@@ -321,4 +323,12 @@ describe('parseFrontMatter', () => {
     expect(parseFrontMatter('---\ntags: ["one,two", "say \\"hi\\""]\n---\nbody'))
       .toEqual({ tags: ['one,two', 'say "hi"'], body: 'body' })
   })
+})
+
+describe('shared note semantics contract', () => {
+  for (const c of semantics.nameCases) {
+    it(`normalizes ${JSON.stringify(c.input)}`, () => {
+      expect(_sanitizeName(c.input)).toBe(c.output)
+    })
+  }
 })

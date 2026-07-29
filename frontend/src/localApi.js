@@ -138,15 +138,23 @@ export function parseFrontMatter(content) {
 }
 
 function sanitizeName(name) {
+  const portableBase = basename(String(name).replaceAll('\\', '/'))
   let out = ''
-  for (const ch of basename(name)) {
+  for (const ch of portableBase) {
     const c = ch.codePointAt(0)
     if (c < 0x20 || c === 0x7f || '/\\:*?"<>|'.includes(ch)) out += '_'
     else out += ch
   }
   out = out.replace(/^[ .]+|[ .]+$/g, '')
-  return out.length > 200 ? out.slice(0, 200) : out
+  out = Array.from(out).slice(0, 200).join('')
+  if (!out) return ''
+  const dot = out.lastIndexOf('.')
+  const stem = (dot > 0 ? out.slice(0, dot) : out).toUpperCase()
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(stem)) out = '_' + out
+  return out
 }
+
+export const _sanitizeName = sanitizeName
 
 // Strip reactivity: callers (Vue) pass reactive Proxy arrays, which IndexedDB's
 // structured-clone cannot serialise ("Proxy object could not be cloned"). Map to

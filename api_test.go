@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -8,6 +9,51 @@ import (
 	"strings"
 	"testing"
 )
+
+type noteSemanticsFixture struct {
+	NameCases []struct {
+		Input  string `json:"input"`
+		Output string `json:"output"`
+	} `json:"nameCases"`
+	TagCases [][]string `json:"tagCases"`
+}
+
+func loadNoteSemanticsFixture(t *testing.T) noteSemanticsFixture {
+	t.Helper()
+	data, err := os.ReadFile("testdata/contracts/note_semantics.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture noteSemanticsFixture
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
+}
+
+func TestSharedNameSemantics(t *testing.T) {
+	fixture := loadNoteSemanticsFixture(t)
+	for _, testCase := range fixture.NameCases {
+		if got := sanitizeUploadName(testCase.Input); got != testCase.Output {
+			t.Errorf("sanitizeUploadName(%q) = %q, want %q", testCase.Input, got, testCase.Output)
+		}
+	}
+}
+
+func TestSharedTagSemantics(t *testing.T) {
+	fixture := loadNoteSemanticsFixture(t)
+	for _, want := range fixture.TagCases {
+		got, _ := parseFrontMatter(buildFrontMatter(want) + "body")
+		if len(got) != len(want) {
+			t.Fatalf("tags = %#v, want %#v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("tags = %#v, want %#v", got, want)
+			}
+		}
+	}
+}
 
 func TestFrontMatterTagsRoundTrip(t *testing.T) {
 	want := []string{"one,two", `say "hi"`, `a\b`}
