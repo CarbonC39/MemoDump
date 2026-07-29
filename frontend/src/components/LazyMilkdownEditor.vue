@@ -1,11 +1,25 @@
 <template>
-  <component
-    :is="editorComponent"
-    v-if="editorComponent"
-    :initial-content="initialContent"
-    @update="$emit('update', $event)"
-    @error="handleInitError"
-  />
+  <div v-if="editorComponent" class="editor-host">
+    <component
+      :is="editorComponent"
+      :initial-content="initialContent"
+      @update="$emit('update', $event)"
+      @error="handleInitError"
+      @ready="handleReady"
+    />
+    <div v-if="!editorReady" class="editor-load-state editor-load-overlay" aria-busy="true">
+      <span class="editor-load-spinner" aria-hidden="true"></span>
+      <button
+        v-if="showRawFallback"
+        class="btn btn-icon btn-ghost delayed-raw-button"
+        :title="t('editor.openRaw')"
+        :aria-label="t('editor.openRaw')"
+        @click="$emit('fallback-raw')"
+      >
+        <span class="material-icons-outlined">code</span>
+      </button>
+    </div>
+  </div>
   <div v-else-if="loadError" class="editor-load-state editor-load-error" role="alert">
     <span class="material-icons-outlined">error_outline</span>
     <p>{{ t('editor.richEditorLoadFailed') }}</p>
@@ -44,6 +58,7 @@ const { t } = useI18n()
 const editorComponent = shallowRef(null)
 const loadError = ref(null)
 const showRawFallback = ref(false)
+const editorReady = ref(false)
 let loadGeneration = 0
 let fallbackTimer = null
 
@@ -56,12 +71,12 @@ function startFallbackTimer() {
 async function loadEditor() {
   const generation = ++loadGeneration
   editorComponent.value = null
+  editorReady.value = false
   loadError.value = null
   startFallbackTimer()
   try {
     const module = await preloadMilkdownEditor()
     if (generation === loadGeneration) {
-      clearTimeout(fallbackTimer)
       editorComponent.value = module.default
     }
   } catch (error) {
@@ -73,8 +88,15 @@ async function loadEditor() {
 }
 
 function handleInitError(error) {
+  clearTimeout(fallbackTimer)
+  editorReady.value = false
   editorComponent.value = null
   loadError.value = error || new Error('Milkdown initialization failed')
+}
+
+function handleReady() {
+  clearTimeout(fallbackTimer)
+  editorReady.value = true
 }
 
 onMounted(loadEditor)
@@ -85,12 +107,26 @@ onBeforeUnmount(() => clearTimeout(fallbackTimer))
 .editor-load-state {
   flex: 1;
   min-height: 240px;
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 12px;
   color: var(--text-muted);
+}
+.editor-host {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.editor-load-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  min-height: 0;
+  background: var(--bg-card);
 }
 .editor-load-error .material-icons-outlined {
   font-size: 32px;

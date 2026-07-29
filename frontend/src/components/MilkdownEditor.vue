@@ -1,5 +1,10 @@
 <template>
-  <div ref="editorEl" class="crepe-editor"></div>
+  <div
+    ref="editorEl"
+    class="crepe-editor"
+    :class="{ 'is-ready': editorReady }"
+    :aria-busy="!editorReady"
+  ></div>
 </template>
 
 <script setup>
@@ -43,12 +48,17 @@ const resetEmptiedTaskItemPlugin = $prose(() => {
   })
 })
 
-const emit = defineEmits(['update', 'error'])
+const emit = defineEmits(['update', 'error', 'ready'])
 const editorEl = ref(null)
+const editorReady = ref(false)
 let crepeInstance = null
 let _destroyed = false
 let _editorElRef = null
 let _handleKeyScroll = null
+
+function nextFrame() {
+  return new Promise((resolve) => requestAnimationFrame(resolve))
+}
 
 function doTypewriterScroll() {
   if (_destroyed || !_editorElRef) return
@@ -108,6 +118,14 @@ onMounted(async () => {
     return
   }
 
+  // Crepe constructs the document progressively. Let styles and layout settle
+  // off-screen, then reveal the finished editor in one frame.
+  await nextFrame()
+  await nextFrame()
+  if (_destroyed) return
+  editorReady.value = true
+  emit('ready')
+
   // Typewriter scroll on arrow/cursor key navigation
   _handleKeyScroll = () => requestAnimationFrame(doTypewriterScroll)
   _editorElRef.addEventListener('keydown', _handleKeyScroll)
@@ -130,6 +148,11 @@ onBeforeUnmount(() => {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+  visibility: hidden;
+  scrollbar-gutter: stable;
+}
+.crepe-editor.is-ready {
+  visibility: visible;
 }
 .crepe-editor :deep(.milkdown) {
   height: 100%;
