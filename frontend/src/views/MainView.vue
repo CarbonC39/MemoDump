@@ -791,8 +791,9 @@ async function restoreFromUrl() {
     currentFolder.value = folder
     openSections.storage = true
     try {
-      const res = await apiClient.listNotes(folder)
-      displayNotes.value = enrichNotes(res.data)
+      const res = await apiClient.listNotesV2(folder)
+      displayNotes.value = enrichNotes(res.data.items.map(fromV2Note))
+      nextNotesCursor.value = res.data.nextCursor
     } catch (_) {
       displayNotes.value = allNotes.value
     }

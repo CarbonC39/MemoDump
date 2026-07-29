@@ -1,5 +1,5 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { outboxCount } from './outbox.js'
+import { outboxCount, outboxAll, outboxDelete } from './outbox.js'
 
 const PING_INTERVAL_MS = 30000
 
@@ -27,7 +27,6 @@ export function useAutosave({ editingNote, isDirty, saveNote, reload, ping }) {
     if (replaying) return
     if (typeof navigator !== 'undefined' && !navigator.onLine) return
 
-    const { outboxAll, outboxDelete } = await import('./outbox.js')
     let entries
     try { entries = await outboxAll() } catch (_) { return }
     if (!entries.length) return
