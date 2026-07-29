@@ -12,6 +12,10 @@
   },
   "editor": {
     "save": "保存",
+    "loadingRichEditor": "正在加载富文本编辑器…",
+    "richEditorLoadFailed": "富文本编辑器加载失败，你的 Markdown 内容仍然安全。",
+    "retry": "重试",
+    "openRaw": "打开源码编辑器",
     "untitled": "无标题",
     "deleteNote": "删除笔记",
     "rawMarkdown": "原始文本...",

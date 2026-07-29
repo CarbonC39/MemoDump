@@ -12,6 +12,10 @@
   },
   "editor": {
     "save": "Save",
+    "loadingRichEditor": "Loading rich editor…",
+    "richEditorLoadFailed": "The rich editor could not be loaded. Your Markdown is still safe.",
+    "retry": "Retry",
+    "openRaw": "Open raw editor",
     "untitled": "Untitled",
     "deleteNote": "Delete note",
     "rawMarkdown": "Raw markdown...",

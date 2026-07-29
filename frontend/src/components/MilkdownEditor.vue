@@ -45,7 +45,7 @@ const resetEmptiedTaskItemPlugin = $prose(() => {
   })
 })
 
-const emit = defineEmits(['update'])
+const emit = defineEmits(['update', 'error'])
 const editorEl = ref(null)
 let crepeInstance = null
 let _destroyed = false
@@ -99,6 +99,7 @@ onMounted(async () => {
   } catch (e) {
     // Editor creation failed (e.g. component was unmounted mid-creation)
     if (crepeInstance) { crepeInstance.destroy(); crepeInstance = null }
+    emit('error', e)
     return
   }
 

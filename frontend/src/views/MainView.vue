@@ -285,11 +285,12 @@
 
         <!-- Editor -->
         <div v-else-if="editingNote" class="editor-wrap">
-          <MilkdownEditor
+          <LazyMilkdownEditor
             v-if="editorMode === 'wysiwyg'"
             :key="editorKey"
             :initial-content="editingNote.content || ''"
             @update="onEditorUpdate"
+            @fallback-raw="editorMode = 'raw'"
           />
           <textarea
             v-else
@@ -479,7 +480,7 @@ import { ref, computed, onMounted, onBeforeUnmount, reactive, nextTick, watch, p
 import { useRouter, useRoute } from 'vue-router'
 import apiClient from '../api'
 import { stripMarkdown, isTimestampName } from '../utils'
-import MilkdownEditor from '../components/MilkdownEditor.vue'
+import LazyMilkdownEditor from '../components/LazyMilkdownEditor.vue'
 import FolderNode from '../components/FolderNode.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
 import ContextMenu from '../components/ContextMenu.vue'
