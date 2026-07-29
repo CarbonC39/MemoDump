@@ -10,7 +10,18 @@
 <script setup>
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from '../i18n'
-import { Crepe } from '@milkdown/crepe'
+import { CrepeBuilder } from '@milkdown/crepe/builder'
+import { blockEdit } from '@milkdown/crepe/feature/block-edit'
+import { codeMirror } from '@milkdown/crepe/feature/code-mirror'
+import { cursor } from '@milkdown/crepe/feature/cursor'
+import { imageBlock } from '@milkdown/crepe/feature/image-block'
+import { linkTooltip } from '@milkdown/crepe/feature/link-tooltip'
+import { listItem } from '@milkdown/crepe/feature/list-item'
+import { placeholder } from '@milkdown/crepe/feature/placeholder'
+import { table } from '@milkdown/crepe/feature/table'
+import { toolbar } from '@milkdown/crepe/feature/toolbar'
+import { languages } from '@codemirror/language-data'
+import { oneDark } from '@codemirror/theme-one-dark'
 import { $prose, replaceAll } from '@milkdown/utils'
 import { Plugin, PluginKey } from '@milkdown/prose/state'
 
@@ -100,18 +111,19 @@ onMounted(async () => {
   _editorElRef = editorEl.value
   const startingDocumentVersion = props.documentVersion
 
-  crepeInstance = new Crepe({
+  crepeInstance = new CrepeBuilder({
     root: editorEl.value,
     defaultValue: props.initialContent,
-    features: {
-      'latex': false,
-    },
-    featureConfigs: {
-      'placeholder': {
-        text: t('editorPlaceholder'),
-      }
-    }
   })
+    .addFeature(cursor)
+    .addFeature(listItem)
+    .addFeature(linkTooltip)
+    .addFeature(imageBlock)
+    .addFeature(blockEdit)
+    .addFeature(placeholder, { text: t('editorPlaceholder') })
+    .addFeature(toolbar)
+    .addFeature(codeMirror, { languages, theme: oneDark })
+    .addFeature(table)
   crepeInstance.editor.use(resetEmptiedTaskItemPlugin)
 
   crepeInstance.on((listener) => {
