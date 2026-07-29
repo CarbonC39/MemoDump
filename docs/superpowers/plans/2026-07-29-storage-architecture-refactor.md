@@ -529,3 +529,26 @@ Tests and build must pass at every commit. Avoid mixing API contract changes wit
 4. This version prepares only the minimum local repository/event seam for a future remote-sync major version.
 
 5. Add `/api/v2` for paginated response envelopes and the opaque-ID contract, while retaining current endpoints during migration.
+
+## Milkdown persistent-instance follow-up
+
+The async editor boundary removes Milkdown from the initial application bundle,
+but remounting it for every note still repeats Crepe and ProseMirror
+initialization. Hiding that initialization removes visible reflow without
+improving input latency.
+
+Implement one editor instance for the lifetime of the editor view:
+
+1. Mount `MilkdownEditor` without a per-note Vue key.
+2. Watch an explicit document identity plus content and replace the Milkdown
+   document through `replaceAll` when the selected note changes.
+3. Suppress listener updates caused by programmatic replacement so opening a
+   note cannot mark it dirty or overwrite it with a stale callback.
+4. Preserve the current document snapshot when switching between Raw and rich
+   modes.
+5. Keep the initial hidden-layout guard only for the first Crepe creation;
+   subsequent note switches must remain visible and update in place.
+
+Tests must cover initial creation, consecutive document replacements, ignored
+programmatic update events, and rapid selection changes. Production build
+output must continue to keep Milkdown outside the main entry chunk.
