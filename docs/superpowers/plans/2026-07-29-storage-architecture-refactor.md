@@ -641,3 +641,22 @@ This tranche extracts the navigation shell without moving storage operations:
 The component must preserve root/folder drag-and-drop behavior, Wails data
 directory controls, authentication-dependent logout, local-build status, theme
 toggle, file-input reset behavior and all current folder-tree actions.
+
+## MainView extraction tranche: dialogs and folder picker
+
+This tranche moves modal presentation out of the page orchestrator:
+
+1. Add `BasicDialogs.vue` for prompt, confirmation and copy-fallback dialogs.
+   Dialog state and Promise resolution remain in `useDialogs`.
+2. Add `FolderPickerDialog.vue` for destination selection and inline folder
+   creation. It receives the flattened folder list and controlled picker state.
+3. Keep folder creation, picker confirmation/cancellation, clipboard actions
+   and focus refs in the existing composable; expose component refs only where
+   the composable needs to focus or select DOM content.
+4. Move modal-specific CSS into the extracted components.
+5. Keep `ContextMenu` separate because it already has its own component and
+   workflow boundary.
+
+Backdrop dismissal, Enter/Escape handling, danger-button styling, iOS copy
+fallback selection, nested-folder indentation and inline-folder focus behavior
+must remain unchanged.
