@@ -64,11 +64,12 @@ const showRawFallback = ref(false)
 const editorReady = ref(false)
 let loadGeneration = 0
 let fallbackTimer = null
+const RAW_FALLBACK_DELAY_MS = 6000
 
 function startFallbackTimer() {
   clearTimeout(fallbackTimer)
   showRawFallback.value = false
-  fallbackTimer = setTimeout(() => { showRawFallback.value = true }, 1800)
+  fallbackTimer = setTimeout(() => { showRawFallback.value = true }, RAW_FALLBACK_DELAY_MS)
 }
 
 async function loadEditor() {
