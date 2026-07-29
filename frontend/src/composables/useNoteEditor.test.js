@@ -48,6 +48,24 @@ describe('useNoteEditor', () => {
     expect(editor.isDirty.value).toBe(false)
   })
 
+  it('accepts post-mount markdown normalization as a clean baseline', () => {
+    const editor = useNoteEditor()
+    editor.loadDocument({
+      path: 'n.md',
+      name: 'n',
+      tags: [],
+      content: '- [x] \n',
+    })
+    editor.onEditorReady('- [x] \n')
+    editor.onEditorReady('- [ ] \n')
+
+    expect(editor.editContent.value).toBe('- [ ] \n')
+    expect(editor.isDirty.value).toBe(false)
+
+    editor.onEditorUpdate('- [ ] typed\n')
+    expect(editor.isDirty.value).toBe(true)
+  })
+
   it('resets readiness when consecutive documents replace the editor content', () => {
     const editor = useNoteEditor()
     editor.loadDocument({ path: 'a.md', name: 'a', tags: [], content: 'a' })

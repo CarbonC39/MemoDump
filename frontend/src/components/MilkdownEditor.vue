@@ -71,6 +71,9 @@ let _created = false
 let _activeDocumentVersion = null
 let _replacingDocument = false
 let _latestMarkdown = props.initialContent
+let _hasUserInput = false
+let _handleUserInput = null
+let _handleEditorControl = null
 
 function nextFrame() {
   return new Promise((resolve) => requestAnimationFrame(resolve))
@@ -93,6 +96,7 @@ function doTypewriterScroll() {
 
 function replaceDocument() {
   if (!_created || _destroyed || !crepeInstance) return
+  _hasUserInput = false
   _replacingDocument = true
   try {
     crepeInstance.editor.action(replaceAll(props.initialContent))
@@ -110,6 +114,14 @@ watch(() => props.documentVersion, () => {
 onMounted(async () => {
   if (!editorEl.value) return
   _editorElRef = editorEl.value
+  _handleUserInput = () => { _hasUserInput = true }
+  _handleEditorControl = (event) => {
+    if (event.target.closest?.('button, input, select, textarea')) {
+      _hasUserInput = true
+    }
+  }
+  _editorElRef.addEventListener('input', _handleUserInput, true)
+  _editorElRef.addEventListener('pointerdown', _handleEditorControl, true)
   const startingDocumentVersion = props.documentVersion
 
   crepeInstance = new CrepeBuilder({
@@ -132,9 +144,14 @@ onMounted(async () => {
       if (!_destroyed) {
         _latestMarkdown = markdown
       }
-      if (!_destroyed && _created && !_replacingDocument) {
+      if (!_destroyed && _created && !_replacingDocument && _hasUserInput) {
         emit('update', markdown)
         requestAnimationFrame(doTypewriterScroll)
+      } else if (!_destroyed && _created && !_replacingDocument) {
+        // Crepe plugins can normalize an existing document shortly after
+        // creation (the listener itself is debounced). Treat those
+        // programmatic transactions as a new clean baseline, not an edit.
+        emit('document-ready', markdown)
       }
     })
   })
@@ -181,6 +198,12 @@ onBeforeUnmount(() => {
   _destroyed = true
   if (_editorElRef && _handleKeyScroll) {
     _editorElRef.removeEventListener('keydown', _handleKeyScroll)
+  }
+  if (_editorElRef && _handleUserInput) {
+    _editorElRef.removeEventListener('input', _handleUserInput, true)
+  }
+  if (_editorElRef && _handleEditorControl) {
+    _editorElRef.removeEventListener('pointerdown', _handleEditorControl, true)
   }
   if (crepeInstance) {
     crepeInstance.destroy()
