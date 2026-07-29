@@ -552,3 +552,27 @@ Implement one editor instance for the lifetime of the editor view:
 Tests must cover initial creation, consecutive document replacements, ignored
 programmatic update events, and rapid selection changes. Production build
 output must continue to keep Milkdown outside the main entry chunk.
+
+## Milkdown feature-level bundling follow-up
+
+The language modes listed by `@codemirror/language-data` are already emitted as
+dynamic chunks and are fetched only when their language is selected. Removing
+most languages would therefore reduce build output count but would not address
+the main first-open cost, while unnecessarily reducing compatibility with
+existing fenced code blocks.
+
+Replace the aggregate `@milkdown/crepe` import with the public modular API:
+
+1. Construct the editor with `CrepeBuilder`.
+2. Import and register only the currently enabled Crepe features through their
+   documented feature subpaths.
+3. Keep CodeMirror's language descriptions so uncommon existing code blocks
+   still load their grammar on demand.
+4. Do not import the LaTeX feature or KaTeX because math is disabled in this
+   version; remove its slash-menu and toolbar entry where applicable.
+5. Preserve feature configuration, theme CSS order, error fallback, persistent
+   editor behavior, and Markdown round trips.
+
+Compare the minified/gzip size of the generated Milkdown entry before and after.
+The main application entry must not absorb the editor dependencies, and tests
+plus the production build must pass before committing.
