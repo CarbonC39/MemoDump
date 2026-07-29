@@ -99,6 +99,8 @@
     "noResults": "未找到结果"
   },
   "notes": {
+    "loading": "加载中…",
+    "loadMore": "加载更多",
     "emptyNote": "空白笔记",
     "noNotes": "暂无笔记。点击新建笔记开始。",
     "noFolders": "暂无文件夹",

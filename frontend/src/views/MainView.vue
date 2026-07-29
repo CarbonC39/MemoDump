@@ -84,6 +84,7 @@
               @new-note="createNewNoteIn"
               @drop-note="onDropNote"
               @drop-folder="onDropFolder"
+              @expand="loadFolderNode"
             />
           </div>
         </div>
@@ -340,6 +341,11 @@
               </div>
             </div>
           </div>
+          <div v-if="nextNotesCursor" class="load-more-row">
+            <button class="btn btn-ghost" :disabled="loadingMoreNotes" @click="loadMoreNotes">
+              {{ loadingMoreNotes ? t('notes.loading') : t('notes.loadMore') }}
+            </button>
+          </div>
         </div>
         </div>
       </div>
@@ -563,6 +569,8 @@ const hasPrevPage = computed(() => prevView.search || !!prevView.folder)
 
 // Display notes
 const displayNotes = ref([])
+const nextNotesCursor = ref(null)
+const loadingMoreNotes = ref(false)
 
 // ===== Waterfall sort order =====
 const sortMenuOpen = ref(false)
@@ -619,6 +627,70 @@ function enrichNotes(notes) {
     hasCustomName: !isTimestampName(n.name),
     plainPreview: stripMarkdown(n.preview),
   }))
+}
+
+function fromV2Note(note) {
+  return {
+    path: note.id,
+    name: note.name,
+    tags: note.tags || [],
+    modTime: note.modifiedAt || 0,
+    preview: note.preview || '',
+  }
+}
+
+function fromV2Folder(folder) {
+  return {
+    path: folder.id,
+    name: folder.name,
+    hasChildren: folder.hasChildren,
+    loaded: false,
+    loading: false,
+    children: [],
+    notes: [],
+  }
+}
+
+function findFolderNode(nodes, path) {
+  for (const node of nodes) {
+    if (node.path === path) return node
+    const nested = findFolderNode(node.children || [], path)
+    if (nested) return nested
+  }
+  return null
+}
+
+async function loadFolderNode(path, { force = false } = {}) {
+  const node = findFolderNode(folders.value, path)
+  if (!node || (node.loaded && !force)) return
+  node.loading = true
+  try {
+    const [foldersRes, notesRes] = await Promise.all([
+      apiClient.listFoldersV2(path),
+      apiClient.listNotesV2(path),
+    ])
+    node.children = foldersRes.data.items.map(fromV2Folder)
+    node.notes = enrichNotes(notesRes.data.items.map(fromV2Note))
+    node.loaded = true
+  } finally {
+    node.loading = false
+  }
+}
+
+async function loadMoreNotes() {
+  if (!nextNotesCursor.value || loadingMoreNotes.value) return
+  loadingMoreNotes.value = true
+  try {
+    const res = await apiClient.listNotesV2(currentFolder.value, {
+      cursor: nextNotesCursor.value,
+    })
+    const more = enrichNotes(res.data.items.map(fromV2Note))
+    displayNotes.value = [...displayNotes.value, ...more]
+    if (!currentFolder.value) allNotes.value = displayNotes.value
+    nextNotesCursor.value = res.data.nextCursor
+  } finally {
+    loadingMoreNotes.value = false
+  }
 }
 
 const {
@@ -765,14 +837,16 @@ onBeforeUnmount(() => {
 async function loadAll() {
   try {
     const [notesRes, foldersRes] = await Promise.all([
-      apiClient.listNotes(''),
-      apiClient.listFolders(),
+      apiClient.listNotesV2(''),
+      apiClient.listFoldersV2(''),
     ])
-    allNotes.value = enrichNotes(notesRes.data)
-    folders.value = foldersRes.data || []
+    allNotes.value = enrichNotes(notesRes.data.items.map(fromV2Note))
+    nextNotesCursor.value = notesRes.data.nextCursor
+    folders.value = foldersRes.data.items.map(fromV2Folder)
     if (currentFolder.value) {
-      const folderNotesRes = await apiClient.listNotes(currentFolder.value)
-      displayNotes.value = enrichNotes(folderNotesRes.data)
+      const folderNotesRes = await apiClient.listNotesV2(currentFolder.value)
+      displayNotes.value = enrichNotes(folderNotesRes.data.items.map(fromV2Note))
+      nextNotesCursor.value = folderNotesRes.data.nextCursor
     } else {
       displayNotes.value = allNotes.value
     }
@@ -964,8 +1038,9 @@ async function selectFolder(folderPath) {
   searchOpen.value = false
   mobileSidebar.value = false
   try {
-    const res = await apiClient.listNotes(folderPath)
-    displayNotes.value = enrichNotes(res.data)
+    const res = await apiClient.listNotesV2(folderPath)
+    displayNotes.value = enrichNotes(res.data.items.map(fromV2Note))
+    nextNotesCursor.value = res.data.nextCursor
   } catch (e) {
     displayNotes.value = []
   }
@@ -978,8 +1053,11 @@ async function promptNewFolder(parentPath) {
   const path = parentPath ? parentPath + '/' + name : name
   try {
     await apiClient.createFolder(path)
-    const res = await apiClient.listFolders()
-    folders.value = res.data || []
+    if (parentPath) await loadFolderNode(parentPath, { force: true })
+    else {
+      const res = await apiClient.listFoldersV2('')
+      folders.value = res.data.items.map(fromV2Folder)
+    }
   } catch (e) { alert(t('errors.failed')) }
 }
 

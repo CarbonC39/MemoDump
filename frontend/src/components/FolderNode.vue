@@ -29,6 +29,7 @@
       </div>
     </div>
     <div v-if="expanded" class="folder-children">
+      <div v-if="folder.loading" class="folder-loading">{{ t('notes.loading') }}</div>
       <div v-if="folder.notes && folder.notes.length">
         <div
           v-for="note in folder.notes.filter(n => !/^\d{4}-\d{2}-\d{2}_\d{6}/.test(n.name))"
@@ -56,6 +57,7 @@
           @new-note="$emit('new-note', $event)"
           @drop-note="$emit('drop-note', $event)"
           @drop-folder="$emit('drop-folder', $event)"
+          @expand="$emit('expand', $event)"
         />
       </div>
     </div>
@@ -73,7 +75,7 @@ const props = defineProps({
   activeFolder: String,
 })
 
-const emit = defineEmits(['select', 'new-folder', 'rename', 'delete-folder', 'open-note', 'new-note', 'drop-note', 'drop-folder'])
+const emit = defineEmits(['select', 'new-folder', 'rename', 'delete-folder', 'open-note', 'new-note', 'drop-note', 'drop-folder', 'expand'])
 
 const expanded = ref(false)
 const isDragOver = ref(false)
@@ -81,6 +83,9 @@ let dragLeaveTimer = null
 
 function toggleExpand() {
   expanded.value = !expanded.value
+  if (expanded.value && !props.folder.loaded) {
+    emit('expand', props.folder.path)
+  }
 }
 
 function onFolderDragStart(e) {
@@ -129,6 +134,11 @@ function onDrop(e) {
 <style scoped>
 .folder-node {
   font-size: 13px;
+}
+.folder-loading {
+  padding: 6px 28px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 .folder-row {
   display: flex;
