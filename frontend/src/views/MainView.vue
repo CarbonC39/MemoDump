@@ -235,8 +235,10 @@
 
         <!-- Normal content: hidden when settings is open -->
         <div v-show="!showSettings" class="content-inner">
+          <div v-if="isInitializing" class="app-init-state" aria-busy="true"></div>
+
           <!-- Search results (right-side panel) -->
-          <div v-if="searchOpen" class="search-results-view">
+          <div v-else-if="searchOpen" class="search-results-view">
           <div class="search-inputs-wrap">
             <input v-model="searchQuery" class="input" :placeholder="t('search.searchContent')" @input="doSearch" />
             <input v-model="searchTag" class="input" :placeholder="t('search.searchTags')" @input="doSearch" />
@@ -494,6 +496,7 @@ import { useContextMenu } from '../composables/useContextMenu'
 import { outboxPut, outboxAll, buildEntry } from '../composables/outbox.js'
 import { useTheme } from '../composables/useTheme.js'
 import { useNoteEditor } from '../composables/useNoteEditor.js'
+import { preloadMilkdownEditor } from '../components/milkdownLoader.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -503,6 +506,10 @@ const { themeIcon, setTheme, theme } = useTheme()
 const { isWailsApp, isLocalBuild, wailsDataDir, serverNoAuth, mobileSidebar, openSections, toggleSection, initWails, changeDataDir, doLogout } = useAppInit()
 
 const showSettings = ref(false)
+const isInitializing = ref(true)
+// Start fetching the editor chunk as soon as the main view is evaluated. This
+// runs in parallel with note/folder and IndexedDB initialization.
+preloadMilkdownEditor().catch(() => {})
 const layout = useCardLayout()
 const { expandedCards, fullContentCache, overlongStates, cardHeights, columnCount, updateColumnCount, toggleExpand, estimateHeight, splitIntoColumns, observeMeasure, disconnectMeasure, vCheckOverflow, vMeasureCard, cardText } = layout
 provide('layout', layout)
@@ -804,7 +811,7 @@ async function restoreFromUrl() {
 }
 onMounted(async () => {
   window.addEventListener('keydown', handleGlobalKeydown)
-  await loadAll()
+  const listLoad = loadAll()
 
   // Restore pending offline writes from a previous session (replaces the old
   // single-slot localStorage draft). Most recent entry goes back into the
@@ -821,6 +828,10 @@ onMounted(async () => {
   } catch (_) {}
 
   if (!restored) await restoreFromUrl()
+  isInitializing.value = false
+  // Listing continues in parallel with editor startup. Await it only so an
+  // initialization rejection is contained before this lifecycle task ends.
+  await listLoad
   if (typeof navigator === 'undefined' || navigator.onLine) replayAll()
 })
 
@@ -1581,6 +1592,10 @@ provide('dnd', dnd)
    Do NOT change the waterfall/search layout — those remain block. */
 .content-area.is-editing .content-inner {
   height: 100%;
+}
+.app-init-state {
+  min-height: 100%;
+  background: var(--bg);
 }
 
 /* Search results */

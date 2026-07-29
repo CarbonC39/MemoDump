@@ -11,19 +11,29 @@
     <p>{{ t('editor.richEditorLoadFailed') }}</p>
     <div class="editor-load-actions">
       <button class="btn btn-primary" @click="loadEditor">{{ t('editor.retry') }}</button>
-      <button class="btn btn-ghost" @click="$emit('fallback-raw')">{{ t('editor.openRaw') }}</button>
+      <button class="btn btn-icon btn-ghost" :title="t('editor.openRaw')" :aria-label="t('editor.openRaw')" @click="$emit('fallback-raw')">
+        <span class="material-icons-outlined">code</span>
+      </button>
     </div>
   </div>
-  <div v-else class="editor-load-state" aria-live="polite">
+  <div v-else class="editor-load-state" aria-busy="true">
     <span class="editor-load-spinner" aria-hidden="true"></span>
-    <p>{{ t('editor.loadingRichEditor') }}</p>
-    <button class="btn btn-ghost" @click="$emit('fallback-raw')">{{ t('editor.openRaw') }}</button>
+    <button
+      v-if="showRawFallback"
+      class="btn btn-icon btn-ghost delayed-raw-button"
+      :title="t('editor.openRaw')"
+      :aria-label="t('editor.openRaw')"
+      @click="$emit('fallback-raw')"
+    >
+      <span class="material-icons-outlined">code</span>
+    </button>
   </div>
 </template>
 
 <script setup>
-import { shallowRef, ref, onMounted } from 'vue'
+import { shallowRef, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from '../i18n'
+import { preloadMilkdownEditor } from './milkdownLoader'
 
 defineProps({
   initialContent: { type: String, default: '' },
@@ -33,17 +43,32 @@ defineEmits(['update', 'fallback-raw'])
 const { t } = useI18n()
 const editorComponent = shallowRef(null)
 const loadError = ref(null)
+const showRawFallback = ref(false)
 let loadGeneration = 0
+let fallbackTimer = null
+
+function startFallbackTimer() {
+  clearTimeout(fallbackTimer)
+  showRawFallback.value = false
+  fallbackTimer = setTimeout(() => { showRawFallback.value = true }, 1800)
+}
 
 async function loadEditor() {
   const generation = ++loadGeneration
   editorComponent.value = null
   loadError.value = null
+  startFallbackTimer()
   try {
-    const module = await import('./MilkdownEditor.vue')
-    if (generation === loadGeneration) editorComponent.value = module.default
+    const module = await preloadMilkdownEditor()
+    if (generation === loadGeneration) {
+      clearTimeout(fallbackTimer)
+      editorComponent.value = module.default
+    }
   } catch (error) {
-    if (generation === loadGeneration) loadError.value = error
+    if (generation === loadGeneration) {
+      clearTimeout(fallbackTimer)
+      loadError.value = error
+    }
   }
 }
 
@@ -53,6 +78,7 @@ function handleInitError(error) {
 }
 
 onMounted(loadEditor)
+onBeforeUnmount(() => clearTimeout(fallbackTimer))
 </script>
 
 <style scoped>
@@ -70,12 +96,13 @@ onMounted(loadEditor)
   font-size: 32px;
   color: var(--danger);
 }
-.editor-load-state p {
-  margin: 0;
-}
 .editor-load-actions {
   display: flex;
   gap: 8px;
+}
+.delayed-raw-button {
+  position: absolute;
+  margin-top: 72px;
 }
 .editor-load-spinner {
   width: 24px;
