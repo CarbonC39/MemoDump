@@ -181,7 +181,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, reactive, watch, provide } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import apiClient from '../api'
 import NoteEditorView from '../components/NoteEditorView.vue'
@@ -207,12 +207,13 @@ import { useNoteBrowser } from '../composables/useNoteBrowser.js'
 import { useNoteSearch } from '../composables/useNoteSearch.js'
 import { useNotePersistence } from '../composables/useNotePersistence.js'
 import { useFolderActions } from '../composables/useFolderActions.js'
+import { useWorkspaceNavigation } from '../composables/useWorkspaceNavigation.js'
 import { preloadMilkdownEditor } from '../components/milkdownLoader.js'
 
 const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
-const { themeIcon, setTheme, theme } = useTheme()
+const { themeIcon, setTheme } = useTheme()
 
 const { isWailsApp, isLocalBuild, wailsDataDir, serverNoAuth, mobileSidebar, openSections, toggleSection, initWails, changeDataDir, doLogout } = useAppInit()
 
@@ -224,17 +225,18 @@ preloadMilkdownEditor().catch(() => {})
 const layout = useCardLayout()
 provide('layout', layout)
 
+const noteBrowser = useNoteBrowser({ api: apiClient })
 const {
   searchOpen, searchResults, searchQuery, searchTag, doSearch,
 } = useNoteSearch({ api: apiClient })
 
 const {
-  allNotes, folders, currentFolder, displayNotes,
+  folders, currentFolder,
   nextNotesCursor, loadingMoreNotes, sortMode,
   sortedDisplayNotes, flatFoldersForPicker,
-  setSort, loadFolderNode, loadMoreNotes, loadFolderPage,
+  setSort, loadFolderNode, loadMoreNotes,
   loadAll, refreshRootFolders,
-} = useNoteBrowser({ api: apiClient })
+} = noteBrowser
 
 const {
   confirmDialog, showConfirm, acceptConfirm, cancelConfirm,
@@ -248,7 +250,6 @@ const noteEditor = useNoteEditor()
 const {
   editingNote, editName, editTags, editFolder, editContent, tagInput,
   editorKey, isDirty, isSaving, editorMode,
-  loadDocument, restoreDraft, createDocument, clearDocument,
   onEditorUpdate, onEditorReady, addTag, toggleEditorMode,
 } = noteEditor
 const editorEverMounted = ref(false)
@@ -256,20 +257,36 @@ watch(editingNote, (note) => {
   if (note) editorEverMounted.value = true
 }, { immediate: true })
 
-// View context captured before entering the editor, used by the back button.
-const prevView = reactive({ folder: '', search: false })
-
-// True when there is a prior view (folder/search) to return to; otherwise the
-// back button acts as a Home button that goes to All Notes.
-const hasPrevPage = computed(() => prevView.search || !!prevView.folder)
+let updateUrlHandler = () => {}
 
 const {
   saveError, openDocument, saveNote, deleteCurrent,
 } = useNotePersistence({
   api: apiClient,
   editor: noteEditor,
-  onSaved: updateUrl,
+  onSaved: (...args) => updateUrlHandler(...args),
 })
+
+const { showDraftRestoredBanner, saveStatus, replayAll } = useAutosave({
+  editingNote, isDirty, saveNote,
+  reload: loadAll, ping: () => apiClient.ping(), saveError,
+})
+
+const {
+  hasPrevPage, updateUrl, forceNewNote: _forceNewNote,
+  newNote, createNewNoteIn, openNote, selectFolder,
+  handleAllClick, openSearchPanel, goBack, deleteCurrentNote,
+  initialize,
+} = useWorkspaceNavigation({
+  router, route,
+  editor: noteEditor,
+  browser: noteBrowser,
+  searchOpen, showSettings, mobileSidebar, openSections,
+  openDocument, deleteCurrent, loadAll,
+  readOutbox: outboxAll,
+  replayAll, showDraftRestoredBanner, showConfirm, t,
+})
+updateUrlHandler = updateUrl
 
 const {
   promptNewFolder,
@@ -291,46 +308,6 @@ const {
   contextMenu, openContextMenuBtn, closeContextMenu, menuEditNote, menuCopyContent,
   menuDuplicateNote, menuDeleteNote, menuDownloadNote, menuMoveNote,
 } = useContextMenu({ openNote, isDirty, loadAll, editingNote, _forceNewNote, showConfirm, showFolderPicker, copyDialog })
-
-async function handleAllClick() {
-  if (!confirmLeave()) return
-  showSettings.value = false
-  editingNote.value = null
-  isDirty.value = false
-  searchOpen.value = false
-  currentFolder.value = ''
-  updateUrl()
-  await loadAll()
-}
-
-async function goBack() {
-  if (!confirmLeave()) return
-  editingNote.value = null
-  isDirty.value = false
-  if (prevView.search) {
-    searchOpen.value = true
-    currentFolder.value = ''
-    updateUrl()
-  } else if (prevView.folder) {
-    await selectFolder(prevView.folder)
-  } else {
-    await handleAllClick()
-  }
-}
-
-function openSearchPanel() {
-  if (!confirmLeave()) return
-  showSettings.value = false
-  searchOpen.value = true
-  editingNote.value = null
-  isDirty.value = false
-  updateUrl()
-}
-
-const { showDraftRestoredBanner, saveStatus, replayAll } = useAutosave({
-  editingNote, isDirty, saveNote,
-  reload: loadAll, ping: () => apiClient.ping(), saveError,
-})
 
 const saveBtnClass = computed(() => {
   // Clean/synced: outlined. Dirty/error/offline: filled blue.
@@ -365,139 +342,16 @@ function handleGlobalKeydown(e) {
   }
 }
 
-// ======= URL STATE =======
-// Encode current view state into URL query params for shareable/bookmarkable links
-function updateUrl() {
-  const q = {}
-  if (editingNote.value?.path) q.note = editingNote.value.path
-  else if (currentFolder.value) q.folder = currentFolder.value
-  else if (searchOpen.value) q.search = '1'
-  router.replace({ query: q })
-}
-
-async function restoreFromUrl() {
-  const { note, folder } = route.query
-  if (note) {
-    try {
-      const res = await apiClient.getNote(note)
-      const data = res.data
-      loadDocument(data)
-      searchOpen.value = false
-      return
-    } catch (_) { /* fall through */ }
-  }
-  if (folder) {
-    openSections.storage = true
-    try {
-      await loadFolderPage(folder)
-    } catch (_) {
-      displayNotes.value = allNotes.value
-    }
-    return
-  }
-  // Default: show all notes, open new note bypassing confirmLeave (startup)
-  _forceNewNote()
-}
 onMounted(async () => {
   window.addEventListener('keydown', handleGlobalKeydown)
-  const listLoad = loadAll()
-
-  // Restore pending offline writes from a previous session (replaces the old
-  // single-slot localStorage draft). Most recent entry goes back into the
-  // editor with a banner; everything (including it) is then replayed if online.
-  let restored = false
-  try {
-    const entries = await outboxAll()
-    if (entries.length) {
-      const latest = entries[entries.length - 1]
-      restoreDraft(latest)
-      showDraftRestoredBanner.value = true
-      restored = true
-    }
-  } catch (_) {}
-
-  if (!restored) await restoreFromUrl()
-  isInitializing.value = false
-  // Listing continues in parallel with editor startup. Await it only so an
-  // initialization rejection is contained before this lifecycle task ends.
-  await listLoad
-  if (typeof navigator === 'undefined' || navigator.onLine) replayAll()
+  await initialize({
+    onReady: () => { isInitializing.value = false },
+  })
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
 })
-
-function confirmLeave() {
-  if (!isDirty.value) return true
-  return confirm(t('modals.unsavedChanges'))
-}
-
-// Internal helper: create new note without confirmLeave check (used after delete/startup)
-function _forceNewNote() {
-  showSettings.value = false
-  prevView.folder = currentFolder.value
-  prevView.search = searchOpen.value
-  createDocument(currentFolder.value)
-  searchOpen.value = false
-  mobileSidebar.value = false
-  updateUrl()
-}
-
-function newNote() {
-  if (!confirmLeave()) return
-  _forceNewNote()
-}
-
-function createNewNoteIn(folderPath) {
-  if (!confirmLeave()) return
-  _forceNewNote()
-  editFolder.value = folderPath
-  openSections.storage = true
-}
-
-async function openNote(note) {
-  if (!confirmLeave()) return
-  prevView.folder = currentFolder.value
-  prevView.search = searchOpen.value
-  try {
-    await openDocument(note)
-    searchOpen.value = false
-    mobileSidebar.value = false
-    updateUrl()
-  } catch (e) {
-    console.error('Failed to open note', e)
-  }
-}
-
-async function deleteCurrentNote() {
-  if (!(await showConfirm({
-    title: t('modals.deleteNote'),
-    message: t('modals.deleteNoteMsg'),
-    okLabel: t('modals.delete'),
-    danger: true,
-  }))) return
-  try {
-    await deleteCurrent()
-    await loadAll()
-    _forceNewNote()
-  } catch (e) {
-    alert(t('errors.deleteFailed'))
-  }
-}
-
-async function selectFolder(folderPath) {
-  if (!confirmLeave()) return
-  showSettings.value = false
-  editingNote.value = null
-  isDirty.value = false
-  searchOpen.value = false
-  mobileSidebar.value = false
-  try {
-    await loadFolderPage(folderPath)
-  } catch (_) {}
-  updateUrl()
-}
 
 // ===== FOLDER PICKER FOR META PANEL =====
 async function pickEditFolder() {
