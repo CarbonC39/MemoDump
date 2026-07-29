@@ -223,3 +223,41 @@ func handleV2ListFolders(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	writeJSON(w, http.StatusOK, folderPageV2{Items: items})
 }
+
+func handleV2Search(w http.ResponseWriter, r *http.Request) {
+	limit, cursor, ok := v2ListArgs(w, r)
+	if !ok {
+		return
+	}
+	query := strings.ToLower(r.URL.Query().Get("q"))
+	tagQuery := strings.ToLower(r.URL.Query().Get("tag"))
+	notes := make([]noteSummaryV2, 0)
+	_ = filepath.Walk(dataDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil || info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
+			return nil
+		}
+		note, readErr := readNote(path, dataDir, true)
+		if readErr != nil {
+			return nil
+		}
+		if query != "" && !strings.Contains(strings.ToLower(note.Content), query) {
+			return nil
+		}
+		if tagQuery != "" {
+			matched := false
+			for _, tag := range note.Tags {
+				if strings.Contains(strings.ToLower(tag), tagQuery) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil
+			}
+		}
+		notes = append(notes, noteToSummaryV2(*note))
+		return nil
+	})
+	sortNotesV2(notes)
+	writeJSON(w, http.StatusOK, pageNotesV2(notes, cursor, limit))
+}

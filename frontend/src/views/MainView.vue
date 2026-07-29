@@ -285,22 +285,16 @@
         </div>
 
         <!-- Editor -->
-        <div v-else-if="editingNote" class="editor-wrap">
-          <LazyMilkdownEditor
-            v-if="editorMode === 'wysiwyg'"
-            :key="editorKey"
-            :initial-content="editingNote.content || ''"
-            @update="onEditorUpdate"
-            @fallback-raw="editorMode = 'raw'"
-          />
-          <textarea
-            v-else
-            class="raw-editor"
-            v-model="editContent"
-            @input="isDirty = true"
-            :placeholder="t('editor.rawMarkdown')"
-          ></textarea>
-        </div>
+        <NoteEditorView
+          v-else-if="editingNote"
+          :mode="editorMode"
+          :editor-key="editorKey"
+          :initial-content="editingNote.content || ''"
+          :content="editContent"
+          @update="onEditorUpdate"
+          @update:mode="editorMode = $event"
+          @update:content="editContent = $event; isDirty = true"
+        />
 
         <!-- Waterfall notes view -->
         <div v-else class="waterfall-view">
@@ -486,7 +480,7 @@ import { ref, computed, onMounted, onBeforeUnmount, reactive, nextTick, watch, p
 import { useRouter, useRoute } from 'vue-router'
 import apiClient from '../api'
 import { stripMarkdown, isTimestampName } from '../utils'
-import LazyMilkdownEditor from '../components/LazyMilkdownEditor.vue'
+import NoteEditorView from '../components/NoteEditorView.vue'
 import FolderNode from '../components/FolderNode.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
 import ContextMenu from '../components/ContextMenu.vue'
@@ -1021,8 +1015,8 @@ function doSearch() {
   }
   searchDebounceTimer = setTimeout(async () => {
     try {
-      const res = await apiClient.search(searchQuery.value, searchTag.value)
-      searchResults.value = enrichNotes(res.data)
+      const res = await apiClient.searchV2(searchQuery.value, searchTag.value)
+      searchResults.value = enrichNotes(res.data.items.map(fromV2Note))
     } catch (e) {
       searchResults.value = []
     }
@@ -1582,34 +1576,10 @@ provide('dnd', dnd)
   flex-direction: column;
 }
 
-.editor-wrap {
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 20px 60px;
-  background: var(--bg-card);
-  min-height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
 /* Editing mode: only change height so raw textarea fills viewport.
    Do NOT change the waterfall/search layout — those remain block. */
 .content-area.is-editing .content-inner {
   height: 100%;
-}
-.raw-editor {
-  flex: 1;
-  width: 100%;
-  height: 100%;
-  border: none;
-  outline: none;
-  resize: none;
-  padding: 16px;
-  font-family: var(--editor-font-monospace);
-  font-size: var(--editor-raw-font-size);
-  line-height: 1.7;
-  color: var(--text);
-  background: var(--bg-card);
 }
 
 /* Search results */
@@ -2003,7 +1973,6 @@ provide('dnd', dnd)
   .main-header {
     padding: 0 8px;
   }
-  .editor-wrap { padding: 16px 14px; }
   .waterfall-view { padding: 10px 12px; }
   .search-results-view { padding: 14px 12px; }
   /* Search inputs stack vertically on small screens */

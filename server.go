@@ -96,6 +96,7 @@ func buildAPIMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/config", handleConfig)
 	mux.HandleFunc("GET /api/v2/notes", authMiddleware(handleV2ListNotes))
 	mux.HandleFunc("GET /api/v2/folders", authMiddleware(handleV2ListFolders))
+	mux.HandleFunc("GET /api/v2/search", authMiddleware(handleV2Search))
 	mux.HandleFunc("GET /custom.css", handleCustomCSS)
 	return mux
 }

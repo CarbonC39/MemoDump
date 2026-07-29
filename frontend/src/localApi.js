@@ -402,6 +402,33 @@ const localApi = {
     return { data: { items } }
   },
 
+  async searchV2(q, tag, { cursor = '', limit = 50 } = {}) {
+    const legacy = (await this.search(q, tag)).data
+    const notes = legacy.map(n => ({
+      id: n.path,
+      name: n.name,
+      parentId: dirname(n.path),
+      tags: n.tags || [],
+      modifiedAt: n.modTime || 0,
+      preview: n.preview || '',
+    }))
+    let start = 0
+    if (cursor) {
+      const decoded = decodeCursor(cursor)
+      start = notes.findIndex(n =>
+        n.modifiedAt < decoded.modifiedAt ||
+        (n.modifiedAt === decoded.modifiedAt && n.id > decoded.id))
+      if (start < 0) start = notes.length
+    }
+    const size = Math.min(200, Math.max(1, Number(limit) || 50))
+    const items = notes.slice(start, start + size)
+    const last = items.at(-1)
+    const nextCursor = start + size < notes.length && last
+      ? encodeCursor({ modifiedAt: last.modifiedAt, id: last.id })
+      : null
+    return { data: { items, nextCursor } }
+  },
+
   async createFolder(path) {
     if (!path) return apiError(400, 'Path is illegal')
     await write((notes, folders) => ensureFolders(folders, path))

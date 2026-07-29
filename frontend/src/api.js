@@ -66,6 +66,11 @@ const remoteApi = {
     listFoldersV2(parent = '') {
         return api.get('/v2/folders', { params: { parent } })
     },
+    searchV2(q, tag, { cursor = '', limit = 50 } = {}) {
+        const params = { q, tag, limit }
+        if (cursor) params.cursor = cursor
+        return api.get('/v2/search', { params })
+    },
     createFolder(path) {
         return api.post('/folders', { path })
     },
