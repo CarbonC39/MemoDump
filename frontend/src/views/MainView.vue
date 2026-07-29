@@ -238,53 +238,16 @@
           <div v-if="isInitializing" class="app-init-state" aria-busy="true"></div>
 
           <!-- Search results (right-side panel) -->
-          <div v-if="!isInitializing && searchOpen" class="search-results-view">
-          <div class="search-inputs-wrap">
-            <input v-model="searchQuery" class="input" :placeholder="t('search.searchContent')" @input="doSearch" />
-            <input v-model="searchTag" class="input" :placeholder="t('search.searchTags')" @input="doSearch" />
-          </div>
-          <div v-if="!searchQuery && !searchTag" class="empty-state-big">
-            <span class="material-icons-outlined" style="font-size:48px;color:var(--border)">search</span>
-            <p>{{ t('search.typeToSearch') }}</p>
-          </div>
-          <div v-else-if="searchResults.length === 0" class="empty-state-big">
-            <span class="material-icons-outlined" style="font-size:48px;color:var(--border)">search_off</span>
-            <p>{{ t('search.noResults') }}</p>
-          </div>
-          <div class="waterfall-grid">
-            <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(searchResults)" :key="ci">
-              <div v-for="note in col" :key="note.path" class="waterfall-card" v-measure-card="note.path"
-                :draggable="hoveredNotePath !== note.path" @dragstart="onNoteDragStart($event, note)">
-                <div class="card-header" v-if="note.hasCustomName">
-                  <div class="card-name">{{ note.name }}</div>
-                  <button class="btn btn-icon btn-ghost btn-sm card-menu-btn" @click.stop="openContextMenuBtn($event, note)">
-                    <span class="material-icons-outlined">more_vert</span>
-                  </button>
-                </div>
-                <button v-else class="btn btn-icon btn-ghost btn-sm card-menu-btn" style="position: absolute; top: 12px; right: 14px; margin: 0; z-index: 2" @click.stop="openContextMenuBtn($event, note)">
-                  <span class="material-icons-outlined">more_vert</span>
-                </button>
-                <div class="card-preview" draggable="false"
-                  @mouseenter="hoveredNotePath = note.path"
-                  @mouseleave="hoveredNotePath = null"
-                  @dragstart.stop v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
-                  <template v-if="cardText(note)">{{ cardText(note) }}</template>
-                  <span v-else class="card-empty">{{ t('notes.emptyNote') }}</span>
-                </div>
-                <div class="card-expand-bar" v-if="overlongStates[note.path]" @click.stop="toggleExpand(note.path)">
-                  <span class="material-icons-outlined">
-                    {{ expandedCards.has(note.path) ? 'expand_less' : 'expand_more' }}
-                  </span>
-                </div>
-                <div class="card-footer" v-if="note.tags && note.tags.length">
-                  <div class="card-tags">
-                    <span class="tag" v-for="t in note.tags" :key="t">{{ t }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+          <SearchNotesView
+            v-if="!isInitializing && searchOpen"
+            v-model:query="searchQuery"
+            v-model:tag="searchTag"
+            v-model:hovered-note-path="hoveredNotePath"
+            :notes="searchResults"
+            @search="doSearch"
+            @dragstart="onNoteDragStart"
+            @contextmenu="openContextMenuBtn"
+          />
 
         <!-- Editor -->
         <NoteEditorView
@@ -301,50 +264,16 @@
         />
 
         <!-- Waterfall notes view -->
-        <div v-if="!isInitializing && !searchOpen && !editingNote" class="waterfall-view">
-          <div v-if="displayNotes.length === 0" class="empty-state-big">
-            <span class="material-icons-outlined" style="font-size:56px;color:var(--border)">description</span>
-            <p>{{ t('notes.noNotes') }}</p>
-          </div>
-          <div v-else class="waterfall-grid">
-            <div class="waterfall-col" v-for="(col, ci) in splitIntoColumns(sortedDisplayNotes)" :key="ci">
-              <div v-for="note in col" :key="note.path" class="waterfall-card" v-measure-card="note.path"
-                :draggable="hoveredNotePath !== note.path" @dragstart="onNoteDragStart($event, note)">
-                <div class="card-header" v-if="note.hasCustomName">
-                  <div class="card-name">{{ note.name }}</div>
-                  <button class="btn btn-icon btn-ghost btn-sm card-menu-btn" @click.stop="openContextMenuBtn($event, note)">
-                    <span class="material-icons-outlined">more_vert</span>
-                  </button>
-                </div>
-                <button v-else class="btn btn-icon btn-ghost btn-sm card-menu-btn" style="position: absolute; top: 12px; right: 14px; margin: 0; z-index: 2" @click.stop="openContextMenuBtn($event, note)">
-                  <span class="material-icons-outlined">more_vert</span>
-                </button>
-                <div class="card-preview" draggable="false"
-                  @mouseenter="hoveredNotePath = note.path"
-                  @mouseleave="hoveredNotePath = null"
-                  @dragstart.stop v-check-overflow="note.path" :class="{ expanded: expandedCards.has(note.path) }">
-                  <template v-if="cardText(note)">{{ cardText(note) }}</template>
-                  <span v-else class="card-empty">{{ t('notes.emptyNote') }}</span>
-                </div>
-                <div class="card-expand-bar" v-if="overlongStates[note.path]" @click.stop="toggleExpand(note.path)">
-                  <span class="material-icons-outlined">
-                    {{ expandedCards.has(note.path) ? 'expand_less' : 'expand_more' }}
-                  </span>
-                </div>
-                <div class="card-footer" v-if="note.tags && note.tags.length">
-                  <div class="card-tags">
-                    <span class="tag" v-for="t in note.tags" :key="t">{{ t }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div v-if="nextNotesCursor" class="load-more-row">
-            <button class="btn btn-ghost" :disabled="loadingMoreNotes" @click="loadMoreNotes">
-              {{ loadingMoreNotes ? t('notes.loading') : t('notes.loadMore') }}
-            </button>
-          </div>
-        </div>
+        <BrowseNotesView
+          v-if="!isInitializing && !searchOpen && !editingNote"
+          v-model:hovered-note-path="hoveredNotePath"
+          :notes="sortedDisplayNotes"
+          :has-more="Boolean(nextNotesCursor)"
+          :loading-more="loadingMoreNotes"
+          @load-more="loadMoreNotes"
+          @dragstart="onNoteDragStart"
+          @contextmenu="openContextMenuBtn"
+        />
         </div>
       </div>
 
@@ -485,6 +414,8 @@ import { useRouter, useRoute } from 'vue-router'
 import apiClient from '../api'
 import { stripMarkdown, isTimestampName } from '../utils'
 import NoteEditorView from '../components/NoteEditorView.vue'
+import BrowseNotesView from '../components/BrowseNotesView.vue'
+import SearchNotesView from '../components/SearchNotesView.vue'
 import FolderNode from '../components/FolderNode.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
 import ContextMenu from '../components/ContextMenu.vue'
@@ -513,7 +444,6 @@ const isInitializing = ref(true)
 // runs in parallel with note/folder and IndexedDB initialization.
 preloadMilkdownEditor().catch(() => {})
 const layout = useCardLayout()
-const { expandedCards, fullContentCache, overlongStates, cardHeights, columnCount, updateColumnCount, toggleExpand, estimateHeight, splitIntoColumns, observeMeasure, disconnectMeasure, vCheckOverflow, vMeasureCard, cardText } = layout
 provide('layout', layout)
 
 const searchOpen = ref(false)
@@ -1604,132 +1534,6 @@ provide('dnd', dnd)
   background: var(--bg);
 }
 
-/* Search results */
-.search-results-view {
-  padding: 20px 24px;
-}
-.search-inputs-wrap {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
-}
-.search-inputs-wrap .input {
-  flex: 1;
-  min-width: 160px;
-}
-
-/* Waterfall */
-.waterfall-view {
-  padding: 20px 24px;
-}
-.empty-state-big {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 80px 20px;
-  color: var(--text-muted);
-  gap: 12px;
-}
-.empty-state-big p { font-size: 14px; }
-.waterfall-grid {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-}
-.waterfall-col {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-.waterfall-card {
-  position: relative;
-  background: var(--bg-card);
-  border: 1px solid rgba(0, 0, 0, 0.04);
-  border-radius: 14px;
-  padding: 16px 18px;
-  margin-bottom: 16px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.03);
-  transition: box-shadow 0.2s ease, background 0.2s ease;
-}
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 6px;
-}
-.card-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--waterfall-title);
-  margin-bottom: 0px;
-  flex: 1;
-  word-break: break-all;
-}
-.card-menu-btn {
-  margin-left: 8px;
-  margin-top: -4px;
-  margin-right: -4px;
-  color: var(--text-muted);
-  /* Increase touch target on mobile */
-  min-width: 36px;
-  min-height: 36px;
-}
-.card-menu-btn:hover {
-  background: var(--border-light);
-  color: var(--text);
-}
-/* Card preview — no click action, just display */
-.card-preview {
-  font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.6;
-  white-space: pre-line;
-  word-break: break-word;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 6;
-  line-clamp: 6;
-  overflow: hidden;
-  transition: max-height 0.25s ease, overflow 0.25s;
-  cursor: text;
-  user-select: text;
-  -webkit-user-select: text;
-  -webkit-user-drag: none;
-}
-.card-preview.expanded {
-  display: block;
-  -webkit-line-clamp: unset;
-  line-clamp: unset;
-}
-.card-expand-bar {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 4px 0;
-  margin-top: 4px;
-  margin-bottom: -8px;
-  cursor: pointer;
-  color: var(--primary);
-  border-radius: 6px;
-  transition: background 0.2s;
-}
-.card-expand-bar:hover {
-  background: var(--bg);
-  color: var(--primary-dark);
-}
-.card-expand-bar .material-icons-outlined {
-  font-size: 20px;
-}
-.card-footer { margin-top: 8px; }
-.card-tags { display: flex; flex-wrap: wrap; gap: 4px; }
-.card-empty {
-  color: var(--text-muted);
-  font-style: italic;
-}
-
 /* ======= SORT CONTROL ======= */
 .sort-control {
   position: relative;
@@ -1988,28 +1792,15 @@ provide('dnd', dnd)
     background: rgba(0,0,0,0.25);
   }
   .menu-toggle { display: flex; }
-  /* single column on mobile */
-  .waterfall-grid { flex-direction: column; }
-  .waterfall-col { flex: none; width: 100%; }
   /* Header stays single row on mobile */
   .main-header {
     padding: 0 8px;
   }
-  .waterfall-view { padding: 10px 12px; }
-  .search-results-view { padding: 14px 12px; }
-  /* Search inputs stack vertically on small screens */
-  .search-inputs-wrap { flex-direction: column; gap: 8px; }
-  .search-inputs-wrap .input { min-width: unset; }
   /* Prevent iOS zoom on input focus by ensuring font-size >= 16px */
   .input,
   .header-title-input,
   .tag-inline-input,
   select { font-size: 16px !important; }
-  /* Wider cards on mobile since single column */
-  .waterfall-card {
-    border-radius: 10px;
-    padding: 14px 16px;
-  }
 }
 
 @media (min-width: 769px) and (max-width: 1100px) {
