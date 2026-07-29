@@ -1,113 +1,39 @@
 <template>
   <div class="main-layout">
-    <!-- Mobile overlay -->
-    <div v-if="mobileSidebar" class="sidebar-overlay" @click="mobileSidebar = false"></div>
-
-    <!-- Fixed-width accordion sidebar -->
-    <aside class="sidebar" :class="{ 'mobile-open': mobileSidebar }">
-      <div class="sidebar-header">
-        <img src="/favicon.ico" width="22" height="22" alt="Logo" style="border-radius: 4px; margin-right: 8px;" />
-        <span class="brand">{{ t('login.brand') }}</span>
-          <button class="btn btn-icon btn-ghost theme-toggle-sidebar" @click="toggleTheme" :title="themeIcon === 'light_mode' ? 'Switch to light' : 'Switch to dark'">
-            <span class="material-icons-outlined">{{ themeIcon }}</span>
-          </button>
-      </div>
-
-      <div class="sidebar-scroll">
-        <!-- New Note button -->
-        <button class="sidebar-action" @click="newNote">
-          <span class="material-icons-outlined">edit_note</span>
-          {{ t('sidebar.newNote') }}
-        </button>
-
-        <div class="sidebar-nav">
-          <div class="nav-item" @click="openSearchPanel()">
-            <span class="material-icons-outlined">search</span>
-            <span class="nav-text">{{ t('sidebar.search') }}</span>
-          </div>
-
-          <div class="nav-item" :class="{ active: !searchOpen && !currentFolder && !editingNote }" @click="handleAllClick()">
-            <span class="material-icons-outlined">sticky_note_2</span>
-            <span class="nav-text">{{ t('sidebar.allNotes') }}</span>
-          </div>
-
-          <div class="nav-item storage-nav-item" @click="toggleSection('storage')">
-            <span class="material-icons-outlined">folder_open</span>
-            <span class="nav-text">{{ t('sidebar.storage') }}</span>
-            <div class="storage-header-actions" @click.stop>
-              <button class="fa-btn-sm" @click="promptNewFolder('')" :title="t('modals.newFolder')">
-                <span class="material-icons-outlined">create_new_folder</span>
-              </button>
-              <button class="fa-btn-sm" @click="createNewNoteIn('')" :title="t('editor.newNote')">
-                <span class="material-icons-outlined">note_add</span>
-              </button>
-              <button class="fa-btn-sm" @click="triggerFileInput" :disabled="uploadingFiles" :title="uploadingFiles ? t('notes.importing') : t('notes.importMd')">
-                <span class="material-icons-outlined">upload_file</span>
-              </button>
-              <input
-                ref="fileInputRef"
-                type="file"
-                accept=".md,.txt"
-                multiple
-                style="display:none"
-                @change="onFileInputChange"
-              />
-            </div>
-            <span class="material-icons-outlined chevron" :class="{ 'expanded': openSections.storage }">chevron_right</span>
-          </div>
-
-          <div v-show="openSections.storage" class="nav-children">
-            <!-- Root drop zone -->
-            <div
-              class="root-drop-zone"
-              :class="{ 'drag-over': rootDropOver }"
-              @dragover.prevent="rootDropOver = true"
-              @dragleave="rootDropOver = false"
-              @drop.prevent="onDropOnRoot"
-            >
-              <span class="material-icons-outlined">home</span>
-              {{ t('notes.root') }}
-            </div>
-
-            <div v-if="folders.length === 0" class="empty-hint">{{ t('notes.noFolders') }}</div>
-
-            <FolderNode
-              v-for="f in folders"
-              :key="f.path"
-              :folder="f"
-              :active-folder="currentFolder"
-              @select="selectFolder"
-              @new-folder="promptNewFolder"
-              @rename="promptRenameFolder"
-              @delete-folder="doDeleteFolder"
-              @open-note="openNote"
-              @new-note="createNewNoteIn"
-              @drop-note="onDropNote"
-              @drop-folder="onDropFolder"
-              @expand="loadFolderNode"
-            />
-          </div>
-        </div>
-      </div>
-
-      <div class="sidebar-footer">
-        <div class="footer-icons">
-          <button v-if="isWailsApp" class="btn btn-icon" @click="changeDataDir" :title="wailsDataDir">
-            <span class="material-icons-outlined">folder_open</span>
-          </button>
-          <button v-if="!serverNoAuth" class="btn btn-icon" @click="doLogout" :title="t('sidebar.signOut')">
-            <span class="material-icons-outlined">logout</span>
-          </button>
-          <button class="btn btn-icon" :class="{ active: showSettings }" @click="showSettings = !showSettings" :title="t('sidebar.settings')">
-            <span class="material-icons-outlined">settings</span>
-          </button>
-        </div>
-        <div v-if="isLocalBuild" class="local-hint" :title="t('sidebar.savedInBrowserTitle')">
-          <span class="material-icons-outlined">cloud_off</span>
-          <span>{{ t('sidebar.savedInBrowser') }}</span>
-        </div>
-      </div>
-    </aside>
+    <SidebarPanel
+      v-model:mobile-open="mobileSidebar"
+      v-model:root-drop-over="rootDropOver"
+      :theme-icon="themeIcon"
+      :all-notes-active="!searchOpen && !currentFolder && !editingNote"
+      :storage-expanded="openSections.storage"
+      :folders="folders"
+      :current-folder="currentFolder"
+      :uploading-files="uploadingFiles"
+      :is-wails-app="isWailsApp"
+      :wails-data-dir="wailsDataDir"
+      :server-no-auth="serverNoAuth"
+      :settings-active="showSettings"
+      :is-local-build="isLocalBuild"
+      @toggle-theme="toggleTheme"
+      @new-note="newNote"
+      @open-search="openSearchPanel"
+      @open-all="handleAllClick"
+      @toggle-storage="toggleSection('storage')"
+      @new-folder="promptNewFolder"
+      @new-note-in="createNewNoteIn"
+      @file-change="onFileInputChange"
+      @drop-root="onDropOnRoot"
+      @select-folder="selectFolder"
+      @rename-folder="promptRenameFolder"
+      @delete-folder="doDeleteFolder"
+      @open-note="openNote"
+      @drop-note="onDropNote"
+      @drop-folder="onDropFolder"
+      @expand-folder="loadFolderNode"
+      @change-data-dir="changeDataDir"
+      @logout="doLogout"
+      @toggle-settings="showSettings = !showSettings"
+    />
 
     <!-- Main content -->
     <main class="main-content"
@@ -338,7 +264,7 @@ import NoteEditorView from '../components/NoteEditorView.vue'
 import MainHeader from '../components/MainHeader.vue'
 import BrowseNotesView from '../components/BrowseNotesView.vue'
 import SearchNotesView from '../components/SearchNotesView.vue'
-import FolderNode from '../components/FolderNode.vue'
+import SidebarPanel from '../components/SidebarPanel.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
 import ContextMenu from '../components/ContextMenu.vue'
 import { useI18n } from '../i18n'
@@ -946,8 +872,8 @@ async function pickEditFolder() {
 const dnd = useFileImport({ editFolder, currentFolder, loadAll, openNote, editingNote, updateUrl })
 const {
   rootDropOver, hoveredNotePath, onNoteDragStart, onDropNote, onDropFolder, onDropOnRoot,
-  uploadingFiles, isFileDragOver, fileInputRef, triggerFileInput, onFileInputChange,
-  onMainDragEnter, onMainDragLeave, onMainDragOver, onMainDrop, uploadFiles,
+  uploadingFiles, isFileDragOver, onFileInputChange,
+  onMainDragEnter, onMainDragLeave, onMainDragOver, onMainDrop,
 } = dnd
 provide('dnd', dnd)
 </script>
@@ -957,219 +883,6 @@ provide('dnd', dnd)
   display: flex;
   height: 100%;
   width: 100%;
-}
-
-/* ======= SIDEBAR ======= */
-.sidebar {
-  width: 240px;
-  flex-shrink: 0;
-  background: var(--bg-sidebar);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.sidebar-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text);
-  border-bottom: 1px solid var(--border-light);
-  flex-shrink: 0;
-}
-.brand {
-  color: var(--waterfall-title);
-}
-.sidebar-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px 0;
-}
-
-/* New Note / Logout button */
-.sidebar-action {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: calc(100% - 16px);
-  margin: 0 8px 4px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--primary-dark);
-  background: var(--primary-bg);
-  border: none;
-  cursor: pointer;
-  transition: background 0.15s, transform 0.1s;
-}
-.sidebar-action:hover {
-  background: var(--border-light);
-}
-.sidebar-action:active {
-  transform: scale(0.98);
-}
-.sidebar-action .material-icons-outlined { font-size: 18px; color: var(--primary); }
-
-/* Fluid list styling */
-.sidebar-search {
-  padding: 8px 12px;
-}
-
-.sidebar-nav {
-  display: flex;
-  flex-direction: column;
-}
-
-.nav-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: calc(100% - 16px);
-  margin: 1px 8px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  cursor: pointer;
-  transition: background 0.1s;
-}
-.nav-item:hover { background: var(--primary-bg); }
-.nav-item.active { background: var(--primary-bg); color: var(--primary-dark); }
-.nav-item .material-icons-outlined { font-size: 18px; color: var(--text-secondary); }
-.nav-item.active .material-icons-outlined { color: var(--primary); }
-
-.chevron {
-  font-size: 16px !important;
-  color: var(--text-muted) !important;
-  transition: transform 0.2s;
-  margin-left: auto;
-}
-.chevron.expanded { transform: rotate(90deg); }
-
-.nav-text {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.nav-children {
-  padding-left: 12px;
-  padding-right: 8px;
-  margin-top: 4px;
-}
-.empty-hint {
-  font-size: 12px;
-  color: var(--text-muted);
-  padding: 8px 4px;
-}
-/* Storage nav-item action buttons (appear on hover, before the chevron) */
-.storage-nav-item { position: relative; }
-.storage-header-actions {
-  display: flex;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity 0.1s;
-  margin-right: 2px;
-}
-.storage-nav-item:hover .storage-header-actions { opacity: 1; }
-.fa-btn-sm {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  border: none;
-  background: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-.fa-btn-sm:hover { background: var(--border); }
-.fa-btn-sm .material-icons-outlined { font-size: 15px; }
-
-/* Root drop zone */
-.root-drop-zone {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  margin-bottom: 4px;
-  border-radius: 6px;
-  font-size: 12px;
-  color: var(--text-muted);
-  border: 1px dashed transparent;
-  transition: all 0.15s;
-  cursor: default;
-}
-.root-drop-zone .material-icons-outlined { font-size: 15px; }
-.root-drop-zone.drag-over {
-  border-color: var(--primary);
-  background: var(--primary-bg);
-  color: var(--primary-dark);
-}
-
-.tree-note {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--text);
-  transition: background 0.1s;
-}
-.tree-note:hover { background: var(--primary-bg); color: var(--primary-dark); }
-.tree-note .material-icons-outlined { font-size: 16px; color: var(--primary); opacity: 0.8; }
-.tree-note .note-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-}
-
-.sidebar-footer {
-  padding: 8px;
-  border-top: 1px solid var(--border-light);
-  flex-shrink: 0;
-}
-.footer-icons {
-  display: flex;
-  align-items: center;
-  justify-content: space-evenly;
-  padding: 8px;
-}
-.footer-icons .btn-icon {
-  color: var(--text-secondary);
-}
-.footer-icons .btn-icon:hover {
-  color: var(--primary-dark);
-  background: var(--primary-bg);
-}
-.footer-icons .btn-icon.active {
-  color: var(--primary-dark);
-  background: var(--primary-bg);
-}
-/* Local build hint — informational, not alarming */
-.local-hint {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.4;
-  color: var(--text-muted);
-}
-.local-hint .material-icons-outlined {
-  font-size: 16px;
-  color: var(--text-muted);
 }
 
 /* ======= MAIN CONTENT ======= */
@@ -1385,27 +1098,7 @@ provide('dnd', dnd)
   filter: brightness(0.92);
 }
 
-/* Mobile overlay */
-.sidebar-overlay { display: none; }
-
 @media (max-width: 768px) {
-  .sidebar {
-    position: fixed;
-    left: -260px;
-    top: 0;
-    bottom: 0;
-    z-index: 100;
-    width: 240px;
-    transition: left 0.2s ease;
-  }
-  .sidebar.mobile-open { left: 0; }
-  .sidebar-overlay {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 99;
-    background: rgba(0,0,0,0.25);
-  }
   /* Prevent iOS zoom on input focus by ensuring font-size >= 16px */
   .input,
   select { font-size: 16px !important; }
