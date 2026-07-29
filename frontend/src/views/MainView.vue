@@ -206,6 +206,7 @@ import { useNoteEditor } from '../composables/useNoteEditor.js'
 import { useNoteBrowser } from '../composables/useNoteBrowser.js'
 import { useNoteSearch } from '../composables/useNoteSearch.js'
 import { useNotePersistence } from '../composables/useNotePersistence.js'
+import { useFolderActions } from '../composables/useFolderActions.js'
 import { preloadMilkdownEditor } from '../components/milkdownLoader.js'
 
 const router = useRouter()
@@ -268,6 +269,22 @@ const {
   api: apiClient,
   editor: noteEditor,
   onSaved: updateUrl,
+})
+
+const {
+  promptNewFolder,
+  promptRenameFolder,
+  deleteFolder: doDeleteFolder,
+} = useFolderActions({
+  api: apiClient,
+  currentFolder,
+  loadAll,
+  loadFolderNode,
+  refreshRootFolders,
+  showPrompt,
+  showConfirm,
+  t,
+  updateUrl,
 })
 
 const {
@@ -480,52 +497,6 @@ async function selectFolder(folderPath) {
     await loadFolderPage(folderPath)
   } catch (_) {}
   updateUrl()
-}
-
-async function promptNewFolder(parentPath) {
-  const name = await showPrompt(t('modals.folderName'))
-  if (!name) return
-  const path = parentPath ? parentPath + '/' + name : name
-  try {
-    await apiClient.createFolder(path)
-    if (parentPath) await loadFolderNode(parentPath, { force: true })
-    else await refreshRootFolders()
-  } catch (e) { alert(t('errors.failed')) }
-}
-
-async function promptRenameFolder(folderPath) {
-  const currentName = folderPath.split('/').pop()
-  const name = await showPrompt(t('modals.newName'), currentName)
-  if (!name || name === currentName) return
-  try {
-    await apiClient.renameFolder(folderPath, name)
-    // Update currentFolder path if it was inside the renamed folder
-    if (currentFolder.value === folderPath || currentFolder.value.startsWith(folderPath + '/')) {
-      const parentDir = folderPath.substring(0, folderPath.lastIndexOf('/'))
-      const newFolderBase = parentDir ? parentDir + '/' + name : name
-      currentFolder.value = currentFolder.value.replace(folderPath, newFolderBase)
-    }
-    await loadAll()
-    updateUrl()
-  } catch (e) { alert(t('errors.failed')) }
-}
-
-async function doDeleteFolder(folderPath) {
-  if (!(await showConfirm({
-    title: t('modals.deleteFolder'),
-    message: t('modals.deleteFolderMsg'),
-    okLabel: t('modals.delete'),
-    danger: true,
-  }))) return
-  try {
-    await apiClient.deleteFolder(folderPath)
-    // Reset currentFolder if it was inside the deleted folder
-    if (currentFolder.value === folderPath || currentFolder.value.startsWith(folderPath + '/')) {
-      currentFolder.value = ''
-    }
-    await loadAll()
-    updateUrl()
-  } catch (e) { alert(t('errors.failed')) }
 }
 
 // ===== FOLDER PICKER FOR META PANEL =====
