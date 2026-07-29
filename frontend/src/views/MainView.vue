@@ -142,110 +142,35 @@
       </button>
     </div>
 
-    <!-- Folder Picker Modal -->
-    <div v-if="folderPicker.visible" class="modal-overlay" @click.self="closeFolderPicker">
-      <div class="folder-picker-modal">
-        <div class="folder-picker-head">
-          <h2 style="margin:0">{{ t('modals.moveToFolder') }}</h2>
-          <button class="btn-new-folder" @click="startCreateFolderInPicker" :title="t('modals.newFolder')">
-            <span class="material-icons-outlined">create_new_folder</span>
-            {{ t('modals.newFolder') }}
-          </button>
-        </div>
-        <div v-if="folderPicker.newFolderActive" class="folder-picker-new-row">
-          <span class="material-icons-outlined">create_new_folder</span>
-          <span class="folder-picker-new-parent">
-            {{ folderPicker.selected ? folderPicker.selected + '/' : '' }}
-          </span>
-          <input
-            ref="newFolderInputRef"
-            v-model="folderPicker.newFolderName"
-            class="folder-picker-new-input"
-            :placeholder="t('modals.folderName')"
-            @keydown.enter.prevent="submitNewFolderInPicker"
-            @keydown.esc.prevent="cancelNewFolderInPicker"
-          />
-          <button class="fa-btn-sm" @click="submitNewFolderInPicker" :title="t('modals.create')">
-            <span class="material-icons-outlined">check</span>
-          </button>
-          <button class="fa-btn-sm" @click="cancelNewFolderInPicker" :title="t('modals.cancel')">
-            <span class="material-icons-outlined">close</span>
-          </button>
-        </div>
-        <div class="folder-picker-list">
-          <div
-            class="folder-picker-item"
-            :class="{ active: folderPicker.selected === '' }"
-            @click="folderPicker.selected = ''"
-          >
-            <span class="material-icons-outlined">home</span>
-            {{ t('notes.root') }}
-          </div>
-          <div
-            v-for="f in flatFoldersForPicker"
-            :key="f.path"
-            class="folder-picker-item"
-            :class="{ active: folderPicker.selected === f.path }"
-            :style="{ paddingLeft: (12 + f.depth * 16) + 'px' }"
-            @click="folderPicker.selected = f.path"
-          >
-            <span class="material-icons-outlined">folder</span>
-            {{ f.name }}
-          </div>
-          <div v-if="flatFoldersForPicker.length === 0" class="folder-picker-empty">
-            {{ t('notes.noFolders') }}
-          </div>
-        </div>
-        <div class="prompt-actions">
-          <button class="btn btn-ghost" @click="closeFolderPicker">{{ t('modals.cancel') }}</button>
-          <button class="btn btn-primary" @click="confirmFolderPicker">{{ t('modals.moveHere') }}</button>
-        </div>
-      </div>
-    </div>
+    <FolderPickerDialog
+      :visible="folderPicker.visible"
+      :selected="folderPicker.selected"
+      :new-folder-active="folderPicker.newFolderActive"
+      :new-folder-name="folderPicker.newFolderName"
+      :folders="flatFoldersForPicker"
+      @update:selected="folderPicker.selected = $event"
+      @update:new-folder-name="folderPicker.newFolderName = $event"
+      @close="closeFolderPicker"
+      @confirm="confirmFolderPicker"
+      @start-create="startCreateFolderInPicker"
+      @cancel-create="cancelNewFolderInPicker"
+      @submit-create="submitNewFolderInPicker"
+    />
 
-    <!-- Prompt Modal -->
-    <div v-if="promptVisible" class="modal-overlay" @click.self="cancelPrompt">
-      <div class="prompt-modal">
-        <h2 style="margin:0 0 16px 0">{{ promptTitle }}</h2>
-        <input v-model="promptValue" class="input" :placeholder="promptTitle" @keydown.enter="submitPrompt" ref="promptInputRef" />
-        <div class="prompt-actions">
-          <button class="btn btn-ghost" @click="cancelPrompt">{{ t('modals.cancel') }}</button>
-          <button class="btn btn-primary" @click="submitPrompt">{{ t('modals.confirm') }}</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Confirm Modal -->
-    <div v-if="confirmDialog.visible" class="modal-overlay" @click.self="cancelConfirm">
-      <div class="prompt-modal">
-        <h2 style="margin:0 0 16px 0">{{ confirmDialog.title }}</h2>
-        <p class="confirm-message" v-if="confirmDialog.message">{{ confirmDialog.message }}</p>
-        <div class="prompt-actions">
-          <button class="btn btn-ghost" @click="cancelConfirm">{{ t('modals.cancel') }}</button>
-          <button class="btn" :class="confirmDialog.danger ? 'btn-danger' : 'btn-primary'" @click="acceptConfirm">{{ confirmDialog.okLabel }}</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Copy Dialog (iOS PWA fallback) -->
-    <div v-if="copyDialog.visible" class="modal-overlay" @click.self="copyDialog.visible = false">
-      <div class="prompt-modal">
-        <h2 style="margin:0 0 16px 0">{{ t('modals.copyText') }}</h2>
-        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">{{ t('modals.copyInstruction') }}</p>
-        <textarea
-          ref="copyDialogTextarea"
-          class="input"
-          :value="copyDialog.content"
-          readonly
-          style="width:100%;height:180px;resize:vertical;font-size:13px;font-family:monospace;box-sizing:border-box;"
-          @focus="e => e.target.setSelectionRange(0, e.target.value.length)"
-        />
-        <div class="prompt-actions">
-          <button class="btn btn-ghost" @click="copyDialog.visible = false">{{ t('modals.close') }}</button>
-          <button class="btn btn-primary" @click="copyFromDialog">{{ t('modals.copy') }}</button>
-        </div>
-      </div>
-    </div>
+    <BasicDialogs
+      :prompt-visible="promptVisible"
+      :prompt-title="promptTitle"
+      :prompt-value="promptValue"
+      :confirm-dialog="confirmDialog"
+      :copy-dialog="copyDialog"
+      @update:prompt-value="promptValue = $event"
+      @submit-prompt="submitPrompt"
+      @cancel-prompt="cancelPrompt"
+      @accept-confirm="acceptConfirm"
+      @cancel-confirm="cancelConfirm"
+      @close-copy="copyDialog.visible = false"
+      @copy="copyFromDialog"
+    />
 
     <!-- Context Menu -->
     <ContextMenu v-if="contextMenu.visible" :visible="contextMenu.visible" :x="contextMenu.x" :y="contextMenu.y"
@@ -265,6 +190,8 @@ import MainHeader from '../components/MainHeader.vue'
 import BrowseNotesView from '../components/BrowseNotesView.vue'
 import SearchNotesView from '../components/SearchNotesView.vue'
 import SidebarPanel from '../components/SidebarPanel.vue'
+import BasicDialogs from '../components/BasicDialogs.vue'
+import FolderPickerDialog from '../components/FolderPickerDialog.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
 import ContextMenu from '../components/ContextMenu.vue'
 import { useI18n } from '../i18n'
@@ -306,10 +233,10 @@ const currentFolder = ref('')
 
 const {
   confirmDialog, showConfirm, acceptConfirm, cancelConfirm,
-  promptVisible, promptTitle, promptValue, promptInputRef, showPrompt, submitPrompt, cancelPrompt,
-  copyDialog, copyDialogTextarea, copyFromDialog,
+  promptVisible, promptTitle, promptValue, showPrompt, submitPrompt, cancelPrompt,
+  copyDialog, copyFromDialog,
   folderPicker, showFolderPicker, closeFolderPicker, confirmFolderPicker,
-  startCreateFolderInPicker, cancelNewFolderInPicker, submitNewFolderInPicker, newFolderInputRef,
+  startCreateFolderInPicker, cancelNewFolderInPicker, submitNewFolderInPicker,
 } = useDialogs({ folders })
 
 const {
@@ -946,157 +873,6 @@ provide('dnd', dnd)
   opacity: 0.8;
 }
 .draft-banner-close:hover { opacity: 1; }
-
-/* Folder Picker Modal */
-.folder-picker-modal {
-  background: var(--bg-card);
-  padding: 24px;
-  border-radius: var(--radius-lg);
-  width: 320px;
-  max-width: 92vw;
-  box-shadow: var(--shadow-md);
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-}
-.folder-picker-modal h3 {
-  margin-bottom: 0;
-  flex-shrink: 0;
-}
-.folder-picker-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.btn-new-folder {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--primary-dark);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.12s, border-color 0.12s;
-}
-.btn-new-folder:hover {
-  background: var(--primary-bg);
-  border-color: var(--primary);
-}
-.btn-new-folder .material-icons-outlined {
-  font-size: 16px;
-  color: var(--primary);
-}
-.folder-picker-new-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
-  margin-bottom: 8px;
-  border: 1px dashed var(--primary);
-  border-radius: var(--radius);
-  background: var(--primary-bg);
-}
-.folder-picker-new-row .material-icons-outlined {
-  font-size: 16px;
-  color: var(--primary);
-}
-.folder-picker-new-parent {
-  font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 40%;
-}
-.folder-picker-new-input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: 13px;
-  font-family: inherit;
-  color: var(--text);
-  padding: 2px 0;
-}
-.folder-picker-list {
-  overflow-y: auto;
-  flex: 1;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  margin-bottom: 4px;
-}
-.folder-picker-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 12px;
-  font-size: 13px;
-  cursor: pointer;
-  color: var(--text);
-  transition: background 0.1s;
-}
-.folder-picker-item:hover { background: var(--primary-bg); }
-.folder-picker-item.active {
-  background: var(--primary-bg);
-  color: var(--primary-dark);
-  font-weight: 500;
-}
-.folder-picker-item .material-icons-outlined { font-size: 16px; color: var(--primary); }
-.folder-picker-empty {
-  padding: 20px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-/* Prompt Modal */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 999;
-  background: rgba(0,0,0,0.3);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.prompt-modal {
-  background: var(--bg-card);
-  padding: 24px;
-  border-radius: var(--radius-lg);
-  width: 340px;
-  max-width: 90%;
-  box-shadow: var(--shadow-md);
-}
-.prompt-modal h3 {
-  margin-bottom: 16px;
-}
-.prompt-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 20px;
-}
-.confirm-message {
-  font-size: 14px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-  margin-top: -6px;
-}
-.prompt-modal .btn-danger {
-  background: var(--danger);
-  color: #fff;
-}
-.prompt-modal .btn-danger:hover {
-  background: var(--danger);
-  filter: brightness(0.92);
-}
 
 @media (max-width: 768px) {
   /* Prevent iOS zoom on input focus by ensuring font-size >= 16px */
