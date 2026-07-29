@@ -8,8 +8,6 @@ import { useI18n } from '../i18n'
 import { Crepe } from '@milkdown/crepe'
 import { $prose } from '@milkdown/utils'
 import { Plugin, PluginKey } from '@milkdown/prose/state'
-import '@milkdown/crepe/theme/common/style.css'
-import '@milkdown/crepe/theme/frame.css'
 
 const props = defineProps({
   initialContent: { type: String, default: '' },

@@ -4,6 +4,12 @@ import router from './router'
 import { useI18n } from './i18n'
 import { initTheme } from './composables/useTheme.js'
 import 'material-icons/iconfont/outlined.css'
+// Crepe's default theme must load before MemoDump's theme and user CSS.
+// Keeping these imports inside the async editor chunk appends its stylesheet
+// after custom.css at runtime, causing frame.css to reset dark-mode variables
+// and toolbar customizations whenever the editor is first opened.
+import '@milkdown/crepe/theme/common/style.css'
+import '@milkdown/crepe/theme/frame.css'
 import './style.css'
 
 // Initialize locale before mounting
