@@ -600,3 +600,24 @@ The extracted components must not call APIs, mutate note data, or own route
 state. Existing open, drag, context-menu, expand, load-more and search events
 must be forwarded explicitly. Tests and the production build must pass before
 the implementation commit.
+
+## MainView extraction tranche: page header
+
+This tranche extracts the mode-dependent header while preserving state
+ownership:
+
+1. Add `MainHeader.vue` as the mode switch for settings, search, editing and
+   browse headers, including the mobile-menu trigger.
+2. Add `NoteEditorHeader.vue` for editable title/folder/tags and
+   save/raw/delete actions. It receives controlled values and emits mutations;
+   it does not save, delete, navigate or open dialogs itself.
+3. Add `BrowseHeaderActions.vue` for sort-menu presentation and new-note
+   intent. The parent continues to own the selected sort and note creation.
+4. Keep title-width measurement in the editor-header component, next to the DOM
+   it measures.
+5. Move header-only CSS with each component and retain shared page shell styles
+   in `MainView`.
+
+All state transitions must remain explicit events. Keyboard behavior, mobile
+layout, save status styling, folder selection, tag removal, Raw mode switching
+and settings/search close behavior must remain unchanged.
