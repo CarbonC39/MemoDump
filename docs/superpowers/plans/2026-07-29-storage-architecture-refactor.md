@@ -660,3 +660,27 @@ This tranche moves modal presentation out of the page orchestrator:
 Backdrop dismissal, Enter/Escape handling, danger-button styling, iOS copy
 fallback selection, nested-folder indentation and inline-folder focus behavior
 must remain unchanged.
+
+## MainView state tranche: browser and search
+
+Do not extract the remaining draft banner or file-drop overlay; they are small
+page-level feedback and have no independent state boundary.
+
+This tranche moves list/search business state into composables:
+
+1. Add `useNoteSearch` for controlled query/tag values, 300 ms debounce,
+   result mapping, request-generation protection and teardown.
+2. Add `useNoteBrowser` for root/current-folder pages, cursor pagination,
+   folder-tree loading, flattened picker data, sort persistence and v2 transport
+   mapping.
+3. Keep navigation guards, URL coordination, editor transitions, dialogs and
+   mutation confirmation in `MainView`.
+4. Expose explicit browser refresh/select/load-more/load-folder operations so
+   save, import, move and delete workflows can invalidate state without knowing
+   transport response shapes.
+5. Add composable tests for sorting, mapping, pagination, stale search
+   responses and empty-query cancellation.
+
+The extraction must preserve the 50-item API defaults, current folder fallback,
+lazy folder expansion, stable note presentation fields, search debounce,
+sorting persistence and existing 401 handling.
