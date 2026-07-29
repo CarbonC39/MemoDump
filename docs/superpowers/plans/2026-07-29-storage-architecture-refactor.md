@@ -2,7 +2,7 @@
 
 Date: 2026-07-29  
 Branch: `refactor/storage-architecture`  
-Status: proposed — implementation must not begin before review
+Status: reviewed in part — implementation must not begin until the remaining API-version decision is resolved
 
 ## Goals
 
@@ -111,15 +111,64 @@ Each step must be independently buildable and revertible.
 
 ## 2. One frontend/backend semantic contract
 
+### Current identity audit
+
+Today `path` is not merely a location. It simultaneously acts as:
+
+- the Go filesystem lookup key and HTTP route parameter;
+- the IndexedDB primary key;
+- the Vue list key and waterfall measurement/content-cache key;
+- the URL deep-link value (`?note=...`);
+- the offline outbox coalescing key;
+- the drag/drop payload;
+- the source for deriving note name and parent folder.
+
+Folder paths additionally encode ancestry and are used for prefix-based move/delete checks. Renaming or moving therefore changes identity everywhere.
+
+### UUID decision and migration risk
+
+Introduce stable UUIDs for notes in this refactor, while retaining `path` as an explicit mutable location:
+
+```ts
+interface NoteIdentity {
+  id: string       // stable UUID
+  path: string     // mutable normalized storage location
+  parentId: string
+  name: string
+}
+```
+
+Risks that must be handled deliberately:
+
+1. **Existing files contain no UUID.** A migration must assign IDs without making notes disappear or duplicate on the next scan.
+2. **External file operations bypass the app.** If a user renames/moves a Markdown file in Finder/Explorer, the app must reconcile it with the existing UUID rather than treating it as delete + create.
+3. **Metadata placement affects portability.** UUID in Markdown front matter is portable but modifies user files; UUID in an application index keeps Markdown clean but needs backup and reconciliation.
+4. **Deep links and queued writes currently contain paths.** Migration must accept legacy path links/outbox entries and resolve them to UUIDs.
+5. **Both backends need atomic migration.** IndexedDB requires a schema-version upgrade; filesystem mode needs a crash-safe index migration.
+6. **Copy semantics must be explicit.** Duplicate creates a new UUID; rename/move retains it; importing the same external file twice must not accidentally alias identities.
+7. **Cloned vaults matter later.** Copying a vault should preserve note UUIDs, while creating a new note from another note should not.
+
+Recommended metadata strategy for this version:
+
+- add an application-owned, crash-safe local metadata index under the MemoDump data directory;
+- keep UUIDs out of Markdown front matter for now;
+- store `id ↔ path`, a content hash, and minimal reconciliation data;
+- rebuild/reconcile the index when files are changed externally;
+- keep legacy path lookup as a temporary compatibility route;
+- treat folders as path-addressed in the first migration, while keeping folder identity behind a domain type.
+
+This keeps Markdown files clean, but makes the metadata index part of a complete MemoDump backup. An individually exported Markdown file remains portable and receives a new UUID when imported elsewhere.
+
 ### Canonical domain types
 
 Define the contract once in `docs/api-contract.md` and encode it as fixtures/tests:
 
 ```ts
-type NoteId = string // normalized slash-relative path; opaque to UI code
+type NoteId = string // stable UUID
 
 interface NoteSummary {
   id: NoteId
+  path: string
   name: string
   parentId: string
   tags: string[]
@@ -146,7 +195,7 @@ interface ApiError {
 }
 ```
 
-The UI should use `id`, not parse paths to derive state. Initially `id` may equal the path, but callers must treat it as opaque so a future stable UUID can be introduced.
+The UI uses `id` for identity, cache keys, selection, outbox coalescing and routes. Only repository/storage code interprets `path`. Rename and move update `path` while retaining `id`.
 
 ### Required semantic decisions
 
@@ -270,7 +319,6 @@ import { defineAsyncComponent } from 'vue'
 const MilkdownEditor = defineAsyncComponent({
   loader: () => import('../components/MilkdownEditor.vue'),
   delay: 100,
-  timeout: 15000,
 })
 ```
 
@@ -278,7 +326,7 @@ Because Milkdown/Crepe imports live inside `MilkdownEditor.vue`, Vite can move t
 
 ### UX details
 
-- Show a lightweight editor skeleton while the chunk loads.
+- Show a lightweight editor skeleton for as long as the chunk is loading.
 - Keep raw mode immediately available.
 - Prefetch the editor chunk on strong intent:
   - pointer hover/focus on a note card;
@@ -286,6 +334,28 @@ Because Milkdown/Crepe imports live inside `MilkdownEditor.vue`, Vite can move t
   - browser idle callback after the initial note list is interactive.
 - Do not preload on the login page or in local views that never open an editor.
 - Add an error component with Retry and “open in raw mode”.
+- Never infer failure from elapsed time and never switch modes automatically.
+
+### Failure classification
+
+Slow loading and failed loading are different states:
+
+1. **Chunk loading failure:** the dynamic `import()` promise rejects. Typical Web/PWA causes are offline access before the chunk was cached, a corrupted/evicted browser cache, a proxy/CDN error, or an old open page requesting a hashed chunk removed by a newer deployment.
+2. **Editor initialization failure:** the component chunk loaded, but `crepeInstance.create()` rejects because of an incompatible runtime, unexpected DOM/browser behavior, or an editor/plugin defect.
+3. **Slow load:** the promise is still pending. This is not an error regardless of duration.
+
+Expected frequency:
+
+- Wails: chunk loading failure should be exceptionally rare because assets are packaged locally; initialization defects are the more relevant failure class.
+- Normal Web with a stable deployment: rare, but possible on poor/offline networks.
+- PWA across deployments: uncommon but materially more plausible if the service worker and hashed asset lifecycle are not coordinated.
+
+Behavior:
+
+- pending → keep the skeleton and retain note state;
+- explicit rejection → show Retry and a user-selected Raw option;
+- initialization rejection → preserve Markdown, show the same recovery UI, and log a sanitized diagnostic;
+- no timeout-based automatic Raw fallback.
 
 ### Vite chunking
 
@@ -334,9 +404,19 @@ type NoteRepository interface {
 
 HTTP handlers depend on an application service, not directly on `os.*` or global `dataDir`. IndexedDB should expose the equivalent frontend repository interface.
 
-### Separate remote sync interface
+### Minimal future extension seam
 
-Do not force Dropbox/WebDAV into `NoteRepository`. Their concerns are different:
+This version does not add remote-sync behavior, provider metadata, conflict resolution, credentials, background jobs, or Dropbox/WebDAV dependencies.
+
+The only preparation is:
+
+- HTTP handlers depend on a local `NoteRepository`, not directly on `os.*`;
+- note identity is stable across rename/move;
+- successful mutations can later emit an application event without changing handler semantics;
+- repository methods accept `context.Context`;
+- provider-specific concepts such as ETag, cursor and OAuth token do not leak into note domain types.
+
+A future major version may introduce a separate remote interface such as:
 
 ```go
 type RemoteObjectStore interface {
@@ -347,14 +427,14 @@ type RemoteObjectStore interface {
 }
 ```
 
-Provider adapters translate:
+This interface is documentation only in the current version. Future provider adapters would translate:
 
 - Dropbox cursor/revision semantics;
 - WebDAV `ETag`, `If-Match`, `PROPFIND`, and path behavior;
 - authentication and token refresh;
 - rate limits and retry hints.
 
-### Metadata required later
+### Metadata required later, not now
 
 Reserve an application-owned metadata database rather than putting provider state in Markdown front matter:
 
@@ -373,7 +453,7 @@ deleted_at (tombstone)
 
 Do not expose provider revisions as the note's only identity.
 
-### Conflict model
+### Conflict model for the future major version
 
 At minimum:
 
@@ -384,7 +464,7 @@ At minimum:
 
 Content hashes should be calculated from canonical stored bytes. Provider clocks must not be used as the sole conflict detector.
 
-### Security/configuration preparation
+### Security/configuration for the future major version
 
 - Keep provider credentials outside note files and exported archives.
 - Define a credential-store interface; use OS keychain/credential storage in desktop builds where possible.
@@ -419,11 +499,12 @@ Content hashes should be calculated from canonical stored bytes. Provider clocks
 - Add async Milkdown boundary, loading/error states, and intent prefetch.
 - Measure bundles and add minimal Vite chunk rules only if necessary.
 
-### Phase E — storage boundary
+### Phase E — minimal local storage boundary
 
 - Extract Go filesystem repository and application service.
 - Remove direct handler dependency on globals and `os.*`.
-- Add revision/hash metadata hooks, but no remote provider.
+- Add stable UUID/path metadata and a future mutation-event seam.
+- Do not add remote implementations, sync metadata, provider configuration, credentials, or background workers.
 
 ## Commit strategy
 
@@ -437,7 +518,7 @@ Keep commits reviewable and behavior-focused:
 6. `refactor: migrate folder tree to lazy loading`
 7. `perf: lazy-load Milkdown editor`
 8. `refactor: introduce filesystem note repository`
-9. `docs: define future remote sync adapter contract`
+9. `docs: record future remote sync extension seam`
 
 Tests and build must pass at every commit. Avoid mixing API contract changes with component moves.
 
@@ -450,10 +531,13 @@ Tests and build must pass at every commit. Avoid mixing API contract changes wit
 - **Async editor content loss:** mount/unmount and initial-content tests.
 - **Premature cloud abstraction:** implement only local repository boundaries now; keep provider APIs documented until cloud work is scheduled.
 
-## Review decisions required before implementation
+## Recorded decisions
 
-1. Keep path-based IDs temporarily, or introduce stable UUIDs in this refactor?
-2. Add `/api/v2`, or evolve current endpoints with compatibility parameters?
-3. Is 50 notes per page an acceptable initial default?
-4. Should raw mode be the automatic fallback when the Milkdown chunk fails?
-5. Should the storage-boundary phase be included now, or deferred until after UI/API performance work?
+1. Introduce stable note UUIDs in this refactor, subject to the migration/reconciliation controls above.
+2. Use 50 notes as the default page size.
+3. Milkdown loading has no failure timeout and never automatically switches to Raw mode.
+4. This version prepares only the minimum local repository/event seam for a future remote-sync major version.
+
+## Remaining review decision
+
+Add `/api/v2`, or evolve the current endpoints with compatibility parameters? The recommendation remains `/api/v2` because UUID identity and paginated response envelopes materially change route and response semantics.
