@@ -493,6 +493,7 @@ import { useFileImport } from '../composables/useFileImport'
 import { useContextMenu } from '../composables/useContextMenu'
 import { outboxPut, outboxAll, buildEntry } from '../composables/outbox.js'
 import { useTheme } from '../composables/useTheme.js'
+import { useNoteEditor } from '../composables/useNoteEditor.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -530,33 +531,12 @@ const {
   startCreateFolderInPicker, cancelNewFolderInPicker, submitNewFolderInPicker, newFolderInputRef,
 } = useDialogs({ folders })
 
-// Editor state
-const editingNote = ref(null)
-const editName = ref('')
-const editTags = ref([])
-const editFolder = ref('')
-const editContent = ref('')
-const tagInput = ref('')
-const editorKey = ref(0)
-// Dirty state: tracks whether the editor has unsaved changes
-const isDirty = ref(false)
-const isSaving = ref(false)
-
-const editorMode = ref('wysiwyg') // 'wysiwyg' | 'raw'
-
-async function toggleEditorMode() {
-  // Wait a tick so any in-flight Milkdown `update` emit (which sets
-  // editContent synchronously on every keystroke) has been processed by Vue
-  // before we unmount the wysiwyg editor — otherwise the very last keystroke
-  // before the click could be dropped.
-  await nextTick()
-  const switchingToWysiwyg = editorMode.value === 'raw'
-  editorMode.value = editorMode.value === 'wysiwyg' ? 'raw' : 'wysiwyg'
-  if (switchingToWysiwyg) {
-    editingNote.value.content = editContent.value
-    editorKey.value++
-  }
-}
+const {
+  editingNote, editName, editTags, editFolder, editContent, tagInput,
+  editorKey, isDirty, isSaving, editorMode,
+  loadDocument, restoreDraft, createDocument, clearDocument,
+  onEditorUpdate, addTag, toggleEditorMode,
+} = useNoteEditor()
 
 // Title input width tracks the actual rendered text width (via a hidden
 // mirror span) instead of the HTML `size` attribute, which only approximates
@@ -736,15 +716,7 @@ async function restoreFromUrl() {
     try {
       const res = await apiClient.getNote(note)
       const data = res.data
-      _editorReady = false
-      editingNote.value = data
-      editName.value = isTimestampName(data.name) ? '' : (data.name || '')
-      editTags.value = [...(data.tags || [])]
-      editContent.value = data.content || ''
-      isDirty.value = false
-      const parts = data.path.split('/')
-      editFolder.value = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
-      editorKey.value++
+      loadDocument(data)
       searchOpen.value = false
       return
     } catch (_) { /* fall through */ }
@@ -775,18 +747,7 @@ onMounted(async () => {
     const entries = await outboxAll()
     if (entries.length) {
       const latest = entries[entries.length - 1]
-      _editorReady = false
-      editingNote.value = {
-        content: latest.content || '',
-        path: latest.path || '',
-        clientId: latest.clientId || (latest.op === 'create' ? latest.key : uid()),
-      }
-      editName.value = latest.name || ''
-      editTags.value = [...(latest.tags || [])]
-      editContent.value = latest.content || ''
-      editFolder.value = latest.folder || ''
-      isDirty.value = true
-      editorKey.value++
+      restoreDraft(latest)
       showDraftRestoredBanner.value = true
       restored = true
     }
@@ -820,14 +781,6 @@ async function loadAll() {
   }
 }
 
-// Flag: whether editor has finished its initial load (suppress first markdownUpdated)
-let _editorReady = false
-
-function uid() {
-  try { if (crypto.randomUUID) return crypto.randomUUID() } catch (_) {}
-  return Date.now().toString(36) + Math.random().toString(36).slice(2)
-}
-
 function confirmLeave() {
   if (!isDirty.value) return true
   return confirm(t('modals.unsavedChanges'))
@@ -838,14 +791,7 @@ function _forceNewNote() {
   showSettings.value = false
   prevView.folder = currentFolder.value
   prevView.search = searchOpen.value
-  _editorReady = false
-  editingNote.value = { content: '', path: '', clientId: uid() }
-  editName.value = ''
-  editTags.value = []
-  editFolder.value = currentFolder.value
-  editContent.value = ''
-  isDirty.value = false
-  editorKey.value++
+  createDocument(currentFolder.value)
   searchOpen.value = false
   mobileSidebar.value = false
   updateUrl()
@@ -870,39 +816,13 @@ async function openNote(note) {
   try {
     const res = await apiClient.getNote(note.path)
     const data = res.data
-    // Temporarily disable dirty tracking while the editor loads initial content
-    _editorReady = false
-    editingNote.value = data
-    editName.value = isTimestampName(data.name) ? '' : (data.name || '')
-    editTags.value = [...(data.tags || [])]
-    editContent.value = data.content || ''
-    isDirty.value = false
-    const parts = data.path.split('/')
-    editFolder.value = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
-    editorKey.value++
+    loadDocument(data)
     searchOpen.value = false
     mobileSidebar.value = false
     updateUrl()
   } catch (e) {
     console.error('Failed to open note', e)
   }
-}
-
-function onEditorUpdate(markdown) {
-  if (!_editorReady) {
-    // First event after (re)mount is the initial content load — skip it
-    _editorReady = true
-    editContent.value = markdown
-    return
-  }
-  editContent.value = markdown
-  isDirty.value = true
-}
-
-function addTag() {
-  const t = tagInput.value.trim()
-  if (t && !editTags.value.includes(t)) editTags.value.push(t)
-  tagInput.value = ''
 }
 
 async function saveNote({ silent = false, replay = null } = {}) {
