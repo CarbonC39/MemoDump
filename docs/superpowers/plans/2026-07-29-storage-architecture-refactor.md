@@ -621,3 +621,23 @@ ownership:
 All state transitions must remain explicit events. Keyboard behavior, mobile
 layout, save status styling, folder selection, tag removal, Raw mode switching
 and settings/search close behavior must remain unchanged.
+
+## MainView extraction tranche: sidebar and folder entry
+
+This tranche extracts the navigation shell without moving storage operations:
+
+1. Add `SidebarPanel.vue` for the mobile overlay, brand/theme control, note and
+   search navigation, storage accordion, root drop target, recursive
+   `FolderNode` entries, and footer actions.
+2. Keep folder loading, selection, creation, rename, delete, move and note-open
+   operations in `MainView`; forward them as explicit component events.
+3. Let the sidebar own its hidden file input DOM and emit its change event to
+   the existing import workflow. File validation and persistence remain in
+   `useFileImport`.
+4. Keep mobile-open, storage-expanded, settings-active and root-drag-over state
+   controlled by the parent.
+5. Move sidebar-only and mobile-sidebar CSS into the component.
+
+The component must preserve root/folder drag-and-drop behavior, Wails data
+directory controls, authentication-dependent logout, local-build status, theme
+toggle, file-input reset behavior and all current folder-tree actions.
