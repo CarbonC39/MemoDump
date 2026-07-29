@@ -1,10 +1,12 @@
 <template>
   <div class="editor-wrap">
     <LazyMilkdownEditor
-      v-if="mode === 'wysiwyg'"
-      :key="editorKey"
+      v-if="richEditorMounted"
+      v-show="mode === 'wysiwyg'"
+      :document-version="editorKey"
       :initial-content="initialContent"
       @update="$emit('update', $event)"
+      @document-ready="$emit('document-ready', $event)"
       @fallback-raw="$emit('update:mode', 'raw')"
     />
     <textarea
@@ -18,18 +20,24 @@
 </template>
 
 <script setup>
+import { ref, watch } from 'vue'
 import LazyMilkdownEditor from './LazyMilkdownEditor.vue'
 import { useI18n } from '../i18n'
 
-defineProps({
+const props = defineProps({
   mode: { type: String, required: true },
   editorKey: { type: Number, required: true },
   initialContent: { type: String, default: '' },
   content: { type: String, default: '' },
 })
-defineEmits(['update', 'update:mode', 'update:content'])
+defineEmits(['update', 'document-ready', 'update:mode', 'update:content'])
 
 const { t } = useI18n()
+const richEditorMounted = ref(props.mode === 'wysiwyg')
+
+watch(() => props.mode, (mode) => {
+  if (mode === 'wysiwyg') richEditorMounted.value = true
+})
 </script>
 
 <style scoped>

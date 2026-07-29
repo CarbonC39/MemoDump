@@ -238,7 +238,7 @@
           <div v-if="isInitializing" class="app-init-state" aria-busy="true"></div>
 
           <!-- Search results (right-side panel) -->
-          <div v-else-if="searchOpen" class="search-results-view">
+          <div v-if="!isInitializing && searchOpen" class="search-results-view">
           <div class="search-inputs-wrap">
             <input v-model="searchQuery" class="input" :placeholder="t('search.searchContent')" @input="doSearch" />
             <input v-model="searchTag" class="input" :placeholder="t('search.searchTags')" @input="doSearch" />
@@ -288,18 +288,20 @@
 
         <!-- Editor -->
         <NoteEditorView
-          v-else-if="editingNote"
+          v-if="!isInitializing && editorEverMounted"
+          v-show="editingNote && !searchOpen"
           :mode="editorMode"
           :editor-key="editorKey"
-          :initial-content="editingNote.content || ''"
+          :initial-content="editingNote?.content || editContent"
           :content="editContent"
           @update="onEditorUpdate"
+          @document-ready="onEditorReady"
           @update:mode="editorMode = $event"
           @update:content="editContent = $event; isDirty = true"
         />
 
         <!-- Waterfall notes view -->
-        <div v-else class="waterfall-view">
+        <div v-if="!isInitializing && !searchOpen && !editingNote" class="waterfall-view">
           <div v-if="displayNotes.length === 0" class="empty-state-big">
             <span class="material-icons-outlined" style="font-size:56px;color:var(--border)">description</span>
             <p>{{ t('notes.noNotes') }}</p>
@@ -542,8 +544,12 @@ const {
   editingNote, editName, editTags, editFolder, editContent, tagInput,
   editorKey, isDirty, isSaving, editorMode,
   loadDocument, restoreDraft, createDocument, clearDocument,
-  onEditorUpdate, addTag, toggleEditorMode,
+  onEditorUpdate, onEditorReady, addTag, toggleEditorMode,
 } = useNoteEditor()
+const editorEverMounted = ref(false)
+watch(editingNote, (note) => {
+  if (note) editorEverMounted.value = true
+}, { immediate: true })
 
 // Title input width tracks the actual rendered text width (via a hidden
 // mirror span) instead of the HTML `size` attribute, which only approximates

@@ -8,13 +8,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from '../i18n'
 import { Crepe } from '@milkdown/crepe'
-import { $prose } from '@milkdown/utils'
+import { $prose, replaceAll } from '@milkdown/utils'
 import { Plugin, PluginKey } from '@milkdown/prose/state'
 
 const props = defineProps({
+  documentVersion: { type: Number, required: true },
   initialContent: { type: String, default: '' },
 })
 
@@ -48,13 +49,16 @@ const resetEmptiedTaskItemPlugin = $prose(() => {
   })
 })
 
-const emit = defineEmits(['update', 'error', 'ready'])
+const emit = defineEmits(['update', 'document-ready', 'error', 'ready'])
 const editorEl = ref(null)
 const editorReady = ref(false)
 let crepeInstance = null
 let _destroyed = false
 let _editorElRef = null
 let _handleKeyScroll = null
+let _created = false
+let _activeDocumentVersion = null
+let _replacingDocument = false
 
 function nextFrame() {
   return new Promise((resolve) => requestAnimationFrame(resolve))
@@ -75,9 +79,26 @@ function doTypewriterScroll() {
   }
 }
 
+function replaceDocument() {
+  if (!_created || _destroyed || !crepeInstance) return
+  _replacingDocument = true
+  try {
+    crepeInstance.editor.action(replaceAll(props.initialContent))
+    _activeDocumentVersion = props.documentVersion
+  } finally {
+    _replacingDocument = false
+  }
+  emit('document-ready', props.initialContent)
+}
+
+watch(() => props.documentVersion, () => {
+  replaceDocument()
+})
+
 onMounted(async () => {
   if (!editorEl.value) return
   _editorElRef = editorEl.value
+  const startingDocumentVersion = props.documentVersion
 
   crepeInstance = new Crepe({
     root: editorEl.value,
@@ -95,7 +116,7 @@ onMounted(async () => {
 
   crepeInstance.on((listener) => {
     listener.markdownUpdated((_, markdown) => {
-      if (!_destroyed) {
+      if (!_destroyed && !_replacingDocument) {
         emit('update', markdown)
         requestAnimationFrame(doTypewriterScroll)
       }
@@ -116,6 +137,14 @@ onMounted(async () => {
     crepeInstance.destroy()
     crepeInstance = null
     return
+  }
+
+  _created = true
+  _activeDocumentVersion = startingDocumentVersion
+  if (props.documentVersion !== _activeDocumentVersion) {
+    replaceDocument()
+  } else {
+    emit('document-ready', props.initialContent)
   }
 
   // Crepe constructs the document progressively. Let styles and layout settle

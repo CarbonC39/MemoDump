@@ -2,8 +2,10 @@
   <div v-if="editorComponent" class="editor-host">
     <component
       :is="editorComponent"
+      :document-version="documentVersion"
       :initial-content="initialContent"
       @update="$emit('update', $event)"
+      @document-ready="$emit('document-ready', $event)"
       @error="handleInitError"
       @ready="handleReady"
     />
@@ -50,9 +52,10 @@ import { useI18n } from '../i18n'
 import { preloadMilkdownEditor } from './milkdownLoader'
 
 defineProps({
+  documentVersion: { type: Number, required: true },
   initialContent: { type: String, default: '' },
 })
-defineEmits(['update', 'fallback-raw'])
+defineEmits(['update', 'document-ready', 'fallback-raw'])
 
 const { t } = useI18n()
 const editorComponent = shallowRef(null)

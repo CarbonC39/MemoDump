@@ -26,13 +26,33 @@ describe('useNoteEditor', () => {
     expect(editor.isDirty.value).toBe(false)
   })
 
-  it('ignores the initial editor echo then tracks later edits', () => {
+  it('ignores updates until the active document is ready', () => {
     const editor = useNoteEditor()
     editor.loadDocument({ path: 'n.md', name: 'n', tags: [], content: 'old' })
-    editor.onEditorUpdate('old')
+    editor.onEditorUpdate('stale')
     expect(editor.isDirty.value).toBe(false)
+    expect(editor.editContent.value).toBe('old')
+    editor.onEditorReady('old')
     editor.onEditorUpdate('new')
     expect(editor.editContent.value).toBe('new')
+    expect(editor.isDirty.value).toBe(true)
+  })
+
+  it('resets readiness when consecutive documents replace the editor content', () => {
+    const editor = useNoteEditor()
+    editor.loadDocument({ path: 'a.md', name: 'a', tags: [], content: 'a' })
+    editor.onEditorReady('a')
+    editor.onEditorUpdate('edited a')
+    expect(editor.isDirty.value).toBe(true)
+
+    editor.loadDocument({ path: 'b.md', name: 'b', tags: [], content: 'b' })
+    editor.onEditorUpdate('late update from a')
+    expect(editor.editContent.value).toBe('b')
+    expect(editor.isDirty.value).toBe(false)
+
+    editor.onEditorReady('b')
+    editor.onEditorUpdate('edited b')
+    expect(editor.editContent.value).toBe('edited b')
     expect(editor.isDirty.value).toBe(true)
   })
 

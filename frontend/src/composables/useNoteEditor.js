@@ -65,13 +65,14 @@ export function useNoteEditor() {
   }
 
   function onEditorUpdate(markdown) {
-    if (!editorReady) {
-      editorReady = true
-      editContent.value = markdown
-      return
-    }
+    if (!editorReady) return
     editContent.value = markdown
     isDirty.value = true
+  }
+
+  function onEditorReady(markdown) {
+    if (typeof markdown === 'string') editContent.value = markdown
+    editorReady = true
   }
 
   function addTag() {
@@ -109,6 +110,7 @@ export function useNoteEditor() {
     createDocument,
     clearDocument,
     onEditorUpdate,
+    onEditorReady,
     addTag,
     toggleEditorMode,
   }
