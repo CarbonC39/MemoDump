@@ -212,8 +212,6 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          # Pin the release to the tagged commit rather than the default branch.
-          target_commitish: ${{ github.sha }}
           files: dist/*
           fail_on_unmatched_files: true
           generate_release_notes: true
@@ -226,4 +224,4 @@ jobs:
       - name: Ensure release is published
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "${GITHUB_REF_NAME}" --draft=false
+        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false
