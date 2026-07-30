@@ -33,11 +33,14 @@ const NoteEditorView = defineComponent({
   components: { LazyMilkdownEditor: LazyMilkdownEditorStub },
   setup(props) {
     const richEditorMounted = ref(props.mode === 'wysiwyg')
+    const rawEditor = ref(null)
     watch(() => props.mode, mode => {
       if (mode === 'wysiwyg') richEditorMounted.value = true
     })
     return {
       richEditorMounted,
+      rawEditor,
+      handleRawInput: () => {},
       t: key => key,
     }
   },

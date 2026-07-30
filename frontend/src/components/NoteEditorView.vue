@@ -10,18 +10,20 @@
       @fallback-raw="$emit('update:mode', 'raw')"
     />
     <textarea
+      ref="rawEditor"
       v-show="mode === 'raw'"
       class="raw-editor"
       :value="content"
       :placeholder="t('editor.rawMarkdown')"
-      @input="$emit('update:content', $event.target.value)"
+      @input="handleRawInput"
     ></textarea>
   </div>
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import LazyMilkdownEditor from './LazyMilkdownEditor.vue'
+import { fitTextareaToContent } from './rawEditorLayout'
 import { useI18n } from '../i18n'
 
 const props = defineProps({
@@ -30,14 +32,30 @@ const props = defineProps({
   initialContent: { type: String, default: '' },
   content: { type: String, default: '' },
 })
-defineEmits(['update', 'document-ready', 'update:mode', 'update:content'])
+const emit = defineEmits(['update', 'document-ready', 'update:mode', 'update:content'])
 
 const { t } = useI18n()
 const richEditorMounted = ref(props.mode === 'wysiwyg')
+const rawEditor = ref(null)
+
+function resizeRawEditor() {
+  const element = rawEditor.value
+  if (!element || props.mode !== 'raw') return
+  fitTextareaToContent(element)
+}
+
+function handleRawInput(event) {
+  resizeRawEditor()
+  emit('update:content', event.target.value)
+}
 
 watch(() => props.mode, (mode) => {
   if (mode === 'wysiwyg') richEditorMounted.value = true
+  else nextTick(resizeRawEditor)
 })
+
+watch(() => props.content, () => nextTick(resizeRawEditor))
+onMounted(() => nextTick(resizeRawEditor))
 </script>
 
 <style scoped>
@@ -51,12 +69,14 @@ watch(() => props.mode, (mode) => {
   flex-direction: column;
 }
 .raw-editor {
-  flex: 1;
+  flex: 1 0 auto;
   width: 100%;
-  height: 100%;
+  height: auto;
+  min-height: 0;
   border: none;
   outline: none;
   resize: none;
+  overflow-y: hidden;
   padding: 16px;
   font-family: var(--editor-font-monospace);
   font-size: var(--editor-raw-font-size);

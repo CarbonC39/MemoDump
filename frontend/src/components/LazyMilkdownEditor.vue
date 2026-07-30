@@ -122,8 +122,8 @@ onBeforeUnmount(() => clearTimeout(fallbackTimer))
 .editor-host {
   position: relative;
   display: flex;
-  flex: 1;
-  min-height: 0;
+  flex: 1 0 auto;
+  min-height: 100%;
 }
 .editor-load-overlay {
   position: absolute;

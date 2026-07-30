@@ -85,12 +85,14 @@ function doTypewriterScroll() {
   if (!sel || !sel.rangeCount) return
   const rect = sel.getRangeAt(0).getBoundingClientRect()
   if (!rect.height) return
-  const containerRect = _editorElRef.getBoundingClientRect()
+  const scrollContainer = _editorElRef.closest('.content-area')
+  if (!scrollContainer) return
+  const containerRect = scrollContainer.getBoundingClientRect()
   const cursorY = rect.top - containerRect.top
   const threshold = containerRect.height * 0.60
   const targetY = containerRect.height * 0.42
   if (cursorY > threshold) {
-    _editorElRef.scrollBy({ top: cursorY - targetY, behavior: 'smooth' })
+    scrollContainer.scrollBy({ top: cursorY - targetY, behavior: 'smooth' })
   }
 }
 
@@ -215,16 +217,16 @@ onBeforeUnmount(() => {
 <style scoped>
 .crepe-editor {
   flex: 1;
-  overflow-y: auto;
-  min-height: 0;
+  min-width: 0;
+  overflow: visible;
+  min-height: 100%;
   visibility: hidden;
-  scrollbar-gutter: stable;
 }
 .crepe-editor.is-ready {
   visibility: visible;
 }
 .crepe-editor :deep(.milkdown) {
-  height: 100%;
+  min-height: 100%;
 }
 .crepe-editor :deep(.editor) {
   min-height: 100%;
