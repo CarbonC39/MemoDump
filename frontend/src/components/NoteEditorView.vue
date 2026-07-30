@@ -10,7 +10,7 @@
       @fallback-raw="$emit('update:mode', 'raw')"
     />
     <textarea
-      v-else
+      v-show="mode === 'raw'"
       class="raw-editor"
       :value="content"
       :placeholder="t('editor.rawMarkdown')"

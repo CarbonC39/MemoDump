@@ -156,6 +156,8 @@ Build the image locally with `docker build -t memodump .` (see `Dockerfile`).
 - Go 1.25+
 - Node 20+ with npm
 
+Before preparing a release, complete the [manual testing checklist](docs/manual-testing.md).
+
 ### CLI server
 
 ```sh
