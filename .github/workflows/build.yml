@@ -217,3 +217,13 @@ jobs:
           files: dist/*
           fail_on_unmatched_files: true
           generate_release_notes: true
+          draft: false
+          prerelease: false
+
+      # Keep publication explicit. If the upload action ever leaves its
+      # temporary release draft behind, fail the job unless GitHub accepts the
+      # final transition to a published release.
+      - name: Ensure release is published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false
