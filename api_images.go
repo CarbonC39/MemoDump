@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -110,10 +111,13 @@ func containsReservedSegment(rel string) bool {
 	return false
 }
 
-func writeImageError(w http.ResponseWriter, status int, msg string) {
+func writeImageErrorCode(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
+	body, _ := json.Marshal(map[string]any{
+		"error": map[string]string{"code": code, "message": msg},
+	})
+	_, _ = w.Write(body)
 }
 
 // handleImagePut stores a raw image body under a content-hash key. The key is
@@ -124,7 +128,7 @@ func writeImageError(w http.ResponseWriter, status int, msg string) {
 func handleImagePut(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if !imageKeyRe.MatchString(key) {
-		writeImageError(w, http.StatusBadRequest, "Invalid image key")
+		writeImageErrorCode(w, http.StatusBadRequest, "invalid_image_key", "Invalid image key")
 		return
 	}
 
@@ -132,13 +136,13 @@ func handleImagePut(w http.ResponseWriter, r *http.Request) {
 
 	vaultDir := filepath.Join(dataDir, imageVaultDir)
 	if err := os.MkdirAll(vaultDir, 0755); err != nil {
-		writeImageError(w, http.StatusInternalServerError, "Failed to prepare image storage")
+		writeImageErrorCode(w, http.StatusInternalServerError, "storage_failed", "Failed to prepare image storage")
 		return
 	}
 
 	tmp, err := os.CreateTemp(vaultDir, "img_*.tmp")
 	if err != nil {
-		writeImageError(w, http.StatusInternalServerError, "Failed to create temporary file")
+		writeImageErrorCode(w, http.StatusInternalServerError, "storage_failed", "Failed to create temporary file")
 		return
 	}
 	tmpPath := tmp.Name()
@@ -154,15 +158,15 @@ func handleImagePut(w http.ResponseWriter, r *http.Request) {
 	n, readErr := io.ReadFull(r.Body, prefix)
 	if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
 		if _, ok := readErr.(*http.MaxBytesError); ok {
-			writeImageError(w, http.StatusRequestEntityTooLarge, "Image too large (max 20 MiB)")
+			writeImageErrorCode(w, http.StatusRequestEntityTooLarge, "image_too_large", "Image too large (max 20 MiB)")
 			return
 		}
-		writeImageError(w, http.StatusBadRequest, "Failed to read request body")
+		writeImageErrorCode(w, http.StatusBadRequest, "read_failed", "Failed to read request body")
 		return
 	}
 	prefix = prefix[:n]
 	if _, err := tmp.Write(prefix); err != nil {
-		writeImageError(w, http.StatusInternalServerError, "Failed to write data")
+		writeImageErrorCode(w, http.StatusInternalServerError, "storage_failed", "Failed to write data")
 		return
 	}
 	_, _ = hasher.Write(prefix)
@@ -171,30 +175,44 @@ func handleImagePut(w http.ResponseWriter, r *http.Request) {
 	count, err := io.Copy(io.MultiWriter(tmp, hasher), r.Body)
 	if err != nil {
 		if _, ok := err.(*http.MaxBytesError); ok {
-			writeImageError(w, http.StatusRequestEntityTooLarge, "Image too large (max 20 MiB)")
+			writeImageErrorCode(w, http.StatusRequestEntityTooLarge, "image_too_large", "Image too large (max 20 MiB)")
 			return
 		}
-		writeImageError(w, http.StatusInternalServerError, "Failed to write data")
+		writeImageErrorCode(w, http.StatusInternalServerError, "storage_failed", "Failed to write data")
 		return
 	}
 	written += count
 
 	format, err := detectImageFormat(prefix)
 	if err != nil {
-		writeImageError(w, http.StatusBadRequest, "Unsupported or unrecognized image format")
+		writeImageErrorCode(w, http.StatusBadRequest, "unsupported_format", "Unsupported or unrecognized image format")
 		return
 	}
 	if format.ext != filepath.Ext(key) {
-		writeImageError(w, http.StatusBadRequest, "Image content does not match the requested key extension")
+		writeImageErrorCode(w, http.StatusBadRequest, "format_mismatch", "Image content does not match the requested key extension")
 		return
 	}
 	if got := hex.EncodeToString(hasher.Sum(nil)); got != key[:64] {
-		writeImageError(w, http.StatusBadRequest, "Image hash does not match the requested key")
+		writeImageErrorCode(w, http.StatusBadRequest, "hash_mismatch", "Image hash does not match the requested key")
 		return
 	}
 
 	if err := tmp.Close(); err != nil {
-		writeImageError(w, http.StatusInternalServerError, "Failed to finalize image")
+		writeImageErrorCode(w, http.StatusInternalServerError, "storage_failed", "Failed to finalize image")
+		return
+	}
+
+	// S3 mode: the server proxies the upload and verifies public readability.
+	if s3Cfg := effectiveImageS3Config(); s3Active(s3Cfg) {
+		if err := s3PutImage(s3Cfg, key, tmpPath, written, format.contentType); err != nil {
+			code := "upload_failed"
+			if strings.HasPrefix(err.Error(), "verify_failed:") {
+				code = "verify_failed"
+			}
+			writeImageErrorCode(w, http.StatusBadGateway, code, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"status": "ok", "key": key})
 		return
 	}
 
@@ -212,13 +230,13 @@ func handleImagePut(w http.ResponseWriter, r *http.Request) {
 		// copy so a re-paste actually fixes the object.
 		log.Printf("image vault: repairing corrupt object %s (stored %d bytes, verified %d)", key, info.Size(), written)
 		if err := os.Remove(target); err != nil {
-			writeImageError(w, http.StatusInternalServerError, "Failed to replace corrupt image")
+			writeImageErrorCode(w, http.StatusInternalServerError, "storage_failed", "Failed to replace corrupt image")
 			return
 		}
 		repaired = true
 	}
 	if err := os.Rename(tmpPath, target); err != nil {
-		writeImageError(w, http.StatusInternalServerError, "Failed to save image")
+		writeImageErrorCode(w, http.StatusInternalServerError, "storage_failed", "Failed to save image")
 		return
 	}
 	if repaired {
@@ -234,22 +252,22 @@ func handleImagePut(w http.ResponseWriter, r *http.Request) {
 func handleImageGet(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if !imageKeyRe.MatchString(key) {
-		writeImageError(w, http.StatusBadRequest, "Invalid image key")
+		writeImageErrorCode(w, http.StatusBadRequest, "invalid_image_key", "Invalid image key")
 		return
 	}
 	format, ok := imageFormats[strings.TrimPrefix(filepath.Ext(key), ".")]
 	if !ok {
-		writeImageError(w, http.StatusBadRequest, "Invalid image key")
+		writeImageErrorCode(w, http.StatusBadRequest, "invalid_image_key", "Invalid image key")
 		return
 	}
 
 	f, err := os.Open(filepath.Join(dataDir, imageVaultDir, key))
 	if err != nil {
 		if os.IsNotExist(err) {
-			writeImageError(w, http.StatusNotFound, "Image not found")
+			writeImageErrorCode(w, http.StatusNotFound, "image_not_found", "Image not found")
 			return
 		}
-		writeImageError(w, http.StatusInternalServerError, "Failed to read image")
+		writeImageErrorCode(w, http.StatusInternalServerError, "storage_failed", "Failed to read image")
 		return
 	}
 	defer f.Close()

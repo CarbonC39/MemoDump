@@ -881,7 +881,15 @@ func handlePing(w http.ResponseWriter, r *http.Request) {
 // handleConfig is unauthenticated and returns server configuration the UI needs
 // before login (e.g. whether auth is required so the Sign Out button can be hidden).
 func handleConfig(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"noAuth": noAuth})
+	image := map[string]any{
+		"provider":   "local",
+		"configured": false,
+		"editable":   !imageConfigHasHigherOverride(),
+	}
+	if cfg := effectiveImageS3Config(); s3Active(cfg) {
+		image = imageConfigPublic(cfg)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"noAuth": noAuth, "image": image})
 }
 
 // handleUploadNote accepts a multipart .md/.txt file upload and saves it as a note.
