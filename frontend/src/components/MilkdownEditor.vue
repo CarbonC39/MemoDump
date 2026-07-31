@@ -24,6 +24,8 @@ import { languages } from '@codemirror/language-data'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { $prose, replaceAll } from '@milkdown/utils'
 import { Plugin, PluginKey } from '@milkdown/prose/state'
+import { editorViewCtx } from '@milkdown/kit/core'
+import { stageAndUploadImage, resolvePending, revokeObjectUrls } from '../composables/mediaOutbox'
 
 const props = defineProps({
   documentVersion: { type: Number, required: true },
@@ -124,6 +126,8 @@ onMounted(async () => {
   }
   _editorElRef.addEventListener('input', _handleUserInput, true)
   _editorElRef.addEventListener('pointerdown', _handleEditorControl, true)
+  _editorElRef.addEventListener('paste', handleImagePaste)
+  _editorElRef.addEventListener('drop', handleImageDrop)
   const startingDocumentVersion = props.documentVersion
 
   crepeInstance = new CrepeBuilder({
@@ -133,13 +137,78 @@ onMounted(async () => {
     .addFeature(cursor)
     .addFeature(listItem)
     .addFeature(linkTooltip)
-    .addFeature(imageBlock)
+    .addFeature(imageBlock, {
+      onUpload: (file) => stageAndUploadImage(file),
+      proxyDomURL: (url) => resolvePending(url),
+      onImageLoadError: (event) => {
+        const img = event.target
+        if (img) {
+          img.classList.add('image-load-failed')
+          img.setAttribute('title', t('media.imageLoadFailed'))
+        }
+      },
+    })
     .addFeature(blockEdit)
     .addFeature(placeholder, { text: t('editorPlaceholder') })
     .addFeature(toolbar)
     .addFeature(codeMirror, { languages, theme: oneDark })
     .addFeature(table)
   crepeInstance.editor.use(resetEmptiedTaskItemPlugin)
+
+  // ---- image paste / drop ----
+  // Crepe's image components only handle the upload button and link input;
+  // pasting or dropping image files is MemoDump's responsibility. For image
+  // files we always preventDefault + stopPropagation so MainView's file-import
+  // drop handler (.md/.txt, alert on anything else) never swallows them.
+  function imageFileCandidates(files) {
+    return Array.from(files || []).filter((file) =>
+      file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif)$/i.test(file.name || '')
+    )
+  }
+
+  function insertImageNode(url, pos = null) {
+    if (!_created || _destroyed || !crepeInstance) return
+    _hasUserInput = true
+    crepeInstance.editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const node = view.state.schema.nodes['image-block']?.create({ src: url, ratio: 1 })
+      if (!node) return
+      let tr = view.state.tr
+      tr = pos != null ? tr.insert(pos, node) : tr.replaceSelectionWith(node)
+      view.dispatch(tr)
+    })
+  }
+
+  async function insertImageFiles(files, pos = null) {
+    for (const file of files) {
+      const url = await stageAndUploadImage(file)
+      if (url) insertImageNode(url, pos)
+    }
+  }
+
+  function handleImagePaste(e) {
+    const files = imageFileCandidates(e.clipboardData?.files)
+    if (!files.length) return
+    e.preventDefault()
+    e.stopPropagation()
+    insertImageFiles(files)
+  }
+
+  function handleImageDrop(e) {
+    const files = imageFileCandidates(e.dataTransfer?.files)
+    if (!files.length) return
+    e.preventDefault()
+    e.stopPropagation()
+    let pos = null
+    if (_created && crepeInstance) {
+      crepeInstance.editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const coords = view.posAtCoords({ left: e.clientX, top: e.clientY })
+        if (coords) pos = coords.pos
+      })
+    }
+    insertImageFiles(files, pos)
+  }
 
   crepeInstance.on((listener) => {
     listener.markdownUpdated((_, markdown) => {
@@ -207,6 +276,11 @@ onBeforeUnmount(() => {
   if (_editorElRef && _handleEditorControl) {
     _editorElRef.removeEventListener('pointerdown', _handleEditorControl, true)
   }
+  if (_editorElRef) {
+    _editorElRef.removeEventListener('paste', handleImagePaste)
+    _editorElRef.removeEventListener('drop', handleImageDrop)
+  }
+  revokeObjectUrls()
   if (crepeInstance) {
     crepeInstance.destroy()
     crepeInstance = null
