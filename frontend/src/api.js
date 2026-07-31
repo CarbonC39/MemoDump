@@ -98,6 +98,17 @@ const remoteApi = {
             headers: { 'Content-Type': 'multipart/form-data' },
         })
     },
+    imageUpload(key, blob, contentType) {
+        return api.put(`/images/${key}`, blob, {
+            headers: { 'Content-Type': contentType || 'application/octet-stream' },
+        })
+    },
+    imageConfigSave(config) {
+        return api.put('/config/image', config)
+    },
+    imageConfigTest(config) {
+        return api.post('/config/image/test', config)
+    },
 }
 
 // Select backend: localApi (IndexedDB, no server) when built with VITE_LOCAL=1,

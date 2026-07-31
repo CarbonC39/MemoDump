@@ -217,7 +217,24 @@ async function createNoteRec({ name, folder, content, tags }) {
 const localApi = {
   // No server, no sessions: auth is a no-op in local mode.
   config() {
-    return Promise.resolve({ data: { noAuth: true } })
+    let image = { provider: 'off', configured: false, editable: true }
+    try {
+      const raw = localStorage.getItem('memodump_image_config')
+      if (raw) {
+        const cfg = JSON.parse(raw)
+        if (cfg.provider === 's3') {
+          image = {
+            provider: 's3',
+            bucket: cfg.bucket || '',
+            publicBaseUrl: cfg.publicBaseUrl || '',
+            prefix: cfg.prefix || '',
+            configured: true,
+            editable: true,
+          }
+        }
+      }
+    } catch (_) {}
+    return Promise.resolve({ data: { noAuth: true, image } })
   },
   login() {
     return Promise.resolve({ data: { status: 'ok' } })

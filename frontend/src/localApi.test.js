@@ -14,7 +14,9 @@ afterEach(() => {
 
 describe('auth no-ops', () => {
   it('config reports no-auth', async () => {
-    expect((await localApi.config()).data).toEqual({ noAuth: true })
+    const data = (await localApi.config()).data
+    expect(data.noAuth).toBe(true)
+    expect(data.image.provider).toBe('off')
   })
   it('login/logout/ping resolve', async () => {
     expect((await localApi.login('a', 'b')).data.status).toBe('ok')

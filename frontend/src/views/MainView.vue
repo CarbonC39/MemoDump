@@ -142,6 +142,14 @@
       </button>
     </div>
 
+    <div v-if="mediaNotice" class="draft-banner media-notice" role="status">
+      <span class="material-icons-outlined" style="font-size:18px;flex-shrink:0">image_not_supported</span>
+      <span>{{ t('media.' + mediaNotice.code) }}</span>
+      <button class="draft-banner-close" @click="mediaNotice = null">
+        <span class="material-icons-outlined">close</span>
+      </button>
+    </div>
+
     <FolderPickerDialog
       :visible="folderPicker.visible"
       :selected="folderPicker.selected"
@@ -200,6 +208,8 @@ import { useDialogs } from '../composables/useDialogs'
 import { useAutosave } from '../composables/useAutosave'
 import { useFileImport } from '../composables/useFileImport'
 import { useContextMenu } from '../composables/useContextMenu'
+import { initImageSettings } from '../composables/useImageSettings'
+import { initMediaOutbox, startMediaFlushLoop, mediaNotice } from '../composables/mediaOutbox'
 import { outboxAll } from '../composables/outbox.js'
 import { useTheme } from '../composables/useTheme.js'
 import { useNoteEditor } from '../composables/useNoteEditor.js'
@@ -349,6 +359,12 @@ function handleGlobalKeydown(e) {
 
 onMounted(async () => {
   window.addEventListener('keydown', handleGlobalKeydown)
+  // Hard bootstrap order: image settings and media-outbox hydration must
+  // complete before the editor mounts, so the proxyDomURL mapping exists
+  // before any note markdown is rendered.
+  await initImageSettings()
+  await initMediaOutbox()
+  startMediaFlushLoop()
   await initialize({
     onReady: () => { isInitializing.value = false },
   })
@@ -441,6 +457,8 @@ provide('dnd', dnd)
   opacity: 0.8;
 }
 .draft-banner-close:hover { opacity: 1; }
+
+.media-notice { bottom: 64px; }
 
 @media (max-width: 768px) {
   /* Prevent iOS zoom on input focus by ensuring font-size >= 16px */
