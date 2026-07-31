@@ -31,6 +31,7 @@ A lightweight, single-binary Markdown notes app. Run it as a self-hosted web ser
 - **Markdown editor** — [Milkdown](https://milkdown.dev/) WYSIWYG editor with full Markdown support.
 - **Folder organisation** — Hierarchical folders with drag-and-drop and `.md` file import.
 - **Full-text search** — Fast in-memory AND-mode search across note bodies and tags.
+- **Image paste & upload** — Paste or drop image files to insert them; stored in the local vault by default, with optional S3-compatible hosting.
 - **Waterfall card view** — Visual masonry-style note browser alongside the folder tree.
 - **Autosave & offline outbox** — Calm autosave backed by IndexedDB; edits queued while offline replay automatically when connectivity returns.
 - **Font presets & typography** — Choose from system, serif, and sans font families; custom CSS font stacks; independent font sizes for app UI, WYSIWYG editor, and raw editor.
@@ -45,6 +46,43 @@ A lightweight, single-binary Markdown notes app. Run it as a self-hosted web ser
   <img src="images/md-editor.avif" alt="Markdown editor view"/>
   <img src="images/waterfall-view.avif" alt="Waterfall notes view"/>
 </p>
+
+---
+
+## Image support
+
+Image storage across the three builds:
+
+| Build | Default | Configurable |
+|-------|---------|--------------|
+| Web server | Local vault (`<dataDir>/.images/`) | S3-compatible (settings panel or environment) |
+| Wails desktop | Local vault (`<dataDir>/.images/`) | S3-compatible (settings panel) |
+| Pure frontend / PWA | Off (image links only) | S3-compatible (settings panel, browser-direct) |
+
+- Paste or drop image files in the editor to insert them. The local vault stores
+  images under the data dir and the markdown keeps a relative URL
+  (`/api/images/<key>`) that resolves only inside the app origin — the
+  portability tradeoff of self-hosted images.
+- **S3 mode requires the bucket to be publicly readable** (otherwise images
+  show 403). The pure-frontend build additionally needs bucket CORS configured
+  (allow the app origin, `PUT/POST/GET/HEAD`, `Content-Type` and `x-amz-*`
+  headers, and expose `ETag` for multipart uploads).
+- **Privacy notice**: in S3 mode images are publicly readable by anyone with
+  the link; the content hash is not access control, and identical files
+  produce identical links. Do not upload images that must stay private.
+- Images pasted offline are kept in browser IndexedDB and upload automatically
+  once connectivity returns; an entry is removed only after the image is
+  uploaded and verified readable (a few orphan objects may remain, which is
+  accepted).
+- Security: image keys are `sha256(content) + canonical extension` (JPEG is
+  always `.jpg`); the server validates the content hash, magic bytes and the
+  extension match. Only png/jpg/gif/webp/avif are accepted — **no SVG**
+  (same-origin stored-XSS risk).
+
+The web server can also be configured via environment:
+`MEMODUMP_IMAGE_S3_ENDPOINT`, `_REGION`, `_BUCKET`, `_PREFIX`, `_PUBLIC_URL`,
+`_ACCESS_KEY`, `_SECRET_KEY`, `_FORCE_PATH_STYLE` (higher priority than the
+settings panel, which becomes read-only).
 
 ---
 
