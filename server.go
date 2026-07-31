@@ -110,6 +110,8 @@ func buildAPIMux() *http.ServeMux {
 	mux.HandleFunc("DELETE /api/folders/{path...}", authMiddleware(handleDeleteFolder))
 	mux.HandleFunc("GET /api/search", authMiddleware(handleSearch))
 	mux.HandleFunc("PUT /api/move/folder/{path...}", authMiddleware(handleMoveFolder))
+	mux.HandleFunc("PUT /api/images/{key}", authMiddleware(handleImagePut))
+	mux.HandleFunc("GET /api/images/{key}", authMiddleware(handleImageGet))
 	mux.HandleFunc("GET /api/ping", authMiddleware(handlePing))
 	mux.HandleFunc("POST /api/upload", authMiddleware(handleUploadNote))
 	mux.HandleFunc("GET /api/config", handleConfig)
