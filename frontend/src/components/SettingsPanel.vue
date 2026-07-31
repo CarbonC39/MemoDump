@@ -159,6 +159,109 @@
 
       <hr class="settings-divider" />
 
+      <!-- Image hosting -->
+      <div class="settings-section">
+        <button
+          class="settings-section-header"
+          :aria-expanded="imageSectionOpen"
+          @click="imageSectionOpen = !imageSectionOpen"
+        >
+          <h3>{{ t('settings.imageSection') }}</h3>
+          <span class="image-mode-summary">{{ imageModeSummary }}</span>
+          <span class="material-icons-outlined settings-caret">{{ imageSectionOpen ? 'expand_less' : 'expand_more' }}</span>
+        </button>
+
+        <div v-show="imageSectionOpen" class="settings-image-body">
+          <div v-if="!isLocalImageBuild && !imageSettings.editable" class="setting-row">
+            <span class="setting-row-label">{{ t('settings.imageReadOnlySource') }}</span>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-row-label">{{ t('settings.imageProvider') }}</span>
+            <select
+              class="input input-select"
+              :value="imageDraft.provider"
+              :disabled="!isLocalImageBuild && !imageSettings.editable"
+              @change="imageDraft.provider = $event.target.value"
+            >
+              <option v-if="isLocalImageBuild" value="off">{{ t('settings.imageProviderOff') }}</option>
+              <option v-else value="local">{{ t('settings.imageProviderLocal') }}</option>
+              <option value="s3">{{ t('settings.imageProviderS3') }}</option>
+            </select>
+          </div>
+
+          <template v-if="imageDraft.provider === 's3'">
+            <div class="setting-row">
+              <span class="setting-row-label">Endpoint</span>
+              <input type="text" class="input input-select" v-model.trim="imageDraft.endpoint"
+                     :disabled="!isLocalImageBuild && !imageSettings.editable" />
+            </div>
+            <div class="setting-row">
+              <span class="setting-row-label">Region</span>
+              <input type="text" class="input input-select" v-model.trim="imageDraft.region"
+                     :disabled="!isLocalImageBuild && !imageSettings.editable" />
+            </div>
+            <div class="setting-row">
+              <span class="setting-row-label">Bucket</span>
+              <input type="text" class="input input-select" v-model.trim="imageDraft.bucket"
+                     :disabled="!isLocalImageBuild && !imageSettings.editable" />
+            </div>
+            <div class="setting-row">
+              <span class="setting-row-label">Prefix</span>
+              <input type="text" class="input input-select" v-model.trim="imageDraft.prefix"
+                     :disabled="!isLocalImageBuild && !imageSettings.editable" />
+            </div>
+            <div class="setting-row">
+              <span class="setting-row-label">Public URL</span>
+              <input type="text" class="input input-select" v-model.trim="imageDraft.publicBaseUrl"
+                     :disabled="!isLocalImageBuild && !imageSettings.editable"
+                     placeholder="https://cdn.example.com/images" />
+            </div>
+            <div class="setting-row">
+              <span class="setting-row-label">Access Key</span>
+              <input type="password" class="input input-select" v-model.trim="imageDraft.accessKey"
+                     :disabled="!isLocalImageBuild && !imageSettings.editable" />
+            </div>
+            <div class="setting-row">
+              <span class="setting-row-label">Secret Key</span>
+              <input type="password" class="input input-select" v-model.trim="imageDraft.secretKey"
+                     :placeholder="imageSettings.configured ? t('settings.imageSecretUnchanged') : ''"
+                     :disabled="!isLocalImageBuild && !imageSettings.editable" />
+            </div>
+            <div class="setting-row">
+              <span class="setting-row-label">{{ t('settings.imageForcePathStyle') }}</span>
+              <input type="checkbox" v-model="imageDraft.forcePathStyle"
+                     :disabled="!isLocalImageBuild && !imageSettings.editable" />
+            </div>
+            <p class="image-help">{{ t('settings.imagePublicReadHelp') }}</p>
+            <p class="image-help image-privacy-warning">{{ t('settings.imagePrivacyWarning') }}</p>
+            <p v-if="isLocalImageBuild" class="image-help">{{ t('settings.imageLocalStorageWarning') }}</p>
+          </template>
+
+          <div class="setting-row">
+            <span class="setting-row-label"></span>
+            <div class="image-actions">
+              <button class="btn btn-sm btn-outline" :disabled="imageBusy" @click="onSaveImageConfig">
+                {{ imageBusy === 'save' ? t('settings.imageSaving') : t('settings.imageSave') }}
+              </button>
+              <button
+                v-if="imageDraft.provider === 's3'"
+                class="btn btn-sm btn-outline"
+                :disabled="imageBusy"
+                @click="onTestImageConnection"
+              >
+                {{ imageBusy === 'test' ? t('settings.imageTesting') : t('settings.imageTestConnection') }}
+              </button>
+            </div>
+          </div>
+          <p v-if="imageFormMessage" class="image-help" :class="{ 'image-error': imageFormError }">
+            {{ imageFormMessage }}
+          </p>
+        </div>
+      </div>
+
+      <hr class="settings-divider" />
+
       <!-- Custom CSS -->
       <div class="settings-section">
         <h3>{{ t('settings.customCss') }}</h3>
@@ -192,12 +295,107 @@ const { t, locale, setLocale } = useI18n()
 
 import { useTheme } from '../composables/useTheme.js'
 const { theme, setTheme } = useTheme()
+import {
+  getImageSettings,
+  saveImageConfig,
+  testImageConnection,
+  isLocalBuild as isLocalImageBuild,
+} from '../composables/useImageSettings'
 
 const emit = defineEmits(['close'])
 
 // Must NOT define props.visible — visibility is controlled by parent v-show.
 
 const previewMode = ref('wysiwyg')
+
+// ---- image hosting section ----
+const imageSettings = getImageSettings()
+const imageSectionOpen = ref(false)
+const imageBusy = ref(null)
+const imageFormMessage = ref('')
+const imageFormError = ref(false)
+const imageDraft = reactive({
+  provider: imageSettings.provider,
+  endpoint: imageSettings.endpoint,
+  region: imageSettings.region,
+  bucket: imageSettings.bucket,
+  prefix: imageSettings.prefix,
+  publicBaseUrl: imageSettings.publicBaseUrl,
+  accessKey: imageSettings.accessKey,
+  secretKey: imageSettings.secretKey,
+  forcePathStyle: imageSettings.forcePathStyle,
+})
+
+const imageModeSummary = computed(() => {
+  if (imageSettings.provider === 's3') {
+    return imageSettings.bucket ? `S3: ${imageSettings.bucket}` : t('settings.imageProviderS3')
+  }
+  return isLocalImageBuild ? t('settings.imageProviderOff') : t('settings.imageProviderLocal')
+})
+
+function syncImageDraft() {
+  imageDraft.provider = imageSettings.provider
+  imageDraft.endpoint = imageSettings.endpoint
+  imageDraft.region = imageSettings.region
+  imageDraft.bucket = imageSettings.bucket
+  imageDraft.prefix = imageSettings.prefix
+  imageDraft.publicBaseUrl = imageSettings.publicBaseUrl
+  imageDraft.accessKey = imageSettings.accessKey
+  imageDraft.secretKey = imageSettings.secretKey
+  imageDraft.forcePathStyle = imageSettings.forcePathStyle
+}
+
+async function onSaveImageConfig() {
+  imageBusy.value = 'save'
+  imageFormMessage.value = ''
+  imageFormError.value = false
+  try {
+    await saveImageConfig({
+      provider: imageDraft.provider,
+      endpoint: imageDraft.endpoint,
+      region: imageDraft.region,
+      bucket: imageDraft.bucket,
+      prefix: imageDraft.prefix,
+      publicBaseUrl: imageDraft.publicBaseUrl,
+      accessKey: imageDraft.accessKey,
+      secretKey: imageDraft.secretKey,
+      forcePathStyle: imageDraft.forcePathStyle,
+    })
+    imageFormMessage.value = t('settings.imageSaveOk')
+  } catch (e) {
+    imageFormMessage.value = e?.response?.data?.error?.message || e?.response?.data?.error || t('settings.imageSaveFail')
+    imageFormError.value = true
+  } finally {
+    imageBusy.value = null
+  }
+}
+
+async function onTestImageConnection() {
+  imageBusy.value = 'test'
+  imageFormMessage.value = ''
+  imageFormError.value = false
+  try {
+    const result = await testImageConnection({
+      provider: imageDraft.provider,
+      endpoint: imageDraft.endpoint,
+      region: imageDraft.region,
+      bucket: imageDraft.bucket,
+      prefix: imageDraft.prefix,
+      publicBaseUrl: imageDraft.publicBaseUrl,
+      accessKey: imageDraft.accessKey,
+      secretKey: imageDraft.secretKey,
+      forcePathStyle: imageDraft.forcePathStyle,
+    })
+    imageFormMessage.value = result.warnings?.length
+      ? `${t('settings.imageTestOk')} (${result.warnings.join('; ')})`
+      : t('settings.imageTestOk')
+  } catch (e) {
+    imageFormMessage.value = e?.response?.data?.error?.message || e?.message || t('settings.imageTestFail')
+    imageFormError.value = true
+  } finally {
+    imageBusy.value = null
+  }
+}
 
 // Preview sample text: tied to UI language.
 const PREVIEW_SAMPLES = {
@@ -441,6 +639,47 @@ function resetToDefaults() {
   border: none;
   border-top: 1px solid var(--border);
   margin: 20px 0;
+}
+
+/* ---- Image hosting section ---- */
+.settings-section-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.settings-section-header h3 { margin: 0; }
+.image-mode-summary {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-caret { color: var(--text-muted); font-size: 18px; }
+.settings-image-body { padding-top: 14px; }
+.image-actions {
+  display: flex;
+  gap: 8px;
+}
+.image-help {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.image-help.image-error { color: #c0392b; }
+.image-help.image-privacy-warning {
+  color: #a05a00;
+  background: rgba(255, 200, 87, 0.12);
+  border-radius: 8px;
+  padding: 8px 10px;
 }
 
 /* ---- Setting rows ---- */

@@ -69,7 +69,32 @@
     "custom": "自定义…",
     "customCss": "自定义 CSS",
     "customCssHint": "可覆盖应用样式。支持 :root、body[data-build=\"server\"] 等选择器。",
-    "applyCss": "应用 CSS"
+    "applyCss": "应用 CSS",
+    "imageSection": "图片",
+    "imageProvider": "图片存储",
+    "imageProviderLocal": "本地图库",
+    "imageProviderS3": "S3 兼容对象存储",
+    "imageProviderOff": "关闭",
+    "imageForcePathStyle": "强制 path-style 请求",
+    "imageSecretUnchanged": "留空表示保持不变",
+    "imageSave": "保存",
+    "imageSaving": "保存中…",
+    "imageTestConnection": "测试连接",
+    "imageTesting": "测试中…",
+    "imageSaveOk": "已保存",
+    "imageSaveFail": "保存失败",
+    "imageTestOk": "连接成功",
+    "imageTestFail": "连接失败",
+    "imageReadOnlySource": "由服务器环境变量/启动参数配置，面板只读",
+    "imagePublicReadHelp": "bucket 需要对公网可读，否则图片会显示 403。",
+    "imagePrivacyWarning": "使用 S3 模式时，上传的图片可通过其链接公开访问；内容哈希不是访问控制，相同文件会生成相同链接。请勿上传需要私密保存的图片。",
+    "imageLocalStorageWarning": "密钥仅保存在本浏览器中。"
+  },
+  "media": {
+    "imageOff": "图片上传未配置，请先在设置中配置图床。",
+    "imageTooLarge": "图片超过 20 MiB 上限。",
+    "imageFormat": "不支持的图片格式。",
+    "imageLoadFailed": "图片加载失败"
   },
   "modals": {
     "cancel": "取消",
