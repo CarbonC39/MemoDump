@@ -79,9 +79,17 @@ export function currentTarget() {
     const endpoint = state.endpoint.trim()
     const bucket = state.bucket.trim()
     const prefix = state.prefix.trim()
+    // Server/Wails builds upload through /api/images. The server deliberately
+    // does not expose its endpoint or credentials, so use the public
+    // destination as the stable target identity and mark the transport as a
+    // proxy. Pure-frontend builds sign and upload directly in the browser.
+    const proxy = import.meta.env.VITE_LOCAL !== '1'
     return {
-      id: `s3:${endpoint}|${bucket}|${prefix}`,
+      id: proxy
+        ? `s3-proxy:${state.publicBaseUrl.trim()}|${bucket}|${prefix}`
+        : `s3:${endpoint}|${bucket}|${prefix}`,
       provider: 's3',
+      transport: proxy ? 'proxy' : 'direct',
       endpoint,
       region: state.region.trim(),
       bucket,

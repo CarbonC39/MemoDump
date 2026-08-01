@@ -155,6 +155,16 @@ func TestImageConfigSaveSecretRotation(t *testing.T) {
 	if stored.Provider != "local" || stored.SecretKey != "" {
 		t.Fatalf("stored config = %#v, want local without secrets", stored)
 	}
+	var response struct {
+		Provider   string `json:"provider"`
+		Configured bool   `json:"configured"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Provider != "local" || response.Configured {
+		t.Fatalf("local response = %#v", response)
+	}
 }
 
 // fakeS3Server accepts unauthenticated S3-shaped requests and records the
@@ -210,6 +220,22 @@ func TestImageConfigTestConnection(t *testing.T) {
 	}
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+}
+
+func TestImageConfigTestConnectionWithPrefix(t *testing.T) {
+	srv, objects := fakeS3Server(t, true)
+	cfg := s3ConfigForTestServer(srv)
+	cfg.Prefix = "images"
+	warnings, err := testImageS3Config(cfg)
+	if err != nil {
+		t.Fatalf("test connection with prefix failed: %v", err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want cleanup warning", warnings)
+	}
+	if _, ok := objects.Load("/test-bucket/images/" + imageProbeKey()); !ok {
+		t.Fatal("probe was not uploaded beneath the configured prefix")
 	}
 }
 

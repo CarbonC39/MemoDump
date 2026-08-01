@@ -67,6 +67,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 describe('canonical staging flow (vault)', () => {
@@ -119,6 +120,7 @@ describe('canonical staging flow (vault)', () => {
 
 describe('S3 direct path', () => {
   beforeEach(() => {
+    vi.stubEnv('VITE_LOCAL', '1')
     settings.provider = 's3'
     settings.endpoint = 'https://s3.example.com'
     settings.bucket = 'memodump'
@@ -135,6 +137,10 @@ describe('S3 direct path', () => {
     await waitFor(() => s3PutObject.mock.calls.length === 1)
     await waitFor(() => pendingImageCount.value === 0)
     expect(s3PutObject).toHaveBeenCalledTimes(1)
+    expect(s3PutObject.mock.calls[0][0]).toMatchObject({
+      accessKey: 'ak',
+      secretKey: 'sk',
+    })
   })
 
   it('keeps the blob while verification fails', async () => {
@@ -142,6 +148,23 @@ describe('S3 direct path', () => {
     const url = await stageAndUploadImage(pngFile())
     await waitFor(() => pendingImageCount.value === 1)
     expect(resolvePending(url)).toMatch(/^blob:/)
+  })
+})
+
+describe('server S3 proxy path', () => {
+  it('keeps the public S3 URL but uploads through the Go proxy', async () => {
+    settings.provider = 's3'
+    settings.bucket = 'memodump'
+    settings.prefix = 'img'
+    settings.publicBaseUrl = 'https://cdn.example.com'
+    apiClient.imageUpload.mockResolvedValue({ status: 201 })
+
+    const url = await stageAndUploadImage(pngFile())
+    expect(url).toMatch(/^https:\/\/cdn\.example\.com\/img\/[a-f0-9]{64}\.png$/)
+    await waitFor(() => apiClient.imageUpload.mock.calls.length === 1)
+    await waitFor(() => pendingImageCount.value === 0)
+    expect(apiClient.imageUpload).toHaveBeenCalledTimes(1)
+    expect(s3PutObject).not.toHaveBeenCalled()
   })
 })
 

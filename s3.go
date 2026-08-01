@@ -259,11 +259,7 @@ func s3PutImage(cfg imageS3Config, key, tmpPath string, size int64, contentType 
 	}
 	defer f.Close()
 
-	objectName := cfg.Prefix
-	if objectName != "" {
-		objectName += "/"
-	}
-	objectName += key
+	objectName := objectNameForImage(cfg, key)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if _, err := client.PutObject(ctx, cfg.Bucket, objectName, f, size, minio.PutObjectOptions{
@@ -275,6 +271,13 @@ func s3PutImage(cfg imageS3Config, key, tmpPath string, size int64, contentType 
 		return fmt.Errorf("verify_failed: %w", err)
 	}
 	return nil
+}
+
+func objectNameForImage(cfg imageS3Config, key string) string {
+	if cfg.Prefix == "" {
+		return key
+	}
+	return cfg.Prefix + "/" + key
 }
 
 // verifyPublicImageURL performs an anonymous HEAD (falling back to a ranged
@@ -321,9 +324,10 @@ func testImageS3Config(cfg imageS3Config) (warnings []string, err error) {
 		return nil, err
 	}
 	probeKey := imageProbeKey()
+	probeObjectName := objectNameForImage(cfg, probeKey)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if _, err := client.PutObject(ctx, cfg.Bucket, probeKey, strings.NewReader("memodump-probe"), int64(len("memodump-probe")), minio.PutObjectOptions{
+	if _, err := client.PutObject(ctx, cfg.Bucket, probeObjectName, strings.NewReader("memodump-probe"), int64(len("memodump-probe")), minio.PutObjectOptions{
 		ContentType: "text/plain",
 	}); err != nil {
 		return nil, fmt.Errorf("probe upload failed: %w", err)
@@ -331,13 +335,20 @@ func testImageS3Config(cfg imageS3Config) (warnings []string, err error) {
 	if err := verifyPublicImageURL(cfg, probeKey); err != nil {
 		return nil, fmt.Errorf("probe not publicly readable: %w", err)
 	}
-	if err := client.RemoveObject(ctx, cfg.Bucket, probeKey, minio.RemoveObjectOptions{}); err != nil {
+	if err := client.RemoveObject(ctx, cfg.Bucket, probeObjectName, minio.RemoveObjectOptions{}); err != nil {
 		warnings = append(warnings, fmt.Sprintf("probe object could not be removed (bucket policy may not allow DELETE): %v", err))
 	}
 	return warnings, nil
 }
 
 func imageConfigPublic(cfg imageS3Config) map[string]any {
+	if !s3Active(cfg) {
+		return map[string]any{
+			"provider":   "local",
+			"configured": false,
+			"editable":   !imageConfigHasHigherOverride(),
+		}
+	}
 	return map[string]any{
 		"provider":      "s3",
 		"bucket":        cfg.Bucket,

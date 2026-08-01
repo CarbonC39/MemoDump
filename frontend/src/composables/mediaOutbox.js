@@ -30,6 +30,7 @@ export const mediaNotice = ref(null)
 
 const _entryByUrl = new Map()
 const _blobUrls = new Map()
+const _retainedBlobUrls = new Set()
 const _inFlight = new Set()
 let _dbPromise = null
 let _initialized = false
@@ -240,7 +241,9 @@ function swapDisplayed(url) {
 
 export function revokeObjectUrls() {
   for (const objectUrl of _blobUrls.values()) URL.revokeObjectURL(objectUrl)
+  for (const objectUrl of _retainedBlobUrls) URL.revokeObjectURL(objectUrl)
   _blobUrls.clear()
+  _retainedBlobUrls.clear()
 }
 
 // ---- canonical media staging flow ----
@@ -304,6 +307,7 @@ function snapshotTarget(target) {
     ? {
         id: target.id,
         provider: 's3',
+        transport: target.transport,
         endpoint: target.endpoint,
         region: target.region,
         bucket: target.bucket,
@@ -319,7 +323,7 @@ function targetStillConfigured(entry) {
 }
 
 async function uploadPending(entry) {
-  if (entry.target.provider === 'local') {
+  if (entry.target.provider === 'local' || entry.target.transport === 'proxy') {
     // Web/Wails: the server proxies to the vault or to S3 and verifies public
     // readability itself; a 2xx means completed.
     const response = await apiClient.imageUpload(entry.key, entry.blob, entry.contentType)
@@ -332,7 +336,14 @@ async function uploadPending(entry) {
     return
   }
   // Pure frontend: direct S3 PUT.
-  await s3PutObject(entry.target, entry.key, entry.blob, entry.contentType)
+  // Secrets never enter IndexedDB. Read them from the currently configured
+  // matching destination at attempt time, including after a page reload.
+  const current = currentTarget()
+  await s3PutObject({
+    ...entry.target,
+    accessKey: current.accessKey,
+    secretKey: current.secretKey,
+  }, entry.key, entry.blob, entry.contentType)
   entry.state = 'uploaded'
   entry.uploadedAt = Date.now()
   await putEntry(entry)
@@ -354,8 +365,10 @@ async function completeEntry(entry) {
   _entryByUrl.delete(entry.url)
   // Future renders must load the final URL; the object URL itself stays alive
   // (not revoked) until the page unload / editor destroy revoke pass.
-  _blobUrls.delete(entry.url)
   swapDisplayed(entry.url)
+  const objectUrl = _blobUrls.get(entry.url)
+  if (objectUrl) _retainedBlobUrls.add(objectUrl)
+  _blobUrls.delete(entry.url)
   refreshCount().catch(() => {})
 }
 
@@ -476,5 +489,6 @@ export async function _mediaOutboxClear() {
   } catch (_) {}
   _entryByUrl.clear()
   _blobUrls.clear()
+  _retainedBlobUrls.clear()
   pendingImageCount.value = 0
 }
