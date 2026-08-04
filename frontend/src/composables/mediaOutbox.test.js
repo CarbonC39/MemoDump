@@ -25,7 +25,9 @@ import {
   initMediaOutbox,
   pendingImageCount,
   mediaNotice,
+  sweepExpiredEntries,
   _mediaOutboxClear,
+  _mediaOutboxSeed,
 } from './mediaOutbox'
 
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4])
@@ -61,6 +63,7 @@ beforeEach(async () => {
   settings.publicBaseUrl = ''
   settings.accessKey = ''
   settings.secretKey = ''
+  settings.cleanupEnabled = false
   mediaNotice.value = null
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true })))
 })
@@ -174,5 +177,42 @@ describe('provider off mode', () => {
     expect(await stageAndUploadImage(pngFile())).toBe('')
     expect(mediaNotice.value?.code).toBe('image-off')
     expect(pendingImageCount.value).toBe(0)
+  })
+})
+
+describe('indexedDB cleanup sweep', () => {
+  const key = 'a'.repeat(64) + '.png'
+  const entry = () => ({
+    id: 'local:' + key,
+    url: '/api/images/' + key,
+    key,
+    target: { id: 'local', provider: 'local' },
+    contentType: 'image/png',
+    state: 'pending',
+    blob: pngFile(),
+    attempts: 3,
+    nextAttemptAt: 0,
+    lastError: { kind: 'permission', retryable: false },
+    createdAt: Date.now() - 100000,
+  })
+
+  it('removes expired permanent failures only when cleanup is enabled', async () => {
+    settings.cleanupEnabled = false
+    await _mediaOutboxSeed(entry())
+    await sweepExpiredEntries(0)
+    expect(pendingImageCount.value).toBe(1)
+
+    settings.cleanupEnabled = true
+    await sweepExpiredEntries(0)
+    expect(pendingImageCount.value).toBe(0)
+  })
+
+  it('keeps recent permanent failures', async () => {
+    settings.cleanupEnabled = true
+    const e = entry()
+    e.createdAt = Date.now()
+    await _mediaOutboxSeed(e)
+    await sweepExpiredEntries(100000)
+    expect(pendingImageCount.value).toBe(1)
   })
 })

@@ -161,15 +161,18 @@
 
       <!-- Image hosting -->
       <div class="settings-section">
-        <button
-          class="settings-section-header"
-          :aria-expanded="imageSectionOpen"
-          @click="imageSectionOpen = !imageSectionOpen"
-        >
-          <h3>{{ t('settings.imageSection') }}</h3>
-          <span class="image-mode-summary">{{ imageModeSummary }}</span>
-          <span class="material-icons-outlined settings-caret">{{ imageSectionOpen ? 'expand_less' : 'expand_more' }}</span>
-        </button>
+        <div class="settings-section-header-row">
+          <InfoTooltip class="image-heading-tip" :text="t('settings.imagePrivacyWarning')" :label="t('settings.imagePrivacyWarning')" />
+          <button
+            class="settings-section-header"
+            :aria-expanded="imageSectionOpen"
+            @click="imageSectionOpen = !imageSectionOpen"
+          >
+            <h3>{{ t('settings.imageSection') }}</h3>
+            <span class="image-mode-summary">{{ imageModeSummary }}</span>
+            <span class="material-icons-outlined settings-caret">{{ imageSectionOpen ? 'expand_less' : 'expand_more' }}</span>
+          </button>
+        </div>
 
         <div v-show="imageSectionOpen" class="settings-image-body">
           <div v-if="!isLocalImageBuild && !imageSettings.editable" class="setting-row">
@@ -199,7 +202,8 @@
             <div class="setting-row">
               <span class="setting-row-label">Region</span>
               <input type="text" class="input input-select" v-model.trim="imageDraft.region"
-                     :disabled="!isLocalImageBuild && !imageSettings.editable" />
+                     :disabled="!isLocalImageBuild && !imageSettings.editable"
+                     placeholder="auto" />
             </div>
             <div class="setting-row">
               <span class="setting-row-label">Bucket</span>
@@ -212,13 +216,19 @@
                      :disabled="!isLocalImageBuild && !imageSettings.editable" />
             </div>
             <div class="setting-row">
-              <span class="setting-row-label">Public URL</span>
+              <span class="setting-row-label label-with-tip">
+                Public URL
+                <InfoTooltip :text="t('settings.imagePublicReadHelp')" :label="t('settings.imagePublicReadHelp')" />
+              </span>
               <input type="text" class="input input-select" v-model.trim="imageDraft.publicBaseUrl"
                      :disabled="!isLocalImageBuild && !imageSettings.editable"
                      placeholder="https://cdn.example.com/images" />
             </div>
             <div class="setting-row">
-              <span class="setting-row-label">Access Key</span>
+              <span class="setting-row-label label-with-tip">
+                Access Key
+                <InfoTooltip v-if="isLocalImageBuild" :text="t('settings.imageLocalStorageWarning')" :label="t('settings.imageLocalStorageWarning')" />
+              </span>
               <input type="password" class="input input-select" v-model.trim="imageDraft.accessKey"
                      :disabled="!isLocalImageBuild && !imageSettings.editable" />
             </div>
@@ -233,9 +243,6 @@
               <input type="checkbox" v-model="imageDraft.forcePathStyle"
                      :disabled="!isLocalImageBuild && !imageSettings.editable" />
             </div>
-            <p class="image-help">{{ t('settings.imagePublicReadHelp') }}</p>
-            <p class="image-help image-privacy-warning">{{ t('settings.imagePrivacyWarning') }}</p>
-            <p v-if="isLocalImageBuild" class="image-help">{{ t('settings.imageLocalStorageWarning') }}</p>
           </template>
 
           <div class="setting-row">
@@ -252,6 +259,22 @@
               >
                 {{ imageBusy === 'test' ? t('settings.imageTesting') : t('settings.imageTestConnection') }}
               </button>
+            </div>
+          </div>
+          <div class="setting-row" v-if="!isLocalImageBuild">
+            <span class="setting-row-label">{{ t('settings.imageCleanup') }}</span>
+            <input
+              type="checkbox"
+              :checked="imageDraft.cleanupEnabled"
+              :disabled="!imageSettings.editable"
+              @change="onCleanupToggle"
+            />
+          </div>
+          <div v-if="cleanupConfirmOpen" class="cleanup-confirm">
+            <p class="cleanup-confirm-text">{{ t('settings.imageCleanupWarning') }}</p>
+            <div class="image-actions">
+              <button class="btn btn-sm btn-primary" @click="confirmCleanupEnable">{{ t('settings.imageCleanupConfirm') }}</button>
+              <button class="btn btn-sm btn-outline" @click="cleanupConfirmOpen = false">{{ t('settings.imageCancel') }}</button>
             </div>
           </div>
           <p v-if="imageFormMessage" class="image-help" :class="{ 'image-error': imageFormError }">
@@ -301,6 +324,7 @@ import {
   testImageConnection,
   isLocalBuild as isLocalImageBuild,
 } from '../composables/useImageSettings'
+import InfoTooltip from './InfoTooltip.vue'
 
 const emit = defineEmits(['close'])
 
@@ -324,7 +348,9 @@ const imageDraft = reactive({
   accessKey: imageSettings.accessKey,
   secretKey: imageSettings.secretKey,
   forcePathStyle: imageSettings.forcePathStyle,
+  cleanupEnabled: imageSettings.cleanupEnabled,
 })
+const cleanupConfirmOpen = ref(false)
 
 const imageModeSummary = computed(() => {
   if (imageSettings.provider === 's3') {
@@ -343,6 +369,22 @@ function syncImageDraft() {
   imageDraft.accessKey = imageSettings.accessKey
   imageDraft.secretKey = imageSettings.secretKey
   imageDraft.forcePathStyle = imageSettings.forcePathStyle
+  imageDraft.cleanupEnabled = imageSettings.cleanupEnabled
+}
+
+function onCleanupToggle() {
+  if (imageDraft.cleanupEnabled) {
+    // Turning off is immediate; turning on requires the inline confirm.
+    imageDraft.cleanupEnabled = false
+    cleanupConfirmOpen.value = false
+  } else {
+    cleanupConfirmOpen.value = true
+  }
+}
+
+function confirmCleanupEnable() {
+  imageDraft.cleanupEnabled = true
+  cleanupConfirmOpen.value = false
 }
 
 async function onSaveImageConfig() {
@@ -360,6 +402,7 @@ async function onSaveImageConfig() {
       accessKey: imageDraft.accessKey,
       secretKey: imageDraft.secretKey,
       forcePathStyle: imageDraft.forcePathStyle,
+      cleanup: { enabled: imageDraft.cleanupEnabled },
     })
     imageFormMessage.value = t('settings.imageSaveOk')
   } catch (e) {
@@ -578,6 +621,7 @@ function resetToDefaults() {
 .settings-page {
   height: 100%;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   background: var(--bg);
 }
 
@@ -642,8 +686,13 @@ function resetToDefaults() {
 }
 
 /* ---- Image hosting section ---- */
+.settings-section-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .settings-section-header {
-  width: 100%;
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -654,6 +703,7 @@ function resetToDefaults() {
   text-align: left;
 }
 .settings-section-header h3 { margin: 0; }
+.image-heading-tip { flex-shrink: 0; }
 .image-mode-summary {
   flex: 1;
   color: var(--text-muted);
@@ -668,6 +718,24 @@ function resetToDefaults() {
   display: flex;
   gap: 8px;
 }
+.label-with-tip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.cleanup-confirm {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: var(--primary-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.cleanup-confirm-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
 .image-help {
   margin: 8px 0 0;
   font-size: 12px;
@@ -675,12 +743,6 @@ function resetToDefaults() {
   color: var(--text-muted);
 }
 .image-help.image-error { color: #c0392b; }
-.image-help.image-privacy-warning {
-  color: #a05a00;
-  background: rgba(255, 200, 87, 0.12);
-  border-radius: 8px;
-  padding: 8px 10px;
-}
 
 /* ---- Setting rows ---- */
 .setting-row {

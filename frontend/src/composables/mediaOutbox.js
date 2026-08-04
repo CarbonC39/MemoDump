@@ -11,7 +11,7 @@
 //   The durable blob is deleted only at completed.
 import { ref } from 'vue'
 import apiClient from '../api'
-import { currentTarget } from './useImageSettings'
+import { currentTarget, getImageSettings, isLocalBuild } from './useImageSettings'
 import { objectKey, objectUrl, s3PutObject, sha256Hex } from './s3Client'
 
 const DB_NAME = 'memodump-media'
@@ -23,6 +23,8 @@ const FORMAT_PREFIX_BYTES = 4096
 const BACKOFF_MS = [30_000, 120_000, 300_000, 900_000, 1_800_000]
 const FLUSH_INTERVAL_MS = 30_000
 const NOTICE_DURATION_MS = 5000
+const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000 // daily
+const CLEANUP_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 export const pendingImageCount = ref(0)
 // Non-blocking, calm in-app notice ({ code } or null). Rendered by MainView.
@@ -35,6 +37,7 @@ const _inFlight = new Set()
 let _dbPromise = null
 let _initialized = false
 let _flushTimer = null
+let _sweepTimer = null
 let _noticeTimer = null
 // Serialize all IndexedDB operations. Overlapping transactions on the same
 // store are a classic source of "transaction inactive" errors in browsers and
@@ -448,6 +451,34 @@ export async function retryAllPending() {
   await flushPendingImages()
 }
 
+// sweepExpiredEntries removes durable entries that permanently failed (or lost
+// their destination config) and have been stuck longer than CLEANUP_TTL_MS. It
+// is gated on the server cleanup setting and skipped in the pure-frontend build
+// (GC is out of scope there this round). The removed blob means the note shows
+// a broken image for that failed upload — acceptable, since it never uploaded.
+export async function sweepExpiredEntries(ttl = CLEANUP_TTL_MS) {
+  if (isLocalBuild) return
+  if (!getImageSettings().cleanupEnabled) return
+  const now = Date.now()
+  let entries
+  try {
+    entries = await allEntries()
+  } catch (_) {
+    return
+  }
+  for (const entry of entries) {
+    if (entry.state === 'completed') continue
+    if (!(entry.lastError && !entry.lastError.retryable)) continue
+    if (now - (entry.createdAt || 0) < ttl) continue
+    await deleteEntry(entry.id)
+    _entryByUrl.delete(entry.url)
+    const objectUrl = _blobUrls.get(entry.url)
+    if (objectUrl) URL.revokeObjectURL(objectUrl)
+    _blobUrls.delete(entry.url)
+  }
+  await refreshCount()
+}
+
 export async function initMediaOutbox() {
   if (_initialized) return
   try {
@@ -463,6 +494,7 @@ export async function initMediaOutbox() {
   }
   _initialized = true
   refreshCount().catch(() => {})
+  sweepExpiredEntries().catch(() => {})
 }
 
 export function startMediaFlushLoop() {
@@ -470,6 +502,7 @@ export function startMediaFlushLoop() {
   _flushTimer = setInterval(() => { flushPendingImages().catch(() => {}) }, FLUSH_INTERVAL_MS)
   globalThis.addEventListener?.('online', () => { flushPendingImages().catch(() => {}) })
   globalThis.addEventListener?.('beforeunload', revokeObjectUrls)
+  _sweepTimer = setInterval(() => { sweepExpiredEntries().catch(() => {}) }, SWEEP_INTERVAL_MS)
 }
 
 export function stopMediaFlushLoop() {
@@ -477,6 +510,16 @@ export function stopMediaFlushLoop() {
     clearInterval(_flushTimer)
     _flushTimer = null
   }
+  if (_sweepTimer) {
+    clearInterval(_sweepTimer)
+    _sweepTimer = null
+  }
+}
+
+// Test-only: seed a durable entry directly (count refreshed).
+export async function _mediaOutboxSeed(entry) {
+  await putEntry(entry)
+  await refreshCount()
 }
 
 // Test-only: wipe the pending store so suites start clean.

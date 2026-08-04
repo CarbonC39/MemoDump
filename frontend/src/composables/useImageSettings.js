@@ -16,26 +16,28 @@ const state = reactive({
   configured: false,
   editable: true,
   endpoint: '',
-  region: '',
+  region: 'auto',
   bucket: '',
   prefix: '',
   publicBaseUrl: '',
   accessKey: '',
   secretKey: '',
   forcePathStyle: true,
+  cleanupEnabled: false,
 })
 
 function applyLocal(cfg) {
   state.provider = cfg.provider === 's3' ? 's3' : (isLocalBuild ? 'off' : 'local')
   state.configured = cfg.provider === 's3'
   state.endpoint = cfg.endpoint || ''
-  state.region = cfg.region || ''
+  state.region = cfg.region || 'auto'
   state.bucket = cfg.bucket || ''
   state.prefix = cfg.prefix || ''
   state.publicBaseUrl = cfg.publicBaseUrl || ''
   state.accessKey = cfg.accessKey || ''
   state.secretKey = cfg.secretKey || ''
   state.forcePathStyle = cfg.forcePathStyle !== false
+  state.cleanupEnabled = cfg.cleanup?.enabled === true
 }
 
 function applyServer(image) {
@@ -45,6 +47,7 @@ function applyServer(image) {
   state.bucket = image.bucket || ''
   state.prefix = image.prefix || ''
   state.publicBaseUrl = image.publicBaseUrl || ''
+  state.cleanupEnabled = image.cleanup?.enabled === true
   // Secrets are never returned by the server; keep the in-memory form values.
 }
 

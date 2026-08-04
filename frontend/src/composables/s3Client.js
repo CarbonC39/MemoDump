@@ -45,7 +45,7 @@ function newAwsClient(target) {
   return new AwsClient({
     accessKeyId: target.accessKey,
     secretAccessKey: target.secretKey,
-    region: target.region || 'us-east-1',
+    region: target.region || 'auto',
     service: 's3',
   })
 }
