@@ -112,6 +112,7 @@ func buildAPIMux() *http.ServeMux {
 	mux.HandleFunc("PUT /api/move/folder/{path...}", authMiddleware(handleMoveFolder))
 	mux.HandleFunc("PUT /api/images/{key}", authMiddleware(handleImagePut))
 	mux.HandleFunc("GET /api/images/{key}", authMiddleware(handleImageGet))
+	mux.HandleFunc("POST /api/images/gc", authMiddleware(handleImageCleanup))
 	mux.HandleFunc("PUT /api/config/image", authMiddleware(handleImageConfigSave))
 	mux.HandleFunc("POST /api/config/image/test", authMiddleware(handleImageConfigTest))
 	mux.HandleFunc("GET /api/ping", authMiddleware(handlePing))

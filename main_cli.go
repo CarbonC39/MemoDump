@@ -114,6 +114,7 @@ func main() {
 	imageConfigFile = filepath.Join(dataDir, ".image-config.json")
 	loadSessions()
 	startSessionCleanup()
+	startImageCleanupLoop()
 
 	mux := buildAPIMux()
 

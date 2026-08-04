@@ -881,12 +881,14 @@ func handlePing(w http.ResponseWriter, r *http.Request) {
 // handleConfig is unauthenticated and returns server configuration the UI needs
 // before login (e.g. whether auth is required so the Sign Out button can be hidden).
 func handleConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := effectiveImageS3Config()
 	image := map[string]any{
 		"provider":   "local",
 		"configured": false,
 		"editable":   !imageConfigHasHigherOverride(),
+		"cleanup":    map[string]any{"enabled": cleanupEnabled(cfg)},
 	}
-	if cfg := effectiveImageS3Config(); s3Active(cfg) {
+	if s3Active(cfg) {
 		image = imageConfigPublic(cfg)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"noAuth": noAuth, "image": image})

@@ -71,6 +71,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	loadSessions()
 	startSessionCleanup()
+	startImageCleanupLoop()
 }
 
 // GetDataDir returns the active data directory path (shown in the sidebar).

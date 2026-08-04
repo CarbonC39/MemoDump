@@ -24,18 +24,25 @@ import (
 // folders never carry long-lived credentials.
 var imageConfigFile string
 
+// imageCleanupConfig controls the periodic orphan-image cleanup. It defaults to
+// disabled; enabling it is an explicit, warned choice in the settings panel.
+type imageCleanupConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
 // imageS3Config is the server-side S3 image host configuration. The JSON form
 // is what <dataDir>/.image-config.json (or the Wails config file) stores.
 type imageS3Config struct {
-	Provider       string `json:"provider"` // "local" or "s3"
-	Endpoint       string `json:"endpoint,omitempty"`
-	Region         string `json:"region,omitempty"`
-	Bucket         string `json:"bucket,omitempty"`
-	Prefix         string `json:"prefix,omitempty"`
-	PublicBaseURL  string `json:"publicBaseUrl,omitempty"`
-	AccessKey      string `json:"accessKey,omitempty"`
-	SecretKey      string `json:"secretKey,omitempty"`
-	ForcePathStyle bool   `json:"forcePathStyle,omitempty"`
+	Provider       string              `json:"provider"` // "local" or "s3"
+	Endpoint       string              `json:"endpoint,omitempty"`
+	Region         string              `json:"region,omitempty"`
+	Bucket         string              `json:"bucket,omitempty"`
+	Prefix         string              `json:"prefix,omitempty"`
+	PublicBaseURL  string              `json:"publicBaseUrl,omitempty"`
+	AccessKey      string              `json:"accessKey,omitempty"`
+	SecretKey      string              `json:"secretKey,omitempty"`
+	ForcePathStyle bool                `json:"forcePathStyle,omitempty"`
+	Cleanup        *imageCleanupConfig `json:"cleanup,omitempty"`
 }
 
 // CLI flag overrides (bound in main_cli.go). They have the highest priority.
@@ -171,6 +178,11 @@ func s3Active(cfg imageS3Config) bool {
 	return cfg.Provider != "local" &&
 		cfg.Endpoint != "" && cfg.Bucket != "" &&
 		cfg.AccessKey != "" && cfg.SecretKey != "" && cfg.PublicBaseURL != ""
+}
+
+// cleanupEnabled reports whether the periodic image cleanup is switched on.
+func cleanupEnabled(cfg imageS3Config) bool {
+	return cfg.Cleanup != nil && cfg.Cleanup.Enabled
 }
 
 // normalizeImageURLs trims fields and canonicalizes publicBaseUrl and prefix.
@@ -347,6 +359,7 @@ func imageConfigPublic(cfg imageS3Config) map[string]any {
 			"provider":   "local",
 			"configured": false,
 			"editable":   !imageConfigHasHigherOverride(),
+			"cleanup":    map[string]any{"enabled": cleanupEnabled(cfg)},
 		}
 	}
 	return map[string]any{
@@ -356,6 +369,7 @@ func imageConfigPublic(cfg imageS3Config) map[string]any {
 		"prefix":        cfg.Prefix,
 		"configured":    true,
 		"editable":      !imageConfigHasHigherOverride(),
+		"cleanup":       map[string]any{"enabled": cleanupEnabled(cfg)},
 	}
 }
 
@@ -396,8 +410,9 @@ func handleImageConfigSave(w http.ResponseWriter, r *http.Request) {
 			req.SecretKey = stored.SecretKey
 		}
 	} else {
-		// Reverting to the local vault clears all stored S3 settings.
-		req = imageS3Config{Provider: "local"}
+		// Reverting to the local vault clears all stored S3 settings, but the
+		// cleanup preference is orthogonal and survives a provider switch.
+		req = imageS3Config{Provider: "local", Cleanup: req.Cleanup}
 	}
 
 	if err := saveImageConfigFile(req); err != nil {
