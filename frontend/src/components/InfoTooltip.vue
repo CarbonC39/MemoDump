@@ -14,7 +14,7 @@
       <span class="material-icons-outlined">help_outline</span>
     </button>
     <transition name="info-tooltip">
-      <div v-show="open" class="info-tooltip-pop" role="tooltip" @mouseenter="openNow" @mouseleave="scheduleClose">
+      <div v-show="open" class="info-tooltip-pop" :class="{ 'info-tooltip-pop-right': align === 'right' }" role="tooltip" @mouseenter="openNow" @mouseleave="scheduleClose">
         <slot>{{ text }}</slot>
       </div>
     </transition>
@@ -27,6 +27,7 @@ import { ref, watch, onBeforeUnmount } from 'vue'
 defineProps({
   text: { type: String, default: '' },
   label: { type: String, default: '' },
+  align: { type: String, default: 'left' }, // 'left' | 'right' — popover edge alignment
 })
 
 const open = ref(false)
@@ -110,7 +111,8 @@ onBeforeUnmount(() => {
   top: calc(100% + 6px);
   left: 0;
   z-index: 50;
-  max-width: 280px;
+  width: max-content;
+  max-width: 340px;
   padding: 8px 10px;
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -122,6 +124,10 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   text-align: left;
   white-space: normal;
+}
+.info-tooltip-pop-right {
+  left: auto;
+  right: 0;
 }
 
 .info-tooltip-enter-active,

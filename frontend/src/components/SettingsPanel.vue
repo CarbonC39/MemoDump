@@ -162,13 +162,21 @@
       <!-- Image hosting -->
       <div class="settings-section">
         <div class="settings-section-header-row">
-          <InfoTooltip class="image-heading-tip" :text="t('settings.imagePrivacyWarning')" :label="t('settings.imagePrivacyWarning')" />
           <button
-            class="settings-section-header"
+            type="button"
+            class="settings-section-title-btn"
             :aria-expanded="imageSectionOpen"
             @click="imageSectionOpen = !imageSectionOpen"
           >
             <h3>{{ t('settings.imageSection') }}</h3>
+          </button>
+          <InfoTooltip class="image-heading-tip" :text="t('settings.imagePrivacyWarning')" :label="t('settings.imagePrivacyWarning')" />
+          <button
+            type="button"
+            class="settings-section-header"
+            :aria-expanded="imageSectionOpen"
+            @click="imageSectionOpen = !imageSectionOpen"
+          >
             <span class="image-mode-summary">{{ imageModeSummary }}</span>
             <span class="material-icons-outlined settings-caret">{{ imageSectionOpen ? 'expand_less' : 'expand_more' }}</span>
           </button>
@@ -229,57 +237,83 @@
                 Access Key
                 <InfoTooltip v-if="isLocalImageBuild" :text="t('settings.imageLocalStorageWarning')" :label="t('settings.imageLocalStorageWarning')" />
               </span>
-              <input type="password" class="input input-select" v-model.trim="imageDraft.accessKey"
-                     :disabled="!isLocalImageBuild && !imageSettings.editable" />
+              <span class="secret-input">
+                <input :type="showSecrets ? 'text' : 'password'" class="input input-select" v-model.trim="imageDraft.accessKey"
+                       :disabled="!isLocalImageBuild && !imageSettings.editable" />
+                <button type="button" class="secret-toggle" :disabled="!isLocalImageBuild && !imageSettings.editable"
+                        @click="showSecrets = !showSecrets"
+                        :aria-label="showSecrets ? t('settings.secretHide') : t('settings.secretShow')">
+                  <span class="material-icons-outlined">{{ showSecrets ? 'visibility_off' : 'visibility' }}</span>
+                </button>
+              </span>
             </div>
             <div class="setting-row">
               <span class="setting-row-label">Secret Key</span>
-              <input type="password" class="input input-select" v-model.trim="imageDraft.secretKey"
-                     :placeholder="imageSettings.configured ? t('settings.imageSecretUnchanged') : ''"
-                     :disabled="!isLocalImageBuild && !imageSettings.editable" />
+              <span class="secret-input">
+                <input :type="showSecrets ? 'text' : 'password'" class="input input-select" v-model.trim="imageDraft.secretKey"
+                       :placeholder="imageSettings.configured ? t('settings.imageSecretUnchanged') : ''"
+                       :disabled="!isLocalImageBuild && !imageSettings.editable" />
+                <button type="button" class="secret-toggle" :disabled="!isLocalImageBuild && !imageSettings.editable"
+                        @click="showSecrets = !showSecrets"
+                        :aria-label="showSecrets ? t('settings.secretHide') : t('settings.secretShow')">
+                  <span class="material-icons-outlined">{{ showSecrets ? 'visibility_off' : 'visibility' }}</span>
+                </button>
+              </span>
             </div>
             <div class="setting-row">
               <span class="setting-row-label">{{ t('settings.imageForcePathStyle') }}</span>
-              <input type="checkbox" v-model="imageDraft.forcePathStyle"
+              <input type="checkbox" class="input-checkbox" v-model="imageDraft.forcePathStyle"
                      :disabled="!isLocalImageBuild && !imageSettings.editable" />
             </div>
           </template>
-
-          <div class="setting-row">
-            <span class="setting-row-label"></span>
-            <div class="image-actions">
-              <button class="btn btn-sm btn-outline" :disabled="imageBusy" @click="onSaveImageConfig">
-                {{ imageBusy === 'save' ? t('settings.imageSaving') : t('settings.imageSave') }}
-              </button>
-              <button
-                v-if="imageDraft.provider === 's3'"
-                class="btn btn-sm btn-outline"
-                :disabled="imageBusy"
-                @click="onTestImageConnection"
-              >
-                {{ imageBusy === 'test' ? t('settings.imageTesting') : t('settings.imageTestConnection') }}
-              </button>
-            </div>
-          </div>
           <div class="setting-row" v-if="!isLocalImageBuild">
             <span class="setting-row-label">{{ t('settings.imageCleanup') }}</span>
-            <input
-              type="checkbox"
-              :checked="imageDraft.cleanupEnabled"
-              :disabled="!imageSettings.editable"
-              @change="onCleanupToggle"
-            />
-          </div>
-          <div v-if="cleanupConfirmOpen" class="cleanup-confirm">
-            <p class="cleanup-confirm-text">{{ t('settings.imageCleanupWarning') }}</p>
-            <div class="image-actions">
-              <button class="btn btn-sm btn-primary" @click="confirmCleanupEnable">{{ t('settings.imageCleanupConfirm') }}</button>
-              <button class="btn btn-sm btn-outline" @click="cleanupConfirmOpen = false">{{ t('settings.imageCancel') }}</button>
+              <input
+                type="checkbox"
+                class="input-checkbox"
+                :checked="imageDraft.cleanupEnabled"
+                :disabled="!imageSettings.editable"
+                @change="onCleanupToggle"
+              />
             </div>
-          </div>
-          <p v-if="imageFormMessage" class="image-help" :class="{ 'image-error': imageFormError }">
-            {{ imageFormMessage }}
-          </p>
+            <div v-if="cleanupConfirmOpen" class="cleanup-confirm">
+              <p class="cleanup-confirm-text">
+                {{ t('settings.imageCleanupWarning') }}
+                <strong>{{ t('settings.imageCleanupWarningRisk') }}</strong>
+                {{ t('settings.imageCleanupWarningDedicated') }}
+              </p>
+              <div class="image-actions">
+                <button class="btn btn-sm btn-primary" @click="confirmCleanupEnable">{{ t('settings.imageCleanupConfirm') }}</button>
+                <button class="btn btn-sm btn-outline" @click="cleanupConfirmOpen = false">{{ t('modals.cancel') }}</button>
+              </div>
+            </div>
+            <p v-if="cleanupSaveMessage" class="cleanup-save-status" :class="{ 'cleanup-save-error': cleanupSaveError }">
+              {{ cleanupSaveMessage }}
+            </p>
+            <template v-if="imageDraft.provider === 's3'">
+              <div class="setting-row">
+                <span class="setting-row-label"></span>
+                <div class="image-actions">
+                  <button class="btn btn-sm btn-outline" :disabled="imageBusy" @click="onTestImageConnection">
+                    <span v-if="imageBusy === 'test'" class="spinner spinner-sm" aria-hidden="true"></span>
+                    <span v-else class="material-icons-outlined image-btn-icon" aria-hidden="true">wifi_tethering</span>
+                    {{ imageBusy === 'test' ? t('settings.imageTesting') : t('settings.imageTestConnection') }}
+                  </button>
+                  <button class="btn btn-sm btn-primary" :disabled="imageBusy" @click="onSaveImageConfig">
+                    <span v-if="imageBusy === 'save'" class="spinner spinner-sm" aria-hidden="true"></span>
+                    {{ imageBusy === 'save' ? t('settings.imageSaving') : t('settings.imageSave') }}
+                  </button>
+                </div>
+              </div>
+              <div v-if="imageBusy === 'test'" class="image-status image-status-loading" role="status">
+                <span class="spinner" aria-hidden="true"></span>
+                <span>{{ t('settings.imageTesting') }}</span>
+              </div>
+              <div v-else-if="imageFormMessage" class="image-status" :class="imageFormError ? 'image-status-error' : 'image-status-ok'" role="status">
+                <span class="material-icons-outlined image-status-icon" aria-hidden="true">{{ imageFormError ? 'error' : 'check_circle' }}</span>
+                <span>{{ imageFormMessage }}</span>
+              </div>
+            </template>
         </div>
       </div>
 
@@ -295,9 +329,11 @@
           spellcheck="false"
           @input="onCustomCssInput"
         ></textarea>
-        <button class="btn btn-sm btn-outline css-apply-btn" @click="applyCustomCssNow">
-          {{ t('editor.save') }}
-        </button>
+        <div class="css-actions">
+          <button class="btn btn-sm btn-outline" @click="applyCustomCssNow">
+            {{ t('editor.save') }}
+          </button>
+        </div>
       </div>
 
       <hr class="settings-divider" />
@@ -351,6 +387,9 @@ const imageDraft = reactive({
   cleanupEnabled: imageSettings.cleanupEnabled,
 })
 const cleanupConfirmOpen = ref(false)
+const cleanupSaveMessage = ref('')
+const cleanupSaveError = ref(false)
+const showSecrets = ref(false)
 
 const imageModeSummary = computed(() => {
   if (imageSettings.provider === 's3') {
@@ -377,6 +416,8 @@ function onCleanupToggle() {
     // Turning off is immediate; turning on requires the inline confirm.
     imageDraft.cleanupEnabled = false
     cleanupConfirmOpen.value = false
+    // Local mode has no explicit save — the toggle persists itself.
+    if (imageDraft.provider !== 's3') saveCleanupConfig(false)
   } else {
     cleanupConfirmOpen.value = true
   }
@@ -385,6 +426,34 @@ function onCleanupToggle() {
 function confirmCleanupEnable() {
   imageDraft.cleanupEnabled = true
   cleanupConfirmOpen.value = false
+  if (imageDraft.provider !== 's3') saveCleanupConfig(true)
+}
+
+// saveCleanupConfig persists the cleanup setting on its own (local mode has no
+// Save button). In S3 mode the toggle is part of the form and saved with the
+// "保存配置" button instead.
+async function saveCleanupConfig(enabled) {
+  cleanupSaveMessage.value = ''
+  cleanupSaveError.value = false
+  try {
+    await saveImageConfig({
+      provider: imageDraft.provider,
+      endpoint: imageDraft.endpoint,
+      region: imageDraft.region,
+      bucket: imageDraft.bucket,
+      prefix: imageDraft.prefix,
+      publicBaseUrl: imageDraft.publicBaseUrl,
+      accessKey: imageDraft.accessKey,
+      secretKey: imageDraft.secretKey,
+      forcePathStyle: imageDraft.forcePathStyle,
+      cleanup: { enabled },
+    })
+    imageDraft.cleanupEnabled = enabled
+    cleanupSaveMessage.value = t('settings.imageSaveOk')
+  } catch (e) {
+    cleanupSaveError.value = true
+    cleanupSaveMessage.value = e?.response?.data?.error?.message || t('settings.imageSaveFail')
+  }
 }
 
 async function onSaveImageConfig() {
@@ -691,6 +760,17 @@ function resetToDefaults() {
   align-items: center;
   gap: 8px;
 }
+.settings-section-title-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.settings-section-title-btn h3 { margin: 0; }
 .settings-section-header {
   flex: 1;
   display: flex;
@@ -702,7 +782,6 @@ function resetToDefaults() {
   cursor: pointer;
   text-align: left;
 }
-.settings-section-header h3 { margin: 0; }
 .image-heading-tip { flex-shrink: 0; }
 .image-mode-summary {
   flex: 1;
@@ -736,13 +815,107 @@ function resetToDefaults() {
   color: var(--text-secondary);
   margin-bottom: 8px;
 }
-.image-help {
-  margin: 8px 0 0;
+.cleanup-confirm-text strong {
+  color: var(--text);
+}
+.cleanup-save-status {
+  margin: 6px 0 0;
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.5;
   color: var(--text-muted);
 }
-.image-help.image-error { color: #c0392b; }
+.cleanup-save-status.cleanup-save-error { color: var(--danger); }
+
+/* Custom-styled checkbox (used for forcePathStyle + cleanup toggle) */
+.input-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-card);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s, background 0.15s;
+}
+.input-checkbox:hover:not(:disabled) { border-color: var(--primary); }
+.input-checkbox:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.input-checkbox:checked::after {
+  content: '';
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg) translateY(-1px);
+}
+.input-checkbox:disabled { opacity: 0.5; cursor: default; }
+.image-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--bg-sidebar);
+  color: var(--text-secondary);
+}
+.image-status-loading { color: var(--text-muted); }
+.image-status-icon {
+  flex-shrink: 0;
+  font-size: 16px;
+}
+.image-status-ok { background: rgba(34, 197, 94, 0.1); }
+.image-status-ok .image-status-icon { color: var(--success); }
+.image-status-error { background: var(--danger-light); }
+.image-status-error .image-status-icon { color: var(--danger); }
+
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+.spinner-sm { width: 10px; height: 10px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.image-btn-icon { font-size: 16px; }
+
+.secret-input {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.secret-input .input { padding-right: 30px; }
+.secret-toggle {
+  position: absolute;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: var(--text-muted);
+  background: transparent;
+}
+.secret-toggle:hover:not(:disabled) {
+  color: var(--primary-dark);
+  background: var(--primary-bg);
+}
+.secret-toggle:disabled { cursor: default; opacity: 0.5; }
+.secret-toggle .material-icons-outlined { font-size: 16px; }
 
 /* ---- Setting rows ---- */
 .setting-row {
@@ -799,13 +972,10 @@ function resetToDefaults() {
   padding: 8px;
 }
 
-.css-apply-btn {
+.css-actions {
+  display: flex;
+  justify-content: flex-end;
   margin-top: 8px;
-  font-size: 12px;
-  padding: 4px 12px;
-}
-.css-apply-btn .material-icons-outlined {
-  font-size: 14px;
 }
 
 /* ---- Reset button ---- */
