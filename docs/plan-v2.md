@@ -75,6 +75,12 @@ pending ──upload 2xx──▶ uploaded ──read verified──▶ complete
 - `completed`: the final URL has been verified readable; only then is the
   IndexedDB entry and blob removed.
 
+> With the optional orphan-cleanup feature enabled (see "Orphan image cleanup"
+> below), two exceptions apply: permanently-failed outbox entries are swept
+> client-side after 30 days (blob removed, note shows a broken image — accepted,
+> it never uploaded), and unreferenced server-side objects are removed after a
+> 7-day grace period.
+
 Read verification rules:
 
 - **Vault (web/wails)**: `PUT` 2xx is trusted as completion (documented
@@ -116,7 +122,8 @@ editor integration):
 10. Permanent failure: retain blob; stop automatic retries; surface a
     retry/configuration action.
 11. **Never delete a pending/uploaded entry merely because a note is deleted.**
-    Orphan objects are accepted.
+    Orphan objects are accepted (and may later be reclaimed by the opt-in
+    cleanup feature — see "Orphan image cleanup" below).
 
 ### Media outbox
 
@@ -234,6 +241,36 @@ Wails keeps the image config **out of the data directory** on purpose: data
 dirs are often placed inside cloud-sync folders (OneDrive, etc.), and
 long-lived S3 credentials should not ride along with the synced notes.
 
+### Orphan image cleanup (added scope — approved)
+
+The v1 design originally accepted orphan objects permanently. An **opt-in**
+periodic cleanup was later added and is part of the approved scope. It is
+**disabled by default**; enabling it in the settings panel is a warned, explicit
+choice. The cleanup toggle is stored with the image config (`cleanup.enabled`)
+and persists across provider switches.
+
+- **Server sweep** (`images_gc.go`, web/wails): runs once shortly after startup
+  and then every 24h, gated on the cleanup toggle. It collects the set of
+  content-hash image keys referenced anywhere in any `.md` body (a false
+  positive — prose that happens to look like a key — only keeps an image, the
+  safe direction), then:
+  - **Vault**: removes `.images/*` files whose name is a valid content-hash key,
+    are older than a 7-day grace, and are unreferenced.
+  - **S3** (when active): lists objects under the configured prefix and removes
+    only content-hash-keyed objects that are unreferenced and past grace, plus
+    `.memodump-probe/` leftovers past grace. Files that do not look like
+    MemoDump image keys are never touched, so a shared bucket is safe.
+  - The 7-day grace protects images referenced only by client outbox drafts
+    whose note body has not reached disk yet (the server cannot see those
+    drafts).
+- **Client sweep** (`sweepExpiredEntries`, web/wails only, same opt-in gate):
+  permanently-failed outbox entries (including `config-required`) older than 30
+  days have their IndexedDB blob removed. The note then shows a broken image for
+  that upload — accepted, because the image never uploaded.
+- `POST /api/images/gc` runs a sweep on demand (returns 403 while disabled).
+- S3 deletion is remote and permanent; the key-shape restriction, reference
+  scan, 7-day grace and opt-in default bound the risk.
+
 ## Deferred / known issues
 
 - **Crepe block images serialize alt as ratio**: `image-block` stores
@@ -279,6 +316,12 @@ long-lived S3 credentials should not ride along with the synced notes.
 8. README updates: per-build support matrix, CORS configuration guide, public
    read + privacy requirements, security notes (key binding, bucket
    permissions, orphan objects, hash-URL semantics).
+
+**F. Cleanup (added scope)**
+9. Periodic orphan-image GC (vault + S3), opt-in via the settings toggle,
+   7-day grace, key-shape + reference-set scoping, `.memodump-probe/`
+   leftovers, client-side 30-day sweep of permanently-failed entries,
+   on-demand `POST /api/images/gc`.
 
 ---
 
@@ -567,6 +610,15 @@ Edited: `SettingsPanel.vue`, `i18n/zh-CN.json`, `i18n/en.json`.
   backoff/retry behavior, Wails smoke test.
 - Full verification: `go vet ./...`, `go test ./...`, both frontend builds
   (`npm run build`, `npm run build:local`).
+
+### Added during implementation (post-review)
+
+- Orphan-image cleanup (task F) was added after the review gate as approved
+  scope; see the "Orphan image cleanup" design section above.
+- The Wails `crypto.subtle` contingency (a Go `App.HashSha256` binding) was
+  dropped as unnecessary: Wails WebViews run in a secure context
+  (`https://wails.localhost` in production, `http://localhost` in dev), so
+  `crypto.subtle` is available there; the media pipeline uses it directly.
 
 ## Out of scope for v1
 

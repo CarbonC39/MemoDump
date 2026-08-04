@@ -63,6 +63,7 @@
 - **S3 模式要求 bucket 对公网可读**（否则图片会显示 403），纯前端直传还需配置 bucket 的 CORS（允许应用域名、`PUT/POST/GET/HEAD`、`Content-Type` 与 `x-amz-*` 请求头，并暴露 `ETag` 以支持分片上传）。
 - **隐私提示**：S3 模式下图片可通过链接公开访问；内容哈希不是访问控制，相同文件会生成相同的链接。请勿上传需要私密保存的图片。
 - 离线粘贴的图片会先保存在浏览器 IndexedDB 中，联网后自动上传；图片只有在上传且公开可读后才从队列移除（少量孤儿对象可能残留，属预期行为）。
+- **可选的定期清理**（设置 → 图片）：开启后，服务器会定期删除未被任何笔记引用的图片（本地图库与 S3，带 7 天宽限期；S3 模式下删除为远程且不可恢复），Web/Wails 构建还会在 30 天后清除永久失败的上传记录。建议为 MemoDump 使用独立的 bucket/prefix，避免影响其他文件。默认关闭。
 - 安全：图片 key 为 `sha256(内容) + 规范扩展名`（JPEG 统一 `.jpg`），服务端校验内容哈希、文件头（magic bytes）与扩展名一致性；仅接受 png/jpg/gif/webp/avif，**不含 SVG**（同源存储型 XSS 风险）。
 
 Web 服务器也可以通过环境变量配置 S3：`MEMODUMP_IMAGE_S3_ENDPOINT`、`_REGION`、`_BUCKET`、`_PREFIX`、`_PUBLIC_URL`、`_ACCESS_KEY`、`_SECRET_KEY`、`_FORCE_PATH_STYLE`（优先级高于设置面板，此时面板只读）。

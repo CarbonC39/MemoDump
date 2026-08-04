@@ -25,14 +25,14 @@ export function objectKey(target, key) {
 }
 
 export function sha256Hex(data) {
+  // Wails WebViews run in a secure context (https://wails.localhost in
+  // production, http://localhost in dev), so crypto.subtle is available there
+  // too — no Go-side HashSha256 fallback binding is needed (plan-v2.md's
+  // contingency was dropped as unnecessary after this check).
   if (globalThis.crypto?.subtle?.digest) {
     return crypto.subtle.digest('SHA-256', data).then(toHex)
   }
-  // Wails fallback: hash in Go via the existing wailsjs binding.
-  if (globalThis.window?.go?.main?.App?.HashSha256) {
-    return window.go.main.App.HashSha256(data)
-  }
-  return Promise.reject(new Error('sha256 unavailable (crypto.subtle missing)'))
+  return Promise.reject(new Error('sha256 unavailable (crypto.subtle missing in a non-secure context)'))
 }
 
 function toHex(buffer) {

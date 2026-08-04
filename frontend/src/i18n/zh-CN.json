@@ -94,6 +94,9 @@
     "secretHide": "隐藏密钥",
     "imageReadOnlySource": "由服务器环境变量/启动参数配置，面板只读",
     "imagePublicReadHelp": "bucket 需要对公网可读，否则图片会显示 403。",
+    "imageCorsTemplate": "Bucket CORS 模板",
+    "imageCorsHint": "浏览器直传构建必需",
+    "imageCorsNotNeeded": "Web/Wails 构建通过服务器代理上传，无需配置 bucket CORS。",
     "imagePrivacyWarning": "使用 S3 模式时，上传的图片可通过其链接公开访问；内容哈希不是访问控制，相同文件会生成相同链接。请勿上传需要私密保存的图片。",
     "imageLocalStorageWarning": "密钥仅保存在本浏览器中。"
   },

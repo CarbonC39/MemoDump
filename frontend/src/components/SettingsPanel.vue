@@ -313,6 +313,15 @@
                 <span class="material-icons-outlined image-status-icon" aria-hidden="true">{{ imageFormError ? 'error' : 'check_circle' }}</span>
                 <span>{{ imageFormMessage }}</span>
               </div>
+              <details class="cors-template">
+                <summary>
+                  <span class="material-icons-outlined cors-template-icon" aria-hidden="true">dns</span>
+                  {{ t('settings.imageCorsTemplate') }}
+                  <span class="cors-template-note">{{ t('settings.imageCorsHint') }}</span>
+                </summary>
+                <pre class="cors-template-code">{{ corsTemplate }}</pre>
+                <p v-if="!isLocalImageBuild" class="cors-template-warning">{{ t('settings.imageCorsNotNeeded') }}</p>
+              </details>
             </template>
         </div>
       </div>
@@ -397,6 +406,18 @@ const imageModeSummary = computed(() => {
   }
   return isLocalImageBuild ? t('settings.imageProviderOff') : t('settings.imageProviderLocal')
 })
+
+// Bucket CORS reference for browser-direct uploads (pure-frontend build). The
+// web/Wails builds upload through the server proxy, so this only matters there.
+const corsTemplate = `[
+  {
+    "AllowedOrigins": ["<app origin>"],
+    "AllowedMethods": ["PUT", "POST", "GET", "HEAD"],
+    "AllowedHeaders": ["Content-Type", "x-amz-*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3000
+  }
+]`
 
 function syncImageDraft() {
   imageDraft.provider = imageSettings.provider
@@ -891,6 +912,38 @@ function resetToDefaults() {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .image-btn-icon { font-size: 16px; }
+
+.cors-template {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.cors-template summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.cors-template summary::-webkit-details-marker { display: none; }
+.cors-template-icon { font-size: 16px; }
+.cors-template-note { color: var(--text-muted); font-weight: 400; }
+.cors-template-code {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--editor-font-monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+}
+.cors-template-warning { margin: 6px 0 0; color: var(--text-muted); }
 
 .secret-input {
   position: relative;

@@ -113,11 +113,11 @@ describe('canonical staging flow (vault)', () => {
   it('rejects oversized and unrecognized files with a calm notice', async () => {
     const big = new File([new Uint8Array(21 << 20)], 'big.png', { type: 'image/png' })
     expect(await stageAndUploadImage(big)).toBe('')
-    expect(mediaNotice.value?.code).toBe('image-too-large')
+    expect(mediaNotice.value?.code).toBe('imageTooLarge')
 
     const garbage = new File([new Uint8Array([9, 9, 9, 9])], 'x.png', { type: 'image/png' })
     expect(await stageAndUploadImage(garbage)).toBe('')
-    expect(mediaNotice.value?.code).toBe('image-format')
+    expect(mediaNotice.value?.code).toBe('imageFormat')
   })
 })
 
@@ -175,7 +175,7 @@ describe('provider off mode', () => {
   it('refuses with a notice and no URL', async () => {
     settings.provider = 'off'
     expect(await stageAndUploadImage(pngFile())).toBe('')
-    expect(mediaNotice.value?.code).toBe('image-off')
+    expect(mediaNotice.value?.code).toBe('imageOff')
     expect(pendingImageCount.value).toBe(0)
   })
 })

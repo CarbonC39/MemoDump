@@ -74,6 +74,12 @@ Image storage across the three builds:
   once connectivity returns; an entry is removed only after the image is
   uploaded and verified readable (a few orphan objects may remain, which is
   accepted).
+- **Optional periodic cleanup** (settings → Images): when enabled, the server
+  periodically deletes images no note references (local vault and S3, with a
+  7-day grace period; in S3 mode deletion is remote and permanent), and the
+  web/Wails build additionally removes permanently-failed pending entries after
+  30 days. Use a dedicated bucket/prefix for MemoDump so other files are never
+  affected. Cleanup is off by default.
 - Security: image keys are `sha256(content) + canonical extension` (JPEG is
   always `.jpg`); the server validates the content hash, magic bytes and the
   extension match. Only png/jpg/gif/webp/avif are accepted — **no SVG**

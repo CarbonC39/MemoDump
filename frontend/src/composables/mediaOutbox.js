@@ -254,16 +254,16 @@ export function revokeObjectUrls() {
 export async function stageAndUploadImage(file) {
   const target = currentTarget()
   if (!target) {
-    showNotice('image-off')
+    showNotice('imageOff')
     return ''
   }
   if (file.size > MAX_IMAGE_BYTES) {
-    showNotice('image-too-large')
+    showNotice('imageTooLarge')
     return ''
   }
   const format = await detectImageFormat(file)
   if (!format) {
-    showNotice('image-format')
+    showNotice('imageFormat')
     return ''
   }
   const hash = await sha256Hex(await file.arrayBuffer())
