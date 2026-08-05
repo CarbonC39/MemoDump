@@ -259,3 +259,37 @@ func TestV2GetRejectsTraversal(t *testing.T) {
 }
 
 var _ = vaultfs.ErrInvalidPath // keep the vaultfs import for error mapping tests
+
+func TestV2UpdateWithDestinationMovesNote(t *testing.T) {
+	apiNoteRepo(t)
+	created := v2Create(t, `{"name":"a","content":"v0"}`)
+	if err := repo.CreateFolder("proj"); err != nil {
+		t.Fatal(err)
+	}
+	rec := v2Update(t, "a.md",
+		fmt.Sprintf(`{"content":"v1","rename":"b","destination":"proj","baseRevision":%q}`, created.Revision))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var doc noteDocumentV2
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.ID != "proj/b.md" {
+		t.Fatalf("id = %q, want proj/b.md", doc.ID)
+	}
+	if doc.PreviousID != "a.md" {
+		t.Fatalf("previousId = %q", doc.PreviousID)
+	}
+	if doc.Content != "v1" {
+		t.Fatalf("content = %q", doc.Content)
+	}
+	// Source must be gone.
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/notes/a.md", nil)
+	req.SetPathValue("path", "a.md")
+	rec = httptest.NewRecorder()
+	handleV2GetNote(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("source still present (status %d)", rec.Code)
+	}
+}

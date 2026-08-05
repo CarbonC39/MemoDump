@@ -64,11 +64,14 @@ type CreateOptions struct {
 }
 
 // UpdateOptions describes a note update. nil pointers mean "keep current";
-// BaseRevision "" means "no CAS check" (legacy compatibility).
+// BaseRevision "" means "no CAS check" (legacy compatibility). Rename and
+// Destination are applied together (target = Destination / newName), so
+// content, rename and move commit as one CAS-guarded mutation.
 type UpdateOptions struct {
 	Content      *string
 	Tags         *[]string
 	Rename       *string
+	Destination  *string
 	BaseRevision string
 }
 
@@ -127,8 +130,12 @@ type cacheEntry struct {
 	note     Note
 	body     string
 	revision string
-	modTime  int64
-	size     int64
+	// modNano is the file mtime at nanosecond resolution. ms-granularity alone
+	// could be fooled by an external write of the same size within the same
+	// millisecond; the CAS paths re-read fresh under the lock regardless, so
+	// this narrows (does not fully close) the listing staleness window.
+	modNano int64
+	size    int64
 }
 
 type noteCache struct {
@@ -190,10 +197,10 @@ func (r *Repository) getAbs(abs, rel string, includeContent bool) (*Note, error)
 		}
 		return nil, err
 	}
-	modTime := info.ModTime().UnixMilli()
+	modNano := info.ModTime().UnixNano()
 	size := info.Size()
 
-	if e, ok := r.cache.get(abs); ok && e.modTime == modTime && e.size == size {
+	if e, ok := r.cache.get(abs); ok && e.modNano == modNano && e.size == size {
 		n := e.note
 		n.Tags = append([]string(nil), e.note.Tags...)
 		if includeContent {
@@ -212,12 +219,13 @@ func (r *Repository) getAbs(abs, rel string, includeContent bool) (*Note, error)
 	}
 	doc := ParseDocument(string(data))
 	note := r.buildNote(rel, info, doc)
+	note.Markdown = string(data)
 	note.Revision = RevisionOfBytes(data)
 	r.cache.put(abs, &cacheEntry{
 		note:     note,
 		body:     doc.Body,
 		revision: note.Revision,
-		modTime:  modTime,
+		modNano:  modNano,
 		size:     size,
 	})
 
@@ -427,6 +435,11 @@ func (r *Repository) Update(rel string, opts UpdateOptions) (*Note, error) {
 			newName += ".md"
 		}
 		targetRel = path.Join(path.Dir(rel), newName)
+	}
+	if opts.Destination != nil {
+		targetRel = path.Join(*opts.Destination, path.Base(targetRel))
+	}
+	if targetRel != rel {
 		targetAbs, err = r.resolve(targetRel)
 		if err != nil {
 			return nil, err
@@ -445,6 +458,9 @@ func (r *Repository) Update(rel string, opts UpdateOptions) (*Note, error) {
 			if _, err := os.Stat(targetAbs); err == nil {
 				return ErrNameConflict
 			} else if !os.IsNotExist(err) {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(targetAbs), 0755); err != nil {
 				return err
 			}
 		}
@@ -467,6 +483,12 @@ func (r *Repository) Update(rel string, opts UpdateOptions) (*Note, error) {
 		newBody := doc.Body
 		if opts.Content != nil {
 			newBody = *opts.Content
+		}
+		if targetRel == rel && tagsEqual(doc.Tags, newTags) && newBody == doc.Body {
+			// No semantic change and no move/rename: leave the file bytes
+			// untouched so the revision and any preserved front-matter
+			// formatting stay identical.
+			return nil
 		}
 		prefix, err := doc.FrontMatterPartWithTags(newTags)
 		if err != nil {
@@ -524,7 +546,7 @@ func (r *Repository) Move(rel, destination string) (*Note, error) {
 	}
 	newRel := path.Join(destination, path.Base(rel))
 	if newRel == rel {
-		return r.Get(rel, false)
+		return r.Get(rel, true)
 	}
 	newAbs, err := r.resolve(newRel)
 	if err != nil {
@@ -553,7 +575,7 @@ func (r *Repository) Move(rel, destination string) (*Note, error) {
 	if err != nil {
 		return nil, err
 	}
-	return r.Get(newRel, false)
+	return r.Get(newRel, true)
 }
 
 // Duplicate copies a note's raw bytes to a "(copy)"-suffixed sibling name.
@@ -572,33 +594,44 @@ func (r *Repository) Duplicate(rel string) (*Note, error) {
 
 	dir := path.Dir(rel)
 	base := strings.TrimSuffix(path.Base(rel), ".md")
-	candidate := base + " (copy).md"
-	n := 2
-	for {
-		candidateRel := candidate
-		if dir != "." {
-			candidateRel = path.Join(dir, candidate)
-		}
-		candidateAbs, err := r.resolve(candidateRel)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := os.Stat(candidateAbs); os.IsNotExist(err) {
-			err = r.locks.withLock([]string{rel, candidateRel}, func() error {
+	resultRel := ""
+	// Serialize duplicates of the same source under the source's lock, and pick
+	// the first free "(copy)" name inside that lock, so two concurrent
+	// duplicates never target the same path.
+	err = r.locks.withLock([]string{rel}, func() error {
+		for n := 1; ; n++ {
+			name := fmt.Sprintf("%s (copy).md", base)
+			if n > 1 {
+				name = fmt.Sprintf("%s (copy %d).md", base, n)
+			}
+			candidateRel := name
+			if dir != "." {
+				candidateRel = path.Join(dir, name)
+			}
+			candidateAbs, err := r.resolve(candidateRel)
+			if err != nil {
+				return err
+			}
+			_, statErr := os.Stat(candidateAbs)
+			switch {
+			case statErr == nil:
+				// Candidate exists: try the next name.
+			case os.IsNotExist(statErr):
 				if err := writeAtomic(candidateAbs, data, 0644); err != nil {
 					return err
 				}
 				r.cache.delete(candidateAbs)
+				resultRel = candidateRel
 				return nil
-			})
-			if err != nil {
-				return nil, err
+			default:
+				return statErr
 			}
-			return r.Get(candidateRel, true)
 		}
-		candidate = fmt.Sprintf("%s (copy %d).md", base, n)
-		n++
+	})
+	if err != nil {
+		return nil, err
 	}
+	return r.Get(resultRel, true)
 }
 
 // Apply materializes a note from its canonical Markdown, replacing content only
@@ -616,13 +649,18 @@ func (r *Repository) Apply(rel, markdown, expectedRevision string) (*Note, error
 			return readErr
 		}
 		if os.IsNotExist(readErr) {
+			// create-if-absent.
 			if expectedRevision != "" {
 				return ErrRevisionConflict
 			}
 			if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
 				return err
 			}
-		} else if expectedRevision != "" && RevisionOfBytes(current) != expectedRevision {
+		} else if expectedRevision == "" {
+			// create-if-absent was requested but the file already exists; never
+			// silently overwrite a local note on a sync first delivery.
+			return ErrRevisionConflict
+		} else if RevisionOfBytes(current) != expectedRevision {
 			return ErrRevisionConflict
 		}
 		if err := writeAtomic(abs, []byte(markdown), 0644); err != nil {

@@ -369,6 +369,7 @@ func handleV2UpdateNote(w http.ResponseWriter, r *http.Request) {
 		Content      *string  `json:"content"`
 		Tags         []string `json:"tags"`
 		Rename       *string  `json:"rename"`
+		Destination  *string  `json:"destination"`
 		BaseRevision string   `json:"baseRevision"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -382,6 +383,7 @@ func handleV2UpdateNote(w http.ResponseWriter, r *http.Request) {
 	opts := vaultfs.UpdateOptions{
 		Content:      req.Content,
 		Rename:       req.Rename,
+		Destination:  req.Destination,
 		BaseRevision: req.BaseRevision,
 	}
 	if req.Tags != nil {

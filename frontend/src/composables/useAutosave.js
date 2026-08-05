@@ -1,5 +1,5 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { outboxCount, outboxAll, outboxDelete, outboxPut } from './outbox.js'
+import { outboxCount, outboxAll, outboxDelete, outboxPut, outboxHasConflict } from './outbox.js'
 
 const PING_INTERVAL_MS = 30000
 
@@ -15,7 +15,7 @@ export function useAutosave({ editingNote, isDirty, saveNote, reload, ping, save
   const showDraftRestoredBanner = ref(false)
   const online = ref(typeof navigator === 'undefined' ? true : navigator.onLine)
   const saveStatus = computed(() => {
-    if (conflict?.value) return 'conflict'
+    if (conflict?.value || outboxHasConflict.value) return 'conflict'
     if (outboxCount.value > 0 || !online.value) return 'offline'
     if (saveError.value) return 'error'
     if (isDirty.value) return 'dirty'
@@ -38,6 +38,14 @@ export function useAutosave({ editingNote, isDirty, saveNote, reload, ping, save
     try {
       for (const entry of entries) {
         if (entry.conflict) continue
+        // An update/delete that cannot prove its baseline (a legacy entry
+        // predating revisions) must never auto-apply: it would let old content
+        // overwrite the current server state. Keep it and surface a conflict.
+        if ((entry.op === 'update' || entry.op === 'delete') && !entry.baseRevision) {
+          try { await outboxPut({ ...entry, conflict: true }) } catch (_) {}
+          if (conflict) conflict.value = true
+          continue
+        }
         try {
           if (entry.op === 'delete') {
             if (api?.deleteNote) await api.deleteNote(entry.path, entry.baseRevision)

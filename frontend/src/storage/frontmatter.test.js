@@ -22,19 +22,27 @@ describe('shared front-matter contract (Go + TS)', () => {
       expect(() => withTags(doc, tc.newTags)).toThrow(FrontMatterNotEditable)
     })
   }
+
+  for (const tc of semantics.parseCases) {
+    it(`parse: ${tc.name}`, () => {
+      const doc = parseDocument(tc.markdown)
+      expect(doc.tags).toEqual(tc.tags)
+    })
+  }
 })
 
 describe('parseDocument', () => {
   it('treats a body without front matter as all-body', () => {
     const doc = parseDocument('hello')
-    expect(doc).toEqual({ frontMatter: '', body: 'hello', tags: [] })
+    expect(doc).toEqual({ rawPrefix: '', frontMatter: '', body: 'hello', tags: [] })
   })
 
-  it('splits tags and body, CRLF tolerated', () => {
+  it('splits tags and body, CRLF preserved verbatim', () => {
     const doc = parseDocument('---\r\ntags: ["a"]\r\n---\r\nbody')
     expect(doc.tags).toEqual(['a'])
     expect(doc.body).toBe('body')
-    expect(doc.frontMatter).toBe('tags: ["a"]')
+    expect(doc.rawPrefix).toBe('---\r\ntags: ["a"]\r\n---\r\n')
+    expect(doc.frontMatter).toBe('tags: ["a"]\r\n')
   })
 
   it('treats unterminated front matter as all-body', () => {
@@ -45,10 +53,11 @@ describe('parseDocument', () => {
 })
 
 describe('frontMatterPartWithTags', () => {
+  const emptyDoc = () => ({ rawPrefix: '', frontMatter: '', body: '', tags: [] })
   it('adds front matter when absent', () => {
-    expect(frontMatterPartWithTags('', ['a'])).toBe('---\ntags: ["a"]\n---\n')
+    expect(frontMatterPartWithTags(emptyDoc(), ['a'])).toBe('---\ntags: ["a"]\n---\n')
   })
   it('returns empty when clearing tags on an empty block', () => {
-    expect(frontMatterPartWithTags('', [])).toBe('')
+    expect(frontMatterPartWithTags(emptyDoc(), [])).toBe('')
   })
 })

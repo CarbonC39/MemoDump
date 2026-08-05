@@ -3,6 +3,7 @@ package vaultfs
 import (
 	"encoding/json"
 	"os"
+	"reflect"
 	"testing"
 )
 
@@ -21,6 +22,11 @@ type frontmatterFixture struct {
 		Markdown string   `json:"markdown"`
 		NewTags  []string `json:"newTags"`
 	} `json:"errorCases"`
+	ParseCases []struct {
+		Name     string   `json:"name"`
+		Markdown string   `json:"markdown"`
+		Tags     []string `json:"tags"`
+	} `json:"parseCases"`
 }
 
 func loadFrontmatterFixture(t *testing.T) frontmatterFixture {
@@ -52,6 +58,18 @@ func TestFrontMatterTagEditsPreserveUnknownContent(t *testing.T) {
 	}
 }
 
+func TestFrontMatterParseCases(t *testing.T) {
+	f := loadFrontmatterFixture(t)
+	for _, tc := range f.ParseCases {
+		t.Run(tc.Name, func(t *testing.T) {
+			doc := ParseDocument(tc.Markdown)
+			if !reflect.DeepEqual(doc.Tags, tc.Tags) {
+				t.Fatalf("tags = %#v, want %#v", doc.Tags, tc.Tags)
+			}
+		})
+	}
+}
+
 func TestFrontMatterUnsafeTagsReturnError(t *testing.T) {
 	f := loadFrontmatterFixture(t)
 	for _, tc := range f.ErrorCases {
@@ -71,7 +89,7 @@ func TestParseDocumentBasics(t *testing.T) {
 	}
 
 	d = ParseDocument("---\ntags: [\"a\"]\n---\nbody")
-	if len(d.Tags) != 1 || d.Tags[0] != "a" || d.Body != "body" || d.FrontMatter != `tags: ["a"]` {
+	if len(d.Tags) != 1 || d.Tags[0] != "a" || d.Body != "body" || d.FrontMatter != "tags: [\"a\"]\n" {
 		t.Fatalf("front-matter doc = %#v", d)
 	}
 

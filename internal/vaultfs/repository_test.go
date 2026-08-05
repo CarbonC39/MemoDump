@@ -338,3 +338,197 @@ func TestFolderTreeHidesDotDirs(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+func TestUpdateBodyEditPreservesFrontMatterBytes(t *testing.T) {
+	r := newTestRepo(t)
+	markdown := "---\r\ncreated: 2024\r\ntags: [\"a\"] # c\r\n---\r\nbody"
+	if err := os.WriteFile(filepath.Join(r.Root(), "n.md"), []byte(markdown), 0644); err != nil {
+		t.Fatal(err)
+	}
+	n, err := r.Get("n.md", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Update("n.md", UpdateOptions{Content: strPtr("new body"), BaseRevision: n.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, r, "n.md"); got != "---\r\ncreated: 2024\r\ntags: [\"a\"] # c\r\n---\r\nnew body" {
+		t.Fatalf("file = %q", got)
+	}
+}
+
+func TestUpdateNoopKeepsBytesAndRevision(t *testing.T) {
+	r := newTestRepo(t)
+	markdown := "---\r\ncreated: 2024\r\ntags: [\"a\"] # c\r\n---\r\nbody"
+	if err := os.WriteFile(filepath.Join(r.Root(), "n.md"), []byte(markdown), 0644); err != nil {
+		t.Fatal(err)
+	}
+	n, err := r.Get("n.md", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upd, err := r.Update("n.md", UpdateOptions{
+		Tags:         &[]string{"a"},
+		Content:      strPtr("body"),
+		BaseRevision: n.Revision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, r, "n.md"); got != markdown {
+		t.Fatalf("no-op update rewrote bytes: %q", got)
+	}
+	if upd.Revision != n.Revision {
+		t.Fatalf("no-op update changed revision: %q -> %q", n.Revision, upd.Revision)
+	}
+}
+
+func TestUpdateRenameAndDestination(t *testing.T) {
+	r := newTestRepo(t)
+	// The destination folder is NOT pre-created: Update must make it.
+	n, err := r.Create(CreateOptions{Name: "a", Content: "v0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	upd, err := r.Update("a.md", UpdateOptions{
+		Rename:       strPtr("b"),
+		Destination:  strPtr("dest"),
+		Content:      strPtr("v1"),
+		BaseRevision: n.Revision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upd.Path != "dest/b.md" {
+		t.Fatalf("path = %q", upd.Path)
+	}
+	if _, err := os.Stat(filepath.Join(r.Root(), "a.md")); !os.IsNotExist(err) {
+		t.Fatal("source still exists after rename+move")
+	}
+	if got := readFile(t, r, "dest/b.md"); got != "v1" {
+		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestConcurrentDuplicatesPickDistinctNames(t *testing.T) {
+	r := newTestRepo(t)
+	if _, err := r.Create(CreateOptions{Name: "a", Content: "v0"}); err != nil {
+		t.Fatal(err)
+	}
+	const n = 8
+	var wg sync.WaitGroup
+	paths := make([]string, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			dup, err := r.Duplicate("a.md")
+			paths[i] = ""
+			if err == nil {
+				paths[i] = dup.Path
+			}
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+	seen := map[string]bool{}
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("duplicate %d: %v", i, errs[i])
+		}
+		if seen[paths[i]] {
+			t.Fatalf("duplicate path %q returned twice", paths[i])
+		}
+		seen[paths[i]] = true
+	}
+}
+
+func TestApplyRejectsOverwritingExistingNote(t *testing.T) {
+	r := newTestRepo(t)
+	if _, err := r.Apply("x.md", "# X\n", ""); err != nil {
+		t.Fatal(err)
+	}
+	// create-if-absent on an existing note must conflict, never overwrite.
+	if _, err := r.Apply("x.md", "# Y\n", ""); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("err = %v, want ErrRevisionConflict", err)
+	}
+	if got := readFile(t, r, "x.md"); got != "# X\n" {
+		t.Fatalf("file was overwritten: %q", got)
+	}
+}
+
+func TestExternalModificationBetweenReadAndUpdateDetected(t *testing.T) {
+	r := newTestRepo(t)
+	n, err := r.Create(CreateOptions{Name: "a", Content: "v0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An external editor rewrites the file between the client's read and save.
+	if err := os.WriteFile(filepath.Join(r.Root(), "a.md"), []byte("external"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Update("a.md", UpdateOptions{Content: strPtr("mine"), BaseRevision: n.Revision}); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("err = %v, want ErrRevisionConflict", err)
+	}
+	if got := readFile(t, r, "a.md"); got != "external" {
+		t.Fatalf("external content was clobbered: %q", got)
+	}
+}
+
+func TestApplyAndEditorSaveRace(t *testing.T) {
+	r := newTestRepo(t)
+	n, err := r.Apply("a.md", "v0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := n.Revision
+
+	// A remote-style Apply and an editor save (Update) race from the same
+	// baseline: exactly one may win; every other attempt must conflict.
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	wins := 0
+	conflicts := 0
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, err := r.Apply("a.md", "from-apply", base)
+			mu.Lock()
+			defer mu.Unlock()
+			if err == nil {
+				wins++
+			} else if errors.Is(err, ErrRevisionConflict) {
+				conflicts++
+			} else {
+				t.Errorf("apply: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			_, err := r.Update("a.md", UpdateOptions{Content: strPtr("from-editor"), BaseRevision: base})
+			mu.Lock()
+			defer mu.Unlock()
+			if err == nil {
+				wins++
+			} else if errors.Is(err, ErrRevisionConflict) {
+				conflicts++
+			} else {
+				t.Errorf("update: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if wins != 1 {
+		t.Fatalf("wins = %d, want exactly 1 (Apply and editor save must not both succeed)", wins)
+	}
+	if conflicts != 15 {
+		t.Fatalf("conflicts = %d, want 15", conflicts)
+	}
+	final, _ := r.Get("a.md", true)
+	if final.Content != "from-apply" && final.Content != "from-editor" {
+		t.Fatalf("final content = %q", final.Content)
+	}
+}

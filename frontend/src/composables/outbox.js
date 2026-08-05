@@ -12,6 +12,11 @@ const DB_VERSION = 1
 // Reactive count of pending entries — drives the 'offline' save-status.
 export const outboxCount = ref(0)
 
+// Whether any queued entry is marked conflicted. Derived from the persisted
+// entries so the conflict state survives a page restart (unlike a transient
+// per-editor flag).
+export const outboxHasConflict = ref(false)
+
 let _dbPromise = null
 function openDB() {
   if (_dbPromise) return _dbPromise
@@ -79,7 +84,7 @@ export async function outboxAll() {
 
 export async function outboxClear() {
   const s = await store('readwrite')
-  await asPromise(s.clear(), () => { outboxCount.value = 0 })
+  await asPromise(s.clear(), refreshCount)
 }
 
 async function refreshCount() {
@@ -87,6 +92,14 @@ async function refreshCount() {
     const s = await store('readonly')
     outboxCount.value = await asPromise(s.count())
   } catch (_) { /* best-effort */ }
+  await refreshConflict()
+}
+
+async function refreshConflict() {
+  try {
+    const all = await outboxAll()
+    outboxHasConflict.value = all.some(e => e.conflict)
+  } catch (_) { /* keep the last known state */ }
 }
 
 // Build a coalesced outbox entry from the live editor refs. baseRevision is

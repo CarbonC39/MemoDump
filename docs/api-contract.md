@@ -101,8 +101,11 @@ POST   /api/v2/duplicate/{path}        → 201 NoteDocument
 - `GET` returns the document including `revision`.
 - `POST` body: `{ name, folder?, content, tags? }`. A name that sanitizes to
   nothing falls back to a timestamp name.
-- `PUT` body: `{ content?, tags?, rename?, baseRevision }`. `baseRevision` is
-  **required**; `rename` moves the note to a new name in the same folder.
+- `PUT` body: `{ content?, tags?, rename?, destination?, baseRevision }`.
+  `baseRevision` is **required**. `rename` and `destination` are applied
+  together in one CAS-guarded mutation (target = `destination` / newName), so
+  content, rename and move cannot be torn apart by a network failure or a
+  concurrent writer.
 - `DELETE` query: `?baseRevision=...` (**required**).
 - `PUT /api/v2/move/{path}` body: `{ destination }` (empty = root).
 - Rename/move responses include `previousId` when the `id` changed.

@@ -407,3 +407,124 @@ describe('local revision contract (Phase 0)', () => {
     expect(rec.revision).toBe(created.revision)
   })
 })
+
+describe('atomic IndexedDB CAS (review fixes)', () => {
+  it('serializes concurrent updates with the same baseRevision', async () => {
+    const created = (await localApi.createNote({ name: 'c', content: 'v0' })).data
+    const [a, b] = await Promise.allSettled([
+      localApi.updateNote('c.md', { content: 'from-a', tags: [], baseRevision: created.revision }),
+      localApi.updateNote('c.md', { content: 'from-b', tags: [], baseRevision: created.revision }),
+    ])
+    expect(a.status === 'fulfilled' ? 1 : 0 + (b.status === 'fulfilled' ? 1 : 0)).toBe(1)
+    expect([a, b].filter(r => r.status === 'rejected')).toHaveLength(1)
+    expect([a, b].find(r => r.status === 'rejected').reason.response.status).toBe(409)
+    const final = (await localApi.getNote('c.md')).data
+    expect(['from-a', 'from-b']).toContain(final.content)
+  })
+
+  it('moveNote returns content and revision', async () => {
+    const created = (await localApi.createNote({ name: 'm', content: 'body', tags: ['x'] })).data
+    const moved = (await localApi.moveNote('m.md', 'box')).data
+    expect(moved.content).toBe('body')
+    expect(moved.revision).toBe(created.revision)
+  })
+
+  it('updateNote with destination renames and moves in one call', async () => {
+    const created = (await localApi.createNote({ name: 'a', content: 'v0' })).data
+    const upd = (await localApi.updateNote('a.md', {
+      content: 'v1', rename: 'b', destination: 'proj', baseRevision: created.revision,
+    })).data
+    expect(upd.path).toBe('proj/b.md')
+    expect(upd.content).toBe('v1')
+    await expect(localApi.getNote('a.md')).rejects.toMatchObject({ response: { status: 404 } })
+  })
+
+  it('an unchanged update keeps the revision', async () => {
+    const created = (await localApi.createNote({ name: 'n', content: 'body', tags: ['a'] })).data
+    const upd = (await localApi.updateNote('n.md', { content: 'body', tags: ['a'], baseRevision: created.revision })).data
+    expect(upd.revision).toBe(created.revision)
+  })
+
+  it('serializes concurrent creates of the same name to distinct paths', async () => {
+    const [a, b] = await Promise.all([
+      localApi.createNote({ name: 'dup', content: '1' }),
+      localApi.createNote({ name: 'dup', content: '2' }),
+    ])
+    expect(a.data.path).not.toBe(b.data.path)
+  })
+})
+
+describe('atomic folder ops (review fixes)', () => {
+  it('renameFolder preserves the current note content and revision', async () => {
+    const created = (await localApi.createNote({ name: 'n', folder: 'a', content: 'v0' })).data
+    const updated = (await localApi.updateNote('a/n.md', { content: 'v1', tags: [], baseRevision: created.revision })).data
+    await localApi.renameFolder('a', 'z')
+    const moved = (await localApi.getNote('z/n.md')).data
+    expect(moved.content).toBe('v1')
+    expect(moved.revision).toBe(updated.revision)
+  })
+
+  it('moveFolder rewrites descendant paths preserving content', async () => {
+    const created = (await localApi.createNote({ name: 'x', folder: 'a', content: 'body' })).data
+    await localApi.moveFolder('a', 'b')
+    const moved = (await localApi.getNote('b/a/x.md')).data
+    expect(moved.content).toBe('body')
+    expect(moved.revision).toBe(created.revision)
+  })
+})
+
+describe('concurrent folder op vs note update (review regression)', () => {
+  it('a folder rename racing a note update never loses the update', async () => {
+    const created = (await localApi.createNote({ name: 'n', folder: 'a', content: 'v0' })).data
+    // Fire the rename without awaiting so its transaction overlaps the update.
+    const renamePromise = localApi.renameFolder('a', 'z')
+    let updateResult
+    try {
+      await localApi.updateNote('a/n.md', { content: 'v1', tags: [], baseRevision: created.revision })
+      updateResult = { ok: true }
+    } catch (e) {
+      updateResult = { ok: false, status: e?.response?.status }
+    }
+    await renamePromise
+
+    if (updateResult.ok) {
+      // The update landed: the note at the new path must carry the NEW content,
+      // never a stale pre-update snapshot.
+      const final = (await localApi.getNote('z/n.md')).data
+      expect(final.content).toBe('v1')
+    } else {
+      // The rename committed first and the note moved out from under the update.
+      expect(updateResult.status).toBe(404)
+    }
+    // Exactly one location exists.
+    const inZ = await localApi.getNote('z/n.md').then(() => true, () => false)
+    const inA = await localApi.getNote('a/n.md').then(() => true, () => false)
+    expect(inZ || inA).toBe(true)
+    expect(inZ && inA).toBe(false)
+  })
+
+  it('a folder move racing a note update never loses the update', async () => {
+    const created = (await localApi.createNote({ name: 'm', folder: 'src', content: 'v0' })).data
+    const movePromise = localApi.moveFolder('src', 'dst')
+    let updateResult
+    try {
+      await localApi.updateNote('src/m.md', { content: 'v1', tags: [], baseRevision: created.revision })
+      updateResult = { ok: true }
+    } catch (e) {
+      updateResult = { ok: false, status: e?.response?.status }
+    }
+    await movePromise
+
+    const finalPath = 'dst/src/m.md' // moveFolder('src', 'dst') relocates src under dst
+    if (updateResult.ok) {
+      const final = (await localApi.getNote(finalPath)).data
+      expect(final.content).toBe('v1')
+    } else {
+      expect(updateResult.status).toBe(404)
+    }
+    const inDst = await localApi.getNote(finalPath).then(() => true, () => false)
+    const inSrc = await localApi.getNote('src/m.md').then(() => true, () => false)
+    expect(inDst || inSrc).toBe(true)
+    expect(inDst && inSrc).toBe(false)
+  })
+})

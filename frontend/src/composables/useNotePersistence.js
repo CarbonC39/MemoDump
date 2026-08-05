@@ -59,28 +59,25 @@ export function useNotePersistence({
               ? ''
               : (replay.originalName ?? name))
           : (isTimestampName(editingNote.value.name) ? '' : (editingNote.value.name || ''))
-        // The CAS baseline. Replay entries and loaded notes carry a revision;
-        // a legacy queued entry predating revisions falls back to the current
-        // durable revision so an offline change never bypasses CAS.
-        const capturedRev = fromReplay
+        // The CAS baseline. Replay entries and loaded notes carry a revision.
+        // A replay that cannot prove its baseline must not auto-apply: it would
+        // let old content silently overwrite the current server state. It
+        // enters a visible conflict instead.
+        const baseRevision = fromReplay
           ? (replay.baseRevision || '')
           : (editingNote.value?.revision || '')
-        let baseRevision = capturedRev
-        if (!baseRevision) {
-          try {
-            const doc = await api.getNote(path)
-            baseRevision = doc.data.revision || ''
-          } catch (_) { baseRevision = '' }
+        if (fromReplay && !baseRevision) {
+          conflict.value = true
+          throw { response: { status: 409, data: { error: { code: 'local_revision_conflict' } } } }
         }
         const payload = { content, tags }
         if (baseRevision) payload.baseRevision = baseRevision
         if (name !== originalTitle) payload.rename = name
-        let response = await api.updateNote(path, payload)
+        // Content, rename and move commit as one CAS-guarded mutation, so a
+        // network failure between stages can never strand the outbox.
+        if (folder !== parentOf(path)) payload.destination = folder
+        const response = await api.updateNote(path, payload)
         resultNode = response.data
-        if (folder !== parentOf(resultNode.path)) {
-          response = await api.moveNote(resultNode.path, folder)
-          resultNode = response.data
-        }
       } else {
         const response = await api.createNote({ content, name: name || '', folder, tags })
         resultNode = response.data
@@ -125,9 +122,15 @@ export function useNotePersistence({
         }
       }
 
-      // A successful write supersedes any queued offline entry for this note.
-      if (resultNode?.path) {
-        try { await remove(resultNode.path) } catch (_) {}
+      // A successful live write supersedes any queued offline entry for this
+      // note. The outbox key is the SOURCE path (an update/rename was keyed by
+      // the old path) or `new::clientId` for a note created offline — never the
+      // post-write path, which would leave the stale entry behind.
+      if (!fromReplay) {
+        const outboxKey = path || (editingNote.value?.clientId ? 'new::' + editingNote.value.clientId : '')
+        if (outboxKey) {
+          try { await remove(outboxKey) } catch (_) {}
+        }
       }
       return resultNode
     } catch (error) {

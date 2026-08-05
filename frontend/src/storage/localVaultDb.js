@@ -8,7 +8,7 @@
 // readwrite transaction, before openDB() resolves. It is idempotent: records
 // that already carry `markdown` are left untouched.
 
-import { frontMatterPartWithTags, parseDocument } from './frontmatter'
+import { serializeTags, parseDocument } from './frontmatter'
 import { sha256Hex } from './sha256'
 
 const DB_NAME = 'memodump'
@@ -50,7 +50,7 @@ export function openDB() {
 function migrateMarkdown(rec) {
   const content = typeof rec.content === 'string' ? rec.content : ''
   const tags = Array.isArray(rec.tags) ? rec.tags.map(String) : []
-  return frontMatterPartWithTags('', tags) + content
+  return (tags.length ? `---\n${serializeTags(tags)}\n---\n` : '') + content
 }
 
 // One readwrite transaction over the notes store: every record missing
@@ -114,6 +114,100 @@ export async function getRec(store, key) {
 
 export async function getNoteRec(path) {
   return getRec('notes', path)
+}
+
+/**
+ * Runs fn inside ONE readwrite transaction that reads the CURRENT notes and
+ * folders within that transaction, so a folder rename/move/delete can check the
+ * destination and rewrite path prefixes without ever overwriting a concurrent
+ * note update with a stale snapshot. fn(notes, folders) is async and returns:
+ *   { type: 'apply', writes } – [{ store: 'notes'|'folders', delete?: path, put?: rec }]
+ *   { type: 'error', status, code, message }
+ */
+export function atomicFolderWrite(fn) {
+  return openDB().then((db) => new Promise((resolve, reject) => {
+    const t = db.transaction(['notes', 'folders'], 'readwrite')
+    const notes = t.objectStore('notes')
+    const folders = t.objectStore('folders')
+    const reqP = (request) => new Promise((res, rej) => {
+      request.onsuccess = () => res(request.result)
+      request.onerror = () => rej(request.error)
+    })
+    const fail = (err) => { try { t.abort() } catch (_) {}; reject(err) }
+    ;(async () => {
+      try {
+        const [allNotes, allFolders] = await Promise.all([
+          reqP(notes.getAll()),
+          reqP(folders.getAll()),
+        ])
+        const outcome = await fn(allNotes, allFolders)
+        if (outcome.type === 'error') {
+          fail({ response: { status: outcome.status, data: { error: { code: outcome.code, message: outcome.message } } } })
+          return
+        }
+        for (const w of outcome.writes) {
+          const store = w.store === 'folders' ? folders : notes
+          if (w.delete) store.delete(w.delete)
+          if (w.put) store.put(w.put)
+        }
+        t.oncomplete = () => resolve(outcome)
+      } catch (e) {
+        fail(e)
+      }
+    })()
+    t.onerror = () => reject(t.error)
+    t.onabort = () => reject(t.error)
+  }))
+}
+
+/**
+ * Runs fn inside ONE readwrite transaction that also reads the note at `path`,
+ * so the CAS check and the write are atomic across tabs (IndexedDB serializes
+ * readwrite transactions over the same store). fn(rec, notes, folders, reqP)
+ * is async and may issue further reads via reqP; it returns one of:
+ *   { type: 'put', rec, deleteOld? } – put rec; deleteOld (default false) also
+ *                                     deletes `path` when rec.path differs (rename)
+ *   { type: 'delete' }       – delete `path`
+ *   { type: 'noop', rec }    – nothing to write
+ *   { type: 'error', status, code, message } – reject with that API error
+ * Resolves with the returned outcome once the transaction commits.
+ */
+export function atomicNoteWrite(path, fn) {
+  return openDB().then((db) => new Promise((resolve, reject) => {
+    const t = db.transaction(['notes', 'folders'], 'readwrite')
+    const notes = t.objectStore('notes')
+    const folders = t.objectStore('folders')
+    const reqP = (request) => new Promise((res, rej) => {
+      request.onsuccess = () => res(request.result)
+      request.onerror = () => rej(request.error)
+    })
+    const fail = (err) => { try { t.abort() } catch (_) {}; reject(err) }
+    const apiError = (status, code, message) => {
+      fail({ response: { status, data: { error: { code, message } } } })
+    }
+
+    ;(async () => {
+      try {
+        const rec = await reqP(notes.get(path))
+        const outcome = await fn(rec, notes, folders, reqP)
+        if (outcome.type === 'error') {
+          apiError(outcome.status, outcome.code, outcome.message)
+          return
+        }
+        if (outcome.type === 'put') {
+          if (outcome.deleteOld && outcome.rec.path !== path) notes.delete(path)
+          notes.put(outcome.rec)
+        } else if (outcome.type === 'delete') {
+          notes.delete(path)
+        }
+        t.oncomplete = () => resolve(outcome)
+      } catch (e) {
+        fail(e)
+      }
+    })()
+    t.onerror = () => reject(t.error)
+    t.onabort = () => reject(t.error)
+  }))
 }
 
 // Test-only: close and reset the cached connection so suites can start from a

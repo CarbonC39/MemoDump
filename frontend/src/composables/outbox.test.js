@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto'
 import { describe, it, expect, beforeEach } from 'vitest'
-import { buildEntry, buildDeleteEntry, outboxPut, outboxAll, outboxClear } from './outbox'
+import { buildEntry, buildDeleteEntry, outboxPut, outboxDelete, outboxAll, outboxClear } from './outbox'
 
 beforeEach(async () => {
   await outboxClear()
@@ -47,5 +47,18 @@ describe('outbox revision contract (Phase 0)', () => {
     await outboxPut({ key: 'a.md', path: 'a.md', baseRevision: 'r0', content: 'v2', op: 'update', ts: 2 })
     const [entry] = await outboxAll()
     expect(entry.conflict).toBe(true)
+  })
+})
+
+describe('outbox conflict derivation (restart-safe)', () => {
+  it('derives outboxHasConflict from persisted conflicted entries', async () => {
+    const { outboxHasConflict } = await import('./outbox')
+    expect(outboxHasConflict.value).toBe(false)
+    await outboxPut({ key: 'a.md', path: 'a.md', baseRevision: 'r0', content: 'v1', op: 'update', conflict: true, ts: 1 })
+    await new Promise(r => setTimeout(r, 0))
+    expect(outboxHasConflict.value).toBe(true)
+    await outboxDelete('a.md')
+    await new Promise(r => setTimeout(r, 0))
+    expect(outboxHasConflict.value).toBe(false)
   })
 })

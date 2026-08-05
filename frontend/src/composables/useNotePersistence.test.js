@@ -83,12 +83,13 @@ describe('useNotePersistence', () => {
         content: 'offline edit',
         tags: [],
         folder: '',
+        baseRevision: 'r1',
       },
     })
 
     expect(api.updateNote).toHaveBeenCalledWith(
       '2026-07-29_120000.md',
-      { content: 'offline edit', tags: [] },
+      { content: 'offline edit', tags: [], baseRevision: 'r1' },
     )
   })
 })
@@ -160,6 +161,47 @@ describe('local revision contract (Phase 0)', () => {
     editor.loadDocument({ path: 'a.md', name: 'a', tags: [], content: 'old', revision: 'r1' })
     editor.onEditorReady('old')
     editor.onEditorUpdate('new')
+    const persistence = useNotePersistence({ api, editor, enqueue: vi.fn(), remove })
+    await persistence.saveNote()
+    expect(remove).toHaveBeenCalledWith('a.md')
+  })
+})
+
+describe('review-fix behaviors', () => {
+  it('treats a replay without a baseline as a conflict and never calls update', async () => {
+    const api = { updateNote: vi.fn() }
+    const editor = useNoteEditor()
+    const persistence = useNotePersistence({ api, editor, enqueue: vi.fn() })
+    await expect(persistence.saveNote({
+      replay: { path: 'a.md', content: 'x', tags: [], name: 'a', folder: '', baseRevision: '', originalName: 'a' },
+    })).rejects.toMatchObject({ response: { status: 409 } })
+    expect(api.updateNote).not.toHaveBeenCalled()
+  })
+
+  it('sends destination in one update instead of a separate move', async () => {
+    const api = {
+      updateNote: vi.fn().mockResolvedValue({ data: { path: 'proj/a.md', name: 'a', tags: [], revision: 'r2' } }),
+    }
+    const editor = useNoteEditor()
+    editor.loadDocument({ path: 'a.md', name: 'a', tags: [], content: 'old', revision: 'r1' })
+    editor.onEditorReady('old')
+    editor.onEditorUpdate('new')
+    editor.editFolder.value = 'proj'
+    const persistence = useNotePersistence({ api, editor, enqueue: vi.fn() })
+    await persistence.saveNote()
+    expect(api.updateNote).toHaveBeenCalledWith('a.md', expect.objectContaining({ destination: 'proj' }))
+  })
+
+  it('removes the outbox entry keyed by the source path after a rename', async () => {
+    const api = {
+      updateNote: vi.fn().mockResolvedValue({ data: { path: 'b.md', name: 'b', tags: [], revision: 'r2' } }),
+    }
+    const remove = vi.fn().mockResolvedValue(undefined)
+    const editor = useNoteEditor()
+    editor.loadDocument({ path: 'a.md', name: 'a', tags: [], content: 'old', revision: 'r1' })
+    editor.onEditorReady('old')
+    editor.onEditorUpdate('new')
+    editor.editName.value = 'b'
     const persistence = useNotePersistence({ api, editor, enqueue: vi.fn(), remove })
     await persistence.saveNote()
     expect(remove).toHaveBeenCalledWith('a.md')
