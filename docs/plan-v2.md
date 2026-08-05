@@ -5,8 +5,10 @@ Date: 2026-08-04
 
 This document records the agreed design for the next major version. Feature 1
 (image support) is fully specified here. Feature 2 (cloud sync) now has a
-separate normative specification in [`docs/sync-spec.md`](sync-spec.md); later
-features will be appended as they are discussed.
+separate normative specification in [`docs/sync-spec.md`](sync-spec.md) and a
+repository-specific execution plan in
+[`docs/sync-implementation-plan.md`](sync-implementation-plan.md); later features
+will be appended as they are discussed.
 
 ## Feature 1 — Better image support
 

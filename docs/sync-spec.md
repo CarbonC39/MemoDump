@@ -4,6 +4,9 @@ Status: proposed implementation contract
 Feature: V2 Feature 2  
 Date: 2026-08-04
 
+Repository-specific sequencing and file ownership are defined in
+[`sync-implementation-plan.md`](sync-implementation-plan.md).
+
 This document defines cloud synchronization for MemoDump. It is intentionally
 more detailed than a product plan: persistence boundaries, wire formats,
 conflict rules, browser limitations, recovery behavior, and acceptance tests
