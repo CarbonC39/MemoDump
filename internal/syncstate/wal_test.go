@@ -160,8 +160,8 @@ func TestSnapshotDetectsCorruption(t *testing.T) {
 		}
 	}
 	corrupt(func(b []byte) []byte { return bytes.Replace(b, []byte(`"k":1`), []byte(`"k":2`), 1) })
-	if _, err := readSnapshot(context.Background(), osWalIO{}, path); err == nil {
-		t.Fatal("value corruption with valid JSON was not caught by the checksum")
+	if _, err := readSnapshot(context.Background(), osWalIO{}, path); !errors.Is(err, ErrStateCorrupt) {
+		t.Fatalf("value corruption was not classified as corruption: %v", err)
 	}
 
 	write := func(body string) {
@@ -180,11 +180,14 @@ func TestSnapshotDetectsCorruption(t *testing.T) {
 		// A missing field must be rejected (a missing lastAppliedSeq could
 		// silently decode as a 0 watermark and reuse durable sequences).
 		`{"data":{},"schemaVersion":1,"checksum":"` + strings.Repeat("0", 64) + `"}`,
+		// A document truncated inside a string token returns io.ErrUnexpectedEOF
+		// and must be corruption, not a bare I/O error.
+		`{"data":{"k":"abc`,
 	}
 	for _, body := range cases {
 		write(body)
-		if _, err := readSnapshot(context.Background(), osWalIO{}, path); err == nil {
-			t.Errorf("corrupt snapshot accepted: %s", body)
+		if _, err := readSnapshot(context.Background(), osWalIO{}, path); !errors.Is(err, ErrStateCorrupt) {
+			t.Errorf("corrupt snapshot not classified as corruption (%v): %s", err, body)
 		}
 	}
 }

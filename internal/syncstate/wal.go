@@ -241,13 +241,15 @@ func corrupt(format string, args ...any) error {
 }
 
 // classifyDecode reports a decoder error as corruption only for JSON parse and
-// type problems (or an unexpected end of input); an underlying I/O error (for
-// example EIO mid-read) is returned unchanged so it is not misreported as
-// device corruption.
+// type problems (or an unexpected end of input — a truncated document returns
+// io.EOF or io.ErrUnexpectedEOF depending on where it was cut); an underlying
+// I/O error (for example EIO mid-read) is returned unchanged so it is not
+// misreported as device corruption.
 func classifyDecode(what string, err error) error {
 	var syn *json.SyntaxError
 	var typ *json.UnmarshalTypeError
-	if errors.As(err, &syn) || errors.As(err, &typ) || errors.Is(err, io.EOF) {
+	if errors.As(err, &syn) || errors.As(err, &typ) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return corrupt("%s: %v", what, err)
 	}
 	return err
@@ -323,6 +325,12 @@ func readSnapshot(ctx context.Context, wio walIO, path string) (*snapshot, error
 	}
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
+		if err != nil {
+			// A decode error while reading what follows the snapshot: classify it
+			// so an incomplete trailing token is corruption while a real EIO
+			// stays an I/O error.
+			return nil, classifyDecode("parse snapshot trailing content", err)
+		}
 		return nil, corrupt("trailing content after snapshot")
 	}
 	// Every field must appear exactly once: a snapshot missing lastAppliedSeq
