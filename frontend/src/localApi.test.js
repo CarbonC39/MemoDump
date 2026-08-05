@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import localApi, { _clear, parseFrontMatter } from './localApi'
+import { allOf } from './storage/localVaultDb'
 import { _sanitizeName } from './localApi'
 import semantics from '../../testdata/contracts/note_semantics.json'
 
@@ -356,4 +357,53 @@ describe('shared note semantics contract', () => {
       expect(_sanitizeName(c.input)).toBe(c.output)
     })
   }
+})
+
+describe('local revision contract (Phase 0)', () => {
+  it('exposes a stable revision on create and get', async () => {
+    const created = (await localApi.createNote({ name: 'r', content: 'body' })).data
+    expect(created.revision).toMatch(/^[a-f0-9]{64}$/)
+    expect((await localApi.getNote('r.md')).data.revision).toBe(created.revision)
+  })
+
+  it('changes the revision on a content change and keeps it on an identical rewrite', async () => {
+    const a = (await localApi.createNote({ name: 'c', content: 'v0' })).data
+    const b = (await localApi.updateNote('c.md', { content: 'v1', tags: [], baseRevision: a.revision })).data
+    expect(b.revision).not.toBe(a.revision)
+    const c = (await localApi.updateNote('c.md', { content: 'v1', tags: [], baseRevision: b.revision })).data
+    expect(c.revision).toBe(b.revision)
+  })
+
+  it('rejects a stale baseRevision on update without writing', async () => {
+    const created = (await localApi.createNote({ name: 'n', content: 'v0' })).data
+    await localApi.updateNote('n.md', { content: 'v1', tags: [], baseRevision: created.revision })
+    await expect(localApi.updateNote('n.md', { content: 'mine', tags: [], baseRevision: created.revision }))
+      .rejects.toMatchObject({ response: { status: 409, data: { error: { code: 'local_revision_conflict' } } } })
+    expect((await localApi.getNote('n.md')).data.content).toBe('v1')
+  })
+
+  it('rejects a stale baseRevision on delete', async () => {
+    const created = (await localApi.createNote({ name: 'd', content: 'x' })).data
+    await localApi.updateNote('d.md', { content: 'y', tags: [], baseRevision: created.revision })
+    await expect(localApi.deleteNote('d.md', created.revision)).rejects.toMatchObject({ response: { status: 409 } })
+    expect((await localApi.getNote('d.md')).data.content).toBe('y')
+  })
+
+  it('preserves unknown front matter keys across a tag edit', async () => {
+    const fd = new FormData()
+    fd.append('file', new File(['---\ncreated: 2024\n# note\ntags: [a]\n---\nbody'], 'u.md', { type: 'text/markdown' }))
+    const created = (await localApi.uploadNote(fd, '')).data
+    const upd = (await localApi.updateNote('u.md', { content: 'body', tags: ['b'], baseRevision: created.revision })).data
+    expect(upd.revision).not.toBe(created.revision)
+    const [rec] = (await allOf('notes')).filter(n => n.path === 'u.md')
+    expect(rec.markdown).toBe('---\ncreated: 2024\n# note\ntags: ["b"]\n---\nbody')
+  })
+
+  it('keeps the body projection in sync with the stored Markdown', async () => {
+    const created = (await localApi.createNote({ name: 'p', content: 'body', tags: ['x'] })).data
+    const [rec] = (await allOf('notes')).filter(n => n.path === 'p.md')
+    expect(rec.markdown).toBe('---\ntags: ["x"]\n---\nbody')
+    expect(rec.content).toBe('body')
+    expect(rec.revision).toBe(created.revision)
+  })
 })

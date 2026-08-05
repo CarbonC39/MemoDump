@@ -4,76 +4,23 @@
 // resolves to an axios-shaped `{ data }` and rejects with `{ response: { status,
 // data: { error } } }`), but stores notes/folders in IndexedDB instead of
 // talking to the Go server. This powers the no-server public/demo build
-// (VITE_LOCAL=1). It deliberately mirrors the semantics of api.go: notes are
-// addressed by a slash-relative path, the name is the basename without `.md`,
-// tags live alongside the body, folders are tracked explicitly so empty ones
-// survive, and moves/renames rewrite path prefixes.
+// (VITE_LOCAL=1). It deliberately mirrors the semantics of api.go / vaultfs:
+// notes are addressed by a slash-relative path, the name is the basename
+// without `.md`, tags live alongside the body, folders are tracked explicitly
+// so empty ones survive, and moves/renames rewrite path prefixes.
+//
+// Since DB version 2 each note record also stores its canonical full Markdown
+// and a `revision` digest. updateNote/deleteNote accept an optional
+// `baseRevision`; when it is provided and stale the call is rejected with
+// `409 local_revision_conflict` without touching the stored record.
+
+import { getNoteRec, write, allOf } from './storage/localVaultDb'
+import { frontMatterPartWithTags, parseDocument } from './storage/frontmatter'
+import { sha256Hex } from './storage/sha256'
 
 const DB_NAME = 'memodump'
-const DB_VERSION = 1
 const PREVIEW_LIMIT = 1000
 const UPLOAD_LIMIT = 1 << 20 // 1 MB
-
-let dbPromise = null
-
-function idb() {
-  return globalThis.indexedDB
-}
-
-function openDB() {
-  if (dbPromise) return dbPromise
-  dbPromise = new Promise((resolve, reject) => {
-    const req = idb().open(DB_NAME, DB_VERSION)
-    req.onupgradeneeded = () => {
-      const db = req.result
-      if (!db.objectStoreNames.contains('notes')) db.createObjectStore('notes', { keyPath: 'path' })
-      if (!db.objectStoreNames.contains('folders')) db.createObjectStore('folders', { keyPath: 'path' })
-    }
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
-  })
-  return dbPromise
-}
-
-function reqP(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
-}
-
-async function allOf(store) {
-  const db = await openDB()
-  return reqP(db.transaction(store).objectStore(store).getAll())
-}
-
-async function getNoteRec(path) {
-  const db = await openDB()
-  return reqP(db.transaction('notes').objectStore('notes').get(path))
-}
-
-// Run a readwrite transaction over both stores. `fn(notes, folders)` issues
-// put/delete requests; the returned promise resolves when the txn commits.
-async function write(fn) {
-  const db = await openDB()
-  return new Promise((resolve, reject) => {
-    const t = db.transaction(['notes', 'folders'], 'readwrite')
-    try {
-      fn(t.objectStore('notes'), t.objectStore('folders'))
-    } catch (e) {
-      try { t.abort() } catch (_) {}
-      reject(e)
-      return
-    }
-    t.oncomplete = () => resolve()
-    t.onerror = () => reject(t.error)
-    t.onabort = () => reject(t.error)
-  })
-}
-
-function apiError(status, error) {
-  return Promise.reject({ response: { status, data: { error } } })
-}
 
 // ---- path helpers ----
 function dirname(p) {
@@ -122,34 +69,7 @@ function decodeCursor(value) {
   return JSON.parse(new TextDecoder().decode(bytes))
 }
 
-// ---- front matter (mirrors api.go parseFrontMatter / buildFrontMatter) ----
-const FM_RE = /^---\n([\s\S]*?)\n---\n?/
-const TAG_RE = /^tags:\s*\[([^\]]*)\]/m
-
-export function parseFrontMatter(content) {
-  const m = FM_RE.exec(content)
-  if (!m) return { tags: [], body: content }
-  const body = content.slice(m[0].length)
-  const tags = []
-  const tm = TAG_RE.exec(m[1])
-  if (tm) {
-    const arrayText = `[${tm[1]}]`
-    try {
-      const parsed = JSON.parse(arrayText)
-      for (const tag of parsed) {
-        const value = String(tag).trim()
-        if (value) tags.push(value)
-      }
-    } catch (_) {
-      // Backward compatibility with older, unquoted `tags: [a, b]` files.
-      for (const raw of tm[1].split(',')) {
-        const value = raw.trim().replace(/^['"]|['"]$/g, '')
-        if (value) tags.push(value)
-      }
-    }
-  }
-  return { tags, body }
-}
+export { parseFrontMatter } from './storage/frontmatter'
 
 function sanitizeName(name) {
   const portableBase = basename(String(name).replaceAll('\\', '/'))
@@ -177,6 +97,28 @@ function plainTags(tags) {
   return Array.isArray(tags) ? tags.map(t => String(t)) : []
 }
 
+function apiError(status, error) {
+  return Promise.reject({ response: { status, data: { error } } })
+}
+
+function revisionConflict() {
+  return Promise.reject({
+    response: {
+      status: 409,
+      data: { error: { code: 'local_revision_conflict', message: 'the note changed since it was read' } },
+    },
+  })
+}
+
+function frontMatterNotEditable() {
+  return Promise.reject({
+    response: {
+      status: 400,
+      data: { error: { code: 'front_matter_not_editable', message: 'front matter cannot be edited safely' } },
+    },
+  })
+}
+
 // ---- shaping ----
 function toMeta(rec) {
   const body = rec.content || ''
@@ -185,7 +127,14 @@ function toMeta(rec) {
   return { path: rec.path, name: noteName(rec.path), tags: rec.tags || [], modTime: rec.modTime || 0, preview }
 }
 function toFull(rec) {
-  return { path: rec.path, name: noteName(rec.path), tags: rec.tags || [], modTime: rec.modTime || 0, content: rec.content || '' }
+  return {
+    path: rec.path,
+    name: noteName(rec.path),
+    tags: rec.tags || [],
+    modTime: rec.modTime || 0,
+    content: rec.content || '',
+    revision: rec.revision || '',
+  }
 }
 function byModDesc(a, b) {
   return (b.modTime || 0) - (a.modTime || 0)
@@ -196,22 +145,38 @@ function ensureFolders(foldersStore, dir) {
   for (const a of ancestors(dir)) foldersStore.put({ path: a })
 }
 
-// Persist a brand-new note, avoiding clobbering an existing path. Returns the rec.
-async function createNoteRec({ name, folder, content, tags }) {
-  let filename = (name || '').trim() || timestampName()
+// Persist a brand-new note, avoiding clobbering an existing path. The full
+// Markdown document is stored verbatim; content/tags are its projection.
+async function createMarkdownRec({ name, folder, markdown }) {
+  let filename = sanitizeName(name || '')
+  if (!filename) filename = timestampName()
   if (!filename.endsWith('.md')) filename += '.md'
   let path = folder ? folder + '/' + filename : filename
   if (await getNoteRec(path)) {
     filename = timestampName() + '_' + filename
     path = folder ? folder + '/' + filename : filename
   }
+  const doc = parseDocument(markdown)
   const now = Date.now()
-  const rec = { path, content: content || '', tags: plainTags(tags), modTime: now, created: now }
+  const rec = {
+    path,
+    markdown,
+    content: doc.body,
+    tags: doc.tags,
+    revision: sha256Hex(markdown),
+    modTime: now,
+    created: now,
+  }
   await write((notes, folders) => {
     notes.put(rec)
     ensureFolders(folders, folder)
   })
   return rec
+}
+
+// Build the canonical document from body + tags (the create path).
+function buildMarkdown(content, tags) {
+  return frontMatterPartWithTags('', plainTags(tags)) + (content || '')
 }
 
 const localApi = {
@@ -262,11 +227,11 @@ const localApi = {
   },
 
   async createNote(data) {
-    const rec = await createNoteRec({
+    const markdown = buildMarkdown(data.content || '', data.tags || [])
+    const rec = await createMarkdownRec({
       name: data.name,
       folder: data.folder || '',
-      content: data.content || '',
-      tags: data.tags || [],
+      markdown,
     })
     return { data: toFull(rec) }
   },
@@ -275,9 +240,22 @@ const localApi = {
     const rec = await getNoteRec(path)
     if (!rec) return apiError(404, 'File not found')
 
-    if (data.content != null) rec.content = data.content
-    rec.tags = plainTags(data.tags)
-    rec.modTime = Date.now()
+    if (data.baseRevision && rec.revision !== data.baseRevision) {
+      return revisionConflict()
+    }
+
+    const newTags = Array.isArray(data.tags) ? plainTags(data.tags) : rec.tags
+    const newBody = data.content != null ? data.content : rec.content
+
+    let newMarkdown
+    try {
+      const doc = parseDocument(rec.markdown || buildMarkdown(rec.content, rec.tags))
+      newMarkdown = frontMatterPartWithTags(doc.frontMatter, newTags) + newBody
+    } catch (e) {
+      if (e && e.name === 'FrontMatterNotEditable') return frontMatterNotEditable()
+      throw e
+    }
+    const revision = sha256Hex(newMarkdown)
 
     let targetPath = path
     if (data.rename != null) {
@@ -291,18 +269,28 @@ const localApi = {
       if (await getNoteRec(targetPath)) {
         return apiError(409, 'A note with that name already exists')
       }
-      const moved = { ...rec, path: targetPath }
+      const moved = {
+        ...rec, path: targetPath,
+        markdown: newMarkdown, revision, content: newBody, tags: newTags,
+        modTime: Date.now(),
+      }
       await write((notes) => {
         notes.delete(path)
         notes.put(moved)
       })
       return { data: toFull(moved) }
     }
-    await write((notes) => notes.put(rec))
-    return { data: toFull(rec) }
+    const updated = { ...rec, markdown: newMarkdown, revision, content: newBody, tags: newTags, modTime: Date.now() }
+    await write((notes) => notes.put(updated))
+    return { data: toFull(updated) }
   },
 
-  async deleteNote(path) {
+  async deleteNote(path, baseRevision) {
+    const rec = await getNoteRec(path)
+    if (!rec) return apiError(404, 'File not found')
+    if (baseRevision && rec.revision !== baseRevision) {
+      return revisionConflict()
+    }
     await write((notes) => notes.delete(path))
     return { data: { status: 'ok' } }
   },
@@ -321,7 +309,12 @@ const localApi = {
     }
     const newPath = dir ? dir + '/' + filename : filename
     const now = Date.now()
-    const rec = { path: newPath, content: src.content || '', tags: plainTags(src.tags), modTime: now, created: now }
+    const rec = {
+      ...src,
+      path: newPath,
+      modTime: now,
+      created: now,
+    }
     await write((notes, folders) => {
       notes.put(rec)
       ensureFolders(folders, dir)
@@ -561,9 +554,8 @@ const localApi = {
     }
     const text = await file.text()
     if (/\x00/.test(text)) return apiError(400, "File contains binary data")
-    const { tags, body } = parseFrontMatter(text)
     const base = sanitizeName(dot >= 0 ? fname.slice(0, dot) : fname)
-    const rec = await createNoteRec({ name: base, folder: folder || '', content: body, tags })
+    const rec = await createMarkdownRec({ name: base, folder: folder || '', markdown: text })
     return { data: toFull(rec) }
   },
 }
