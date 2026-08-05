@@ -12,6 +12,24 @@ import (
 // can never shadow it, and listings hide dot-prefixed entries.
 const ReservedVaultDir = ".images"
 
+// SyncMetadataDir is the opt-in cloud-sync metadata directory. It only exists
+// once sync is enabled; user folders and note writes can never shadow it.
+const SyncMetadataDir = ".memodump"
+
+// reservedDirs are the directories the repository owns and that user folders
+// and note paths must never target.
+var reservedDirs = map[string]bool{
+	ReservedVaultDir: true,
+	SyncMetadataDir:  true,
+}
+
+// IsSyncMetadataDir reports whether a directory entry is the sync metadata
+// directory, case-insensitively: on Windows and default macOS filesystems
+// ".MEMODUMP" is the same directory as ".memodump". Every listing, search,
+// import, scan, watcher, and image-GC path must skip it without descending
+// (and without following any symlink at that path).
+func IsSyncMetadataDir(name string) bool { return strings.EqualFold(name, SyncMetadataDir) }
+
 // SafePath prevents directory traversal attacks by confining the resolved path
 // to base. base is expected to be absolute (the repository root is made
 // absolute at construction), so the returned path is absolute too.
@@ -46,12 +64,17 @@ func SafePath(base string, userPath string) (string, error) {
 }
 
 // ContainsReservedSegment reports whether any path segment is a reserved
-// repository directory name (e.g. the image vault), so user folders can never
-// shadow it.
+// repository directory name (the image vault or the sync metadata directory),
+// so user folders and notes can never shadow them. Matching is
+// case-insensitive because on Windows and default macOS filesystems
+// ".MEMODUMP" names the same directory as ".memodump"; a case-variant path
+// must not bypass the reserved check.
 func ContainsReservedSegment(rel string) bool {
 	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
-		if seg == ReservedVaultDir {
-			return true
+		for reserved := range reservedDirs {
+			if strings.EqualFold(seg, reserved) {
+				return true
+			}
 		}
 	}
 	return false

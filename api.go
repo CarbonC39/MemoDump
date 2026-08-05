@@ -297,7 +297,16 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	var results []Note
 	_ = filepath.Walk(dataDir, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if vaultfs.IsSyncMetadataDir(info.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(info.Name(), ".md") {
 			return nil
 		}
 		rel, relErr := repo.Rel(p)

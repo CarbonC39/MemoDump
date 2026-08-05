@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/minio/minio-go/v7"
+
+	"memodump/internal/vaultfs"
 )
 
 // imageKeyRefRe finds content-hash image keys anywhere in a note body. The same
@@ -34,7 +36,18 @@ const imageCleanupGrace = 7 * 24 * time.Hour
 func collectReferencedImageKeys() map[string]bool {
 	keys := make(map[string]bool)
 	_ = filepath.Walk(dataDir, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil || info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
+		if walkErr != nil {
+			return nil
+		}
+		// The sync metadata directory is never a note location; a stray .md
+		// there must not influence GC of real notes.
+		if info.IsDir() {
+			if vaultfs.IsSyncMetadataDir(info.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(info.Name(), ".md") {
 			return nil
 		}
 		data, err := os.ReadFile(path)

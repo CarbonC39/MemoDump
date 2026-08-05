@@ -51,6 +51,27 @@ func TestCollectReferencedImageKeys(t *testing.T) {
 	}
 }
 
+func TestCollectReferencedImageKeysSkipsSyncMetadata(t *testing.T) {
+	old := dataDir
+	dataDir = t.TempDir()
+	defer func() { dataDir = old }()
+
+	kStray := testImageKey('f', ".png")
+	kHidden := testImageKey('e', ".png")
+	// A stray .md inside .memodump must never protect an image from GC, while a
+	// hidden note at the vault root still does.
+	mustWrite(t, filepath.Join(dataDir, ".memodump", "stray.md"), "/api/images/"+kStray)
+	mustWrite(t, filepath.Join(dataDir, ".hidden.md"), "/api/images/"+kHidden)
+
+	keys := collectReferencedImageKeys()
+	if keys[kStray] {
+		t.Errorf("reference from .memodump must not be collected")
+	}
+	if !keys[kHidden] {
+		t.Errorf("hidden-note reference must still be collected")
+	}
+}
+
 func TestGCVaultImages(t *testing.T) {
 	old := dataDir
 	dataDir = t.TempDir()
@@ -107,12 +128,12 @@ func TestS3GarbageDecision(t *testing.T) {
 	keys := map[string]bool{k: true}
 
 	cases := []struct {
-		name    string
-		object  string
-		prefix  string
-		time    time.Time
-		keys    map[string]bool
-		want    bool
+		name   string
+		object string
+		prefix string
+		time   time.Time
+		keys   map[string]bool
+		want   bool
 	}{
 		{"probe old", ".memodump-probe/x.png", "", old, nil, true},
 		{"probe recent", ".memodump-probe/x.png", "", recent, nil, false},

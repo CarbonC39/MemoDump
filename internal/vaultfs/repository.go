@@ -118,6 +118,17 @@ func (r *Repository) Rel(abs string) (string, error) {
 	return filepath.ToSlash(rel), nil
 }
 
+// rejectReserved returns ErrInvalidPath when a note write would materialize a
+// file inside a reserved repository directory (the image vault or sync
+// metadata). Read paths are deliberately not rejected: sync metadata files live
+// in .memodump and must remain readable by their owner.
+func rejectReserved(rel string) error {
+	if ContainsReservedSegment(rel) {
+		return ErrInvalidPath
+	}
+	return nil
+}
+
 // RevisionOfBytes returns the opaque content digest of raw file bytes.
 func RevisionOfBytes(data []byte) string {
 	sum := sha256.Sum256(data)
@@ -181,6 +192,9 @@ func (c *noteCache) deletePrefix(prefix string) {
 // Get returns a note. With includeContent true, Content carries the body;
 // Markdown and Revision are always populated.
 func (r *Repository) Get(rel string, includeContent bool) (*Note, error) {
+	if err := rejectReserved(rel); err != nil {
+		return nil, err
+	}
 	abs, err := r.resolve(rel)
 	if err != nil {
 		return nil, err
@@ -254,6 +268,9 @@ func (r *Repository) buildNote(rel string, info os.FileInfo, doc *Document) Note
 // ListNotes returns summary notes in a folder (rel, "" = root), sorted by
 // modified time descending. A missing folder returns ErrNotFound.
 func (r *Repository) ListNotes(rel string) ([]Note, error) {
+	if err := rejectReserved(rel); err != nil {
+		return nil, err
+	}
 	abs, err := r.resolve(rel)
 	if err != nil {
 		return nil, err
@@ -324,6 +341,9 @@ func (r *Repository) Create(opts CreateOptions) (*Note, error) {
 	if opts.Folder != "" {
 		rel = path.Join(opts.Folder, name)
 	}
+	if err := rejectReserved(rel); err != nil {
+		return nil, err
+	}
 	abs, err := r.resolve(rel)
 	if err != nil {
 		return nil, err
@@ -380,6 +400,9 @@ func (r *Repository) CreateMarkdown(name, folder, markdown string) (*Note, error
 	rel := clean
 	if folder != "" {
 		rel = path.Join(folder, clean)
+	}
+	if err := rejectReserved(rel); err != nil {
+		return nil, err
 	}
 	abs, err := r.resolve(rel)
 	if err != nil {
@@ -442,6 +465,14 @@ func (r *Repository) Update(rel string, opts UpdateOptions) (*Note, error) {
 	if targetRel != rel {
 		targetAbs, err = r.resolve(targetRel)
 		if err != nil {
+			return nil, err
+		}
+	}
+	if err := rejectReserved(rel); err != nil {
+		return nil, err
+	}
+	if targetRel != rel {
+		if err := rejectReserved(targetRel); err != nil {
 			return nil, err
 		}
 	}
@@ -515,6 +546,9 @@ func (r *Repository) Update(rel string, opts UpdateOptions) (*Note, error) {
 // Delete removes a note. When baseRevision is set it must match the current
 // durable revision or ErrRevisionConflict is returned and nothing is deleted.
 func (r *Repository) Delete(rel, baseRevision string) error {
+	if err := rejectReserved(rel); err != nil {
+		return err
+	}
 	abs, err := r.resolve(rel)
 	if err != nil {
 		return err
@@ -545,6 +579,12 @@ func (r *Repository) Move(rel, destination string) (*Note, error) {
 		return nil, err
 	}
 	newRel := path.Join(destination, path.Base(rel))
+	if err := rejectReserved(rel); err != nil {
+		return nil, err
+	}
+	if err := rejectReserved(newRel); err != nil {
+		return nil, err
+	}
 	if newRel == rel {
 		return r.Get(rel, true)
 	}
@@ -580,6 +620,9 @@ func (r *Repository) Move(rel, destination string) (*Note, error) {
 
 // Duplicate copies a note's raw bytes to a "(copy)"-suffixed sibling name.
 func (r *Repository) Duplicate(rel string) (*Note, error) {
+	if err := rejectReserved(rel); err != nil {
+		return nil, err
+	}
 	abs, err := r.resolve(rel)
 	if err != nil {
 		return nil, err
@@ -639,6 +682,9 @@ func (r *Repository) Duplicate(rel string) (*Note, error) {
 // "" means create-if-absent. This is the boundary the future sync worker and
 // external scans will use; nothing in Phase 0 calls it yet.
 func (r *Repository) Apply(rel, markdown, expectedRevision string) (*Note, error) {
+	if err := rejectReserved(rel); err != nil {
+		return nil, err
+	}
 	abs, err := r.resolve(rel)
 	if err != nil {
 		return nil, err
@@ -693,6 +739,9 @@ func (r *Repository) CreateFolder(rel string) error {
 
 // RenameFolder renames a directory, invalidating cached notes under it.
 func (r *Repository) RenameFolder(rel, newName string) error {
+	if err := rejectReserved(rel); err != nil {
+		return ErrInvalidPath
+	}
 	newRel := path.Join(path.Dir(rel), newName)
 	if ContainsReservedSegment(newRel) {
 		return ErrInvalidPath
@@ -717,8 +766,13 @@ func (r *Repository) RenameFolder(rel, newName string) error {
 	})
 }
 
-// DeleteFolder removes a directory and all its contents.
+// DeleteFolder removes a directory and all its contents. Reserved directories
+// (the image vault and the sync metadata directory) are never deletable through
+// the note repository: deleting .memodump would destroy the vault's identity.
 func (r *Repository) DeleteFolder(rel string) error {
+	if err := rejectReserved(rel); err != nil {
+		return err
+	}
 	abs, err := r.resolve(rel)
 	if err != nil {
 		return err
@@ -734,6 +788,9 @@ func (r *Repository) DeleteFolder(rel string) error {
 
 // MoveFolder relocates a directory (and its contents) to a new parent.
 func (r *Repository) MoveFolder(rel, destination string) error {
+	if err := rejectReserved(rel); err != nil {
+		return ErrInvalidPath
+	}
 	newRel := path.Join(destination, path.Base(rel))
 	if ContainsReservedSegment(newRel) {
 		return ErrInvalidPath

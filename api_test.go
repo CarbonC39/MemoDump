@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -53,6 +54,134 @@ func TestV2AscendingCursorPagination(t *testing.T) {
 	second := pageNotesV2(notes, cursor, 2, "modified-asc")
 	if len(second.Items) != 1 || second.Items[0].ID != "new.md" {
 		t.Fatalf("second ascending page = %#v", second)
+	}
+}
+
+func TestSearchExcludesSyncMetadataDir(t *testing.T) {
+	oldDataDir := dataDir
+	dataDir = t.TempDir()
+	t.Cleanup(func() { dataDir = oldDataDir })
+	initRepo()
+
+	// A stray .md inside .memodump must never be searchable, even though a real
+	// note elsewhere with the same content is.
+	if err := os.MkdirAll(filepath.Join(dataDir, ".memodump"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, ".memodump", "stray.md"), []byte("needle"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "visible.md"), []byte("needle"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/search?q=needle", nil)
+	rec := httptest.NewRecorder()
+	handleSearch(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var results []Note
+	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Path != "visible.md" {
+		t.Fatalf("search results = %+v, want only visible.md", results)
+	}
+
+	// The v2 search must behave identically.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v2/search?q=needle", nil)
+	rec2 := httptest.NewRecorder()
+	handleV2Search(rec2, req2)
+	var page notePageV2
+	if err := json.Unmarshal(rec2.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ID != "visible.md" {
+		t.Fatalf("v2 search results = %+v, want only visible.md", page.Items)
+	}
+}
+
+func TestApiCannotTouchSyncMetadataDir(t *testing.T) {
+	oldDataDir := dataDir
+	dataDir = t.TempDir()
+	t.Cleanup(func() { dataDir = oldDataDir })
+	initRepo()
+
+	// Simulate a vault that has enabled sync.
+	index := filepath.Join(dataDir, ".memodump", "sync-index.json")
+	if err := os.MkdirAll(filepath.Dir(index), 0755); err != nil {
+		t.Fatal(err)
+	}
+	const doc = `{"schemaVersion":1,"vaultId":"00000000-0000-4000-8000-000000000000","entities":{}}`
+	if err := os.WriteFile(index, []byte(doc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(index)
+
+	// Note read/delete at a .memodump path must be refused, never served.
+	noteCases := []struct {
+		name   string
+		method string
+		run    func(http.ResponseWriter, *http.Request)
+	}{
+		{"v1 get", http.MethodGet, handleGetNote},
+		{"v1 delete", http.MethodDelete, handleDeleteNote},
+		{"v2 get", http.MethodGet, handleV2GetNote},
+	}
+	for _, tc := range noteCases {
+		req := httptest.NewRequest(tc.method, "/", nil)
+		req.SetPathValue("path", ".memodump/sync-index.json")
+		rec := httptest.NewRecorder()
+		tc.run(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s .memodump note = %d, want 400", tc.name, rec.Code)
+		}
+	}
+
+	// Folder delete/rename of .memodump must be refused.
+	del := httptest.NewRequest(http.MethodDelete, "/", nil)
+	del.SetPathValue("path", ".memodump")
+	rec := httptest.NewRecorder()
+	handleDeleteFolder(rec, del)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("delete folder .memodump = %d, want 400", rec.Code)
+	}
+	ren := httptest.NewRequest(http.MethodPut, "/", strings.NewReader(`{"newName":"x"}`))
+	ren.SetPathValue("path", ".memodump")
+	rec2 := httptest.NewRecorder()
+	handleRenameFolder(rec2, ren)
+	if rec2.Code != http.StatusBadRequest {
+		t.Errorf("rename folder .memodump = %d, want 400", rec2.Code)
+	}
+
+	// Listing with a .memodump parent must be refused in v1 and v2.
+	l1 := httptest.NewRequest(http.MethodGet, "/api/notes?folder=.memodump", nil)
+	rec3 := httptest.NewRecorder()
+	handleListNotes(rec3, l1)
+	if rec3.Code != http.StatusBadRequest {
+		t.Errorf("v1 list notes in .memodump = %d, want 400", rec3.Code)
+	}
+	listCases := []struct {
+		name string
+		run  func(http.ResponseWriter, *http.Request)
+	}{
+		{"v2 list notes", handleV2ListNotes},
+		{"v2 list folders", handleV2ListFolders},
+	}
+	for _, tc := range listCases {
+		req := httptest.NewRequest(http.MethodGet, "/api/v2/notes?parent=.memodump", nil)
+		rec := httptest.NewRecorder()
+		tc.run(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s parent=.memodump = %d, want 400", tc.name, rec.Code)
+		}
+	}
+
+	// None of the refused calls may have touched the identity file.
+	after, _ := os.ReadFile(index)
+	if !bytes.Equal(before, after) {
+		t.Fatal("sync index modified by refused API calls")
 	}
 }
 

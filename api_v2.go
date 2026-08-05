@@ -188,6 +188,10 @@ func handleV2ListNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parent := r.URL.Query().Get("parent")
+	if vaultfs.ContainsReservedSegment(parent) {
+		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is reserved")
+		return
+	}
 	dir, err := vaultfs.SafePath(dataDir, parent)
 	if err != nil {
 		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is invalid")
@@ -218,6 +222,10 @@ func handleV2ListNotes(w http.ResponseWriter, r *http.Request) {
 
 func handleV2ListFolders(w http.ResponseWriter, r *http.Request) {
 	parent := r.URL.Query().Get("parent")
+	if vaultfs.ContainsReservedSegment(parent) {
+		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is reserved")
+		return
+	}
 	dir, err := vaultfs.SafePath(dataDir, parent)
 	if err != nil {
 		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is invalid")
@@ -267,7 +275,16 @@ func handleV2Search(w http.ResponseWriter, r *http.Request) {
 	tagQuery := strings.ToLower(r.URL.Query().Get("tag"))
 	notes := make([]noteSummaryV2, 0)
 	_ = filepath.Walk(dataDir, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil || info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
+		if walkErr != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if vaultfs.IsSyncMetadataDir(info.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(info.Name(), ".md") {
 			return nil
 		}
 		rel, relErr := repo.Rel(path)
