@@ -30,6 +30,7 @@ func main() {
 	flag.StringVar(&imageS3PublicURL, "image-s3-public-url", "", "Public base URL for S3 objects")
 	flag.StringVar(&imageS3AccessKey, "image-s3-access-key", "", "S3 access key")
 	flag.StringVar(&imageS3SecretKey, "image-s3-secret-key", "", "S3 secret key")
+	flag.StringVar(&syncRoot, "sync-root", "", "Cloud-sync device-state root (default: OS application data dir)")
 	flag.Parse()
 
 	// Load .env from CWD (lower priority than flags and env vars).
@@ -83,14 +84,26 @@ func main() {
 			log.Fatalf("CSS file not found: %s", cssFile)
 		}
 	}
+	if syncRoot == "" {
+		if v := os.Getenv("MEMODUMP_SYNC_ROOT"); v != "" {
+			syncRoot = v
+		} else if v := dotenv["SYNC_ROOT"]; v != "" {
+			syncRoot = v
+		}
+	}
+	if syncRoot != "" {
+		if abs, err := filepath.Abs(syncRoot); err == nil {
+			syncRoot = abs
+		}
+	}
 	if port == 0 {
 		port = 8080
 	}
 
 	if dataDir == "" {
-		fmt.Println("Usage: memodump --data <folder> [--user <username> --pass <password>] [--port <port>] [--css <file>]")
+		fmt.Println("Usage: memodump --data <folder> [--user <username> --pass <password>] [--port <port>] [--css <file>] [--sync-root <dir>]")
 		fmt.Println("  Credentials can also be set via MEMODUMP_USER / MEMODUMP_PASS env vars")
-		fmt.Println("  or a .env file in the current directory (DATA=, USER=, PASS=, PORT=, CSS=).")
+		fmt.Println("  or a .env file in the current directory (DATA=, USER=, PASS=, PORT=, CSS=, SYNC_ROOT=).")
 		fmt.Println("  Omitting username and password starts the server in no-auth mode.")
 		os.Exit(1)
 	}
@@ -147,6 +160,9 @@ func main() {
 	addr := fmt.Sprintf(":%d", port)
 	log.Printf("MemoDump started at http://localhost%s", addr)
 	log.Printf("Data directory: %s", dataDir)
+	if syncRoot != "" {
+		log.Printf("Sync state root: %s", syncRoot)
+	}
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}

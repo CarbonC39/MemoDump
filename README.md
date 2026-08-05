@@ -118,6 +118,7 @@ Open `http://localhost:8080` in your browser (or the custom port).
 | `--pass` | Login password | — |
 | `--port` | HTTP port | `8080` |
 | `--css` | Custom CSS file injected into the UI | — |
+| `--sync-root` | Cloud-sync device-state root (identity, replicas, WAL) | OS application data dir |
 
 ### Configuration sources
 
@@ -126,8 +127,8 @@ Settings can be supplied three ways, in priority order:
 | Priority | Source | Notes |
 |----------|--------|-------|
 | 1 (highest) | CLI flags | `--user alice --pass secret` |
-| 2 | Environment variables | `MEMODUMP_DATA`, `MEMODUMP_USER`, `MEMODUMP_PASS`, `MEMODUMP_PORT`, `MEMODUMP_CSS` |
-| 3 (lowest) | `.env` file in working directory | `DATA=`, `USER=`, `PASS=`, `PORT=`, `CSS=` |
+| 2 | Environment variables | `MEMODUMP_DATA`, `MEMODUMP_USER`, `MEMODUMP_PASS`, `MEMODUMP_PORT`, `MEMODUMP_CSS`, `MEMODUMP_SYNC_ROOT` |
+| 3 (lowest) | `.env` file in working directory | `DATA=`, `USER=`, `PASS=`, `PORT=`, `CSS=`, `SYNC_ROOT=` |
 
 **.env file example**
 
@@ -137,7 +138,23 @@ USER=alice
 PASS=secret
 PORT=9090
 CSS=./custom.css
+SYNC_ROOT=./sync-state
 ```
+
+### Cloud-sync state root (`--sync-root`)
+
+Cloud sync is experimental and off by default; nothing is created until a vault
+first enables it. When it is enabled, one installation keeps its sync device
+state — Device ID, the path→Replica registry, and each replica's snapshot/WAL —
+under a **state root**:
+
+- **Default**: the OS application-data directory (`os.UserConfigDir()/memodump/sync`).
+- **Override**: `--sync-root <dir>`, `MEMODUMP_SYNC_ROOT`, or `SYNC_ROOT=`.
+
+This root lives **outside the vault**: it is never synced, never uploaded, and
+must be persisted alongside the data directory. In a container, mount a volume
+for it (the image sets `MEMODUMP_SYNC_ROOT=/var/lib/memodump/sync`) so replica
+identity and device state survive container recreation.
 
 Lines starting with `#` and blank lines are ignored. Values are not quote-stripped.
 

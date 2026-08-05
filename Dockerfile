@@ -20,6 +20,9 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/memodump .
 FROM gcr.io/distroless/static-debian12
 COPY --from=build /out/memodump /memodump
 ENV MEMODUMP_DATA=/data
+# Cloud-sync device state lives outside the vault; the image documents the
+# path a container must persist so replica identity survives recreation.
+ENV MEMODUMP_SYNC_ROOT=/var/lib/memodump/sync
 EXPOSE 8080
-VOLUME ["/data"]
+VOLUME ["/data", "/var/lib/memodump/sync"]
 ENTRYPOINT ["/memodump"]

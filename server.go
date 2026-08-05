@@ -36,6 +36,7 @@ var (
 	port     int
 	noAuth   bool
 	cssFile  string
+	syncRoot string // cloud-sync device-state root; "" = OS application data dir
 )
 
 // parseEnvFile reads KEY=VALUE pairs from a .env file. Missing file is silently ignored.
