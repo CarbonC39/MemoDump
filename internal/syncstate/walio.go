@@ -34,7 +34,7 @@ func (osWalIO) OpenRead(name string) (*os.File, error) { return os.Open(name) }
 
 func (osWalIO) ReadFile(name string) ([]byte, error) { return os.ReadFile(name) }
 
-func (osWalIO) Rename(oldpath, newpath string) error { return os.Rename(oldpath, newpath) }
+func (osWalIO) Rename(oldpath, newpath string) error { return atomicReplace(oldpath, newpath) }
 
 func (osWalIO) RenameNoClobber(oldpath, newpath string) error {
 	return renameNoClobber(oldpath, newpath)

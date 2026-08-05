@@ -41,6 +41,12 @@ func (s *Store) Compact() error {
 }
 
 func (s *Store) compact(ctx context.Context) error {
+	s.mu.Lock()
+	poisoned := s.poisoned
+	s.mu.Unlock()
+	if poisoned {
+		return errors.New("store is poisoned by a prior write failure; reopen to recover")
+	}
 	if !s.compMu.TryLock() {
 		s.pendingCompact.Store(true)
 		return nil
@@ -93,6 +99,11 @@ func (s *Store) rotate() error {
 	if s.closed {
 		return errors.New("store is closed")
 	}
+	if s.poisoned {
+		// A torn tail from a failed append is still recoverable by truncation;
+		// rotating it into a frozen generation would make it permanent damage.
+		return errors.New("store is poisoned by a prior write failure; reopen to recover")
+	}
 	// 1. Sync and close the active WAL descriptor.
 	if err := s.io.Sync(s.f); err != nil {
 		return fmt.Errorf("rotate: sync active wal: %w", err)
@@ -107,16 +118,17 @@ func (s *Store) rotate() error {
 	active := filepath.Join(s.dir, activeWalName)
 	frozen := filepath.Join(s.dir, frozenName(gen))
 	if err := s.io.RenameNoClobber(active, frozen); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("rotate: frozen generation %d already exists; refusing to overwrite: %w", gen, os.ErrExist)
-		}
-		// The active descriptor is closed but the file is still active; reopen
-		// it so a failed rotation leaves the store writable.
+		// The active descriptor was closed; reopen it so any failed rotation
+		// (including an existing-generation collision) leaves the store
+		// writable.
 		f, oerr := s.io.OpenAppend(active)
 		if oerr != nil {
 			return fmt.Errorf("rotate: rename to frozen %d: %w (reopen active: %v)", gen, err, oerr)
 		}
 		s.f = f
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("rotate: frozen generation %d already exists; refusing to overwrite: %w", gen, os.ErrExist)
+		}
 		return fmt.Errorf("rotate: rename to frozen %d: %w", gen, err)
 	}
 	if err := syncDir(s.dir); err != nil {
@@ -150,6 +162,9 @@ func (s *Store) buildSnapshot(ctx context.Context) ([]int64, error) {
 	state := make(map[string]json.RawMessage)
 	lastApplied := int64(0)
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if data, err := s.io.ReadFile(filepath.Join(s.dir, snapshotName)); err == nil {
 		snap, perr := parseSnapshot(data)
 		if perr != nil {
@@ -167,15 +182,22 @@ func (s *Store) buildSnapshot(ctx context.Context) ([]int64, error) {
 	if err != nil {
 		return nil, err
 	}
+	// One buffered reader, Reset per frozen generation: the read buffer is
+	// allocated once and reused, and ReadBytes grows without a fixed line cap
+	// so arbitrarily large legal records stay compactable.
+	br := bufio.NewReaderSize(nil, 64*1024)
 	for _, gen := range gens {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if err := s.replayFrozen(ctx, gen, state, &lastApplied); err != nil {
+		if err := s.replayFrozen(ctx, br, gen, state, &lastApplied); err != nil {
 			return nil, err
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Stream the compacted state through the durable-replace helper: unique
 	// temp file, fsync, atomic rename, and a directory sync.
 	var snapshotSize int64
@@ -197,37 +219,47 @@ func (s *Store) buildSnapshot(ctx context.Context) ([]int64, error) {
 	return gens, nil
 }
 
-// replayFrozen decodes one frozen generation incrementally, applying records
-// with seq above the snapshot watermark.
-func (s *Store) replayFrozen(ctx context.Context, gen int64, state map[string]json.RawMessage, lastApplied *int64) error {
+// replayFrozen decodes one frozen generation incrementally through the shared
+// buffered reader (Reset per generation), applying records with seq above the
+// snapshot watermark. ReadBytes has no fixed maximum line size.
+func (s *Store) replayFrozen(ctx context.Context, br *bufio.Reader, gen int64, state map[string]json.RawMessage, lastApplied *int64) error {
 	f, err := s.io.OpenRead(filepath.Join(s.dir, frozenName(gen)))
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
-	for sc.Scan() {
+	br.Reset(f)
+	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
+		line, rerr := br.ReadBytes('\n')
+		if len(line) > 0 {
+			if line[len(line)-1] == '\n' {
+				line = line[:len(line)-1]
+			}
+			if len(line) == 0 {
+				continue
+			}
+			rec, perr := parseWalRecord(line)
+			if perr != nil {
+				return fmt.Errorf("compact: frozen %d: %v", gen, perr)
+			}
+			if rec.Seq <= *lastApplied {
+				continue // already in the snapshot watermark
+			}
+			if aerr := applyTo(state, rec); aerr != nil {
+				return aerr
+			}
+			*lastApplied = rec.Seq
 		}
-		rec, perr := parseWalRecord(line)
-		if perr != nil {
-			return fmt.Errorf("compact: frozen %d: %v", gen, perr)
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				return nil
+			}
+			return rerr
 		}
-		if rec.Seq <= *lastApplied {
-			continue // already in the snapshot watermark
-		}
-		if aerr := applyTo(state, rec); aerr != nil {
-			return aerr
-		}
-		*lastApplied = rec.Seq
 	}
-	return sc.Err()
 }
 
 // countingWriter counts the bytes written through it.

@@ -104,11 +104,17 @@ type walPayload struct {
 	Value json.RawMessage `json:"value,omitempty"`
 }
 
-// putPayload builds the canonical payload for a put of value under key.
+// putPayload builds the canonical payload for a put of value under key. The
+// result is validated as JSON so a caller error (for example an invalid
+// json.RawMessage value) is rejected here, before any record is serialized or
+// written to the WAL — a caller error must never touch durable state.
 func putPayload(key string, value any) (json.RawMessage, error) {
 	data, err := cloudsync.CanonicalBytes(map[string]any{"key": key, "value": value})
 	if err != nil {
 		return nil, err
+	}
+	if !json.Valid(data) {
+		return nil, fmt.Errorf("wal payload for key %q is not valid JSON", key)
 	}
 	return json.RawMessage(data), nil
 }
@@ -118,6 +124,9 @@ func deletePayload(key string) (json.RawMessage, error) {
 	data, err := cloudsync.CanonicalBytes(map[string]any{"key": key})
 	if err != nil {
 		return nil, err
+	}
+	if !json.Valid(data) {
+		return nil, fmt.Errorf("wal payload for key %q is not valid JSON", key)
 	}
 	return json.RawMessage(data), nil
 }

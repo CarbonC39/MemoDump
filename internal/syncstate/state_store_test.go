@@ -1,6 +1,7 @@
 package syncstate
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -379,6 +380,37 @@ func TestRecoveryFrozenBytesTriggerCompaction(t *testing.T) {
 	}
 	if _, err := filepathGlob(dir, "state.wal.*.frozen.ndjson"); err != nil {
 		t.Fatal("frozen generations not pruned by compaction")
+	}
+}
+
+func TestInvalidRawValueNeverTouchesWal(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A caller error (invalid json.RawMessage) must be rejected while building
+	// the payload — before any record is serialized or written.
+	if _, err := s.Put("bad", json.RawMessage("{")); err == nil {
+		t.Fatal("invalid raw value accepted")
+	}
+	// The WAL was not touched: a subsequent valid append succeeds and recovery
+	// is clean.
+	if _, err := s.Put("good", 1); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	s2, err := Open(dir, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if _, ok := s2.Get("good"); !ok {
+		t.Fatal("valid append lost; invalid value reached the WAL")
+	}
+	if _, ok := s2.Get("bad"); ok {
+		t.Fatal("invalid value leaked into the state")
 	}
 }
 
