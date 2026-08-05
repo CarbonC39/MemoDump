@@ -1,0 +1,185 @@
+{
+  "entityCases": [
+    {
+      "entity": {
+        "contentHash": "",
+        "deleted": false,
+        "kind": "note",
+        "markdown": "x",
+        "name": "idea",
+        "parentId": "",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "updatedAt": 1,
+        "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666"
+      },
+      "name": "newer schema"
+    },
+    {
+      "entity": {
+        "contentHash": "",
+        "deleted": false,
+        "kind": "note",
+        "markdown": "x",
+        "name": "idea",
+        "parentId": "",
+        "schemaVersion": 1,
+        "syncId": "not-a-uuid",
+        "updatedAt": 1,
+        "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666"
+      },
+      "name": "bad sync uuid"
+    },
+    {
+      "entity": {
+        "contentHash": "",
+        "deleted": false,
+        "kind": "note",
+        "markdown": "x",
+        "name": "../evil",
+        "parentId": "",
+        "schemaVersion": 1,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "updatedAt": 1,
+        "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666"
+      },
+      "name": "traversal name"
+    },
+    {
+      "entity": {
+        "contentHash": "",
+        "deleted": false,
+        "kind": "folder",
+        "markdown": "x",
+        "name": "Projects",
+        "parentId": "",
+        "schemaVersion": 1,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "updatedAt": 1,
+        "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666"
+      },
+      "name": "folder with markdown"
+    },
+    {
+      "entity": {
+        "contentHash": "",
+        "deleted": false,
+        "kind": "note",
+        "markdown": "![x](memodump-media:not-a-key)",
+        "name": "idea",
+        "parentId": "",
+        "schemaVersion": 1,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "updatedAt": 1,
+        "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666"
+      },
+      "name": "invalid media key"
+    },
+    {
+      "entity": {
+        "contentHash": "",
+        "deleted": false,
+        "kind": "note",
+        "markdown": "![x](memodump-media:)",
+        "name": "idea",
+        "parentId": "",
+        "schemaVersion": 1,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "updatedAt": 1,
+        "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666"
+      },
+      "name": "empty media key"
+    },
+    {
+      "entity": {
+        "deleted": false,
+        "kind": "note",
+        "markdown": "x",
+        "name": "idea",
+        "parentId": "",
+        "schemaVersion": 1,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "updatedAt": 1,
+        "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666"
+      },
+      "name": "missing contentHash"
+    },
+    {
+      "entity": {
+        "contentHash": "",
+        "deleted": false,
+        "kind": "note",
+        "markdown": "x",
+        "name": "idea",
+        "parentId": "",
+        "schemaVersion": 1,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666"
+      },
+      "name": "missing updatedAt"
+    },
+    {
+      "entity": {
+        "contentHash": "",
+        "deleted": false,
+        "kind": "note",
+        "markdown": "x",
+        "name": "idea",
+        "parentId": "",
+        "schemaVersion": 1,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "updatedAt": 0,
+        "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666"
+      },
+      "name": "zero updatedAt"
+    },
+    {
+      "entity": {
+        "contentHash": "deadbeef",
+        "deleted": false,
+        "kind": "note",
+        "markdown": "x",
+        "name": "idea",
+        "parentId": "",
+        "schemaVersion": 1,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "updatedAt": 1,
+        "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666"
+      },
+      "name": "bad content hash format"
+    },
+    {
+      "entity": {
+        "contentHash": "",
+        "deleted": false,
+        "kind": "note",
+        "markdown": "x",
+        "name": "idea",
+        "parentId": "",
+        "schemaVersion": 1,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "updatedAt": 9007199254740993,
+        "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666"
+      },
+      "name": "updatedAt beyond safe integer"
+    }
+  ],
+  "rawCases": [
+    {
+      "json": "{\"schemaVersion\":1,\"syncId\":\"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8\",\"kind\":\"note\",\"parentId\":\"\",\"name\":\"idea\",\"markdown\":\"x\",\"contentHash\":\"80962d891c9e4347770cd673be6be6bfc679fd17e015175daee291892a729c45\",\"deleted\":false,\"updatedBy\":\"1a2b3c4d-1111-4222-8333-444455556666\",\"updatedAt\":1}{\"x\":1}",
+      "name": "trailing json value"
+    },
+    {
+      "base64": "eyJzY2hlbWFWZXJzaW9uIjoxLCJzeW5jSWQiOiI1ZDVkOGIyYy05NGY3LTRhMzgtODMxOC04Y2Q0Y2I1M2RmYTgiLCJraW5kIjoibm90ZSIsIm5hbWUiOiL/In0=",
+      "name": "invalid utf-8"
+    },
+    {
+      "json": "{\"schemaVersion\":1,\"syncId\":\"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8\",\"kind\":\"note\",\"parentId\":\"\",\"name\":\"idea\",\"markdown\":\"x\",\"contentHash\":\"\",\"deleted\":false,\"updatedBy\":\"1a2b3c4d-1111-4222-8333-444455556666\",\"updatedAt\":1,\"evil\":true}",
+      "name": "unknown field"
+    },
+    {
+      "json": "{\"schemaVersion\":1,",
+      "name": "malformed json"
+    }
+  ]
+}

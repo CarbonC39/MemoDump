@@ -1,0 +1,44 @@
+{
+  "invalid": [
+    {
+      "json": "{\"formatVersion\":2,\"repositoryId\":\"bdbd4162-faf1-418e-895e-4221bbbb5cc5\",\"createdAt\":1785800000000,\"minimumClientVersion\":\"2.0.0\"}",
+      "name": "newer format"
+    },
+    {
+      "json": "{\"formatVersion\":1,\"repositoryId\":\"nope\",\"createdAt\":1785800000000,\"minimumClientVersion\":\"2.0.0\"}",
+      "name": "bad repository id"
+    },
+    {
+      "json": "{\"formatVersion\":1,\"repositoryId\":\"bdbd4162-faf1-418e-895e-4221bbbb5cc5\",\"createdAt\":1785800000000,\"minimumClientVersion\":\"2.0.0\",\"evil\":true}",
+      "name": "unknown field"
+    },
+    {
+      "json": "{\"formatVersion\":1,\"repositoryId\":\"bdbd4162-faf1-418e-895e-4221bbbb5cc5\",\"createdAt\":1785800000000}",
+      "name": "missing field"
+    },
+    {
+      "json": "{\"formatVersion\":1,\"repositoryId\":\"bdbd4162-faf1-418e-895e-4221bbbb5cc5\",\"createdAt\":1785800000000,\"minimumClientVersion\":\"\"}",
+      "name": "empty minimumClientVersion"
+    },
+    {
+      "json": "{\"formatVersion\":1,\"repositoryId\":\"bdbd4162-faf1-418e-895e-4221bbbb5cc5\",\"createdAt\":9007199254740992,\"minimumClientVersion\":\"2.0.0\"}",
+      "name": "createdAt beyond safe integer"
+    },
+    {
+      "json": "{\"formatVersion\":1,\"repositoryId\":\"bdbd4162-faf1-418e-895e-4221bbbb5cc5\",\"createdAt\":1785800000000,\"minimumClientVersion\":\"2.0.0\"}extra",
+      "name": "trailing content"
+    }
+  ],
+  "valid": [
+    {
+      "name": "standard",
+      "descriptor": {
+        "formatVersion": 1,
+        "repositoryId": "bdbd4162-faf1-418e-895e-4221bbbb5cc5",
+        "createdAt": 1785800000000,
+        "minimumClientVersion": "2.0.0"
+      },
+      "canonicalJson": "{\"createdAt\":1785800000000,\"formatVersion\":1,\"minimumClientVersion\":\"2.0.0\",\"repositoryId\":\"bdbd4162-faf1-418e-895e-4221bbbb5cc5\"}\n"
+    }
+  ]
+}

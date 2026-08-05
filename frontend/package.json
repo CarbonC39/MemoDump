@@ -9,7 +9,8 @@
     "build:local": "VITE_LOCAL=1 vite build",
     "verify:server-build": "node -e \"const fs=require('fs');const value=JSON.parse(fs.readFileSync('dist/build-mode.json'));if(value.mode!=='server')throw new Error('frontend/dist is not a server build')\"",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@milkdown/crepe": "^7.19.0",
@@ -27,6 +28,7 @@
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.2",
     "fake-indexeddb": "^6.2.5",
+    "typescript": "^7.0.2",
     "vite": "^7.3.1",
     "vitest": "^4.1.7"
   }

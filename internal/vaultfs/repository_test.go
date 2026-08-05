@@ -106,10 +106,12 @@ func TestConcurrentStaleUpdatesSerialize(t *testing.T) {
 	var mu sync.Mutex
 	conflicts := 0
 	wins := 0
-	for i := 0; i < 4; i++ {
+	for i := 1; i <= 4; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
+			// Every candidate differs from the initial "v0", so the winning
+			// write always advances the revision and blocks the rest.
 			_, err := r.Update("a.md", UpdateOptions{
 				Content:      strPtr(fmt.Sprintf("v%d", i)),
 				BaseRevision: base,
@@ -135,7 +137,7 @@ func TestConcurrentStaleUpdatesSerialize(t *testing.T) {
 		t.Fatalf("conflicts = %d, want 3", conflicts)
 	}
 	final, _ := r.Get("a.md", true)
-	if final.Content != "v0" && final.Content != "v1" && final.Content != "v2" && final.Content != "v3" {
+	if final.Content != "v1" && final.Content != "v2" && final.Content != "v3" && final.Content != "v4" {
 		t.Fatalf("final content = %q", final.Content)
 	}
 }

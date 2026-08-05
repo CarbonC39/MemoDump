@@ -4,7 +4,10 @@ go 1.25.0
 
 require github.com/wailsapp/wails/v2 v2.12.0
 
-require github.com/minio/minio-go/v7 v7.2.1
+require (
+	github.com/minio/minio-go/v7 v7.2.1
+	golang.org/x/text v0.37.0
+)
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
@@ -46,6 +49,5 @@ require (
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
 	gopkg.in/ini.v1 v1.67.2 // indirect
 )
