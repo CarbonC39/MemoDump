@@ -1,11 +1,12 @@
 # MemoDump V2 Plan
 
-Status: design record — agreed during planning, not yet implemented
-Date: 2026-07-31
+Status: design record — Feature 1 implemented; Feature 2 proposed
+Date: 2026-08-04
 
 This document records the agreed design for the next major version. Feature 1
-(image support) is fully specified here; features 2 and 3 (find & replace, cloud
-sync) will be appended as they are discussed.
+(image support) is fully specified here. Feature 2 (cloud sync) now has a
+separate normative specification in [`docs/sync-spec.md`](sync-spec.md); later
+features will be appended as they are discussed.
 
 ## Feature 1 — Better image support
 
