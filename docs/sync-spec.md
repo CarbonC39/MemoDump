@@ -1,8 +1,12 @@
-# MemoDump Cloud Sync Specification
+# MemoDump Cloud Sync Specification (Historical Proposal)
 
-Status: proposed implementation contract  
-Feature: V2 Feature 2  
+Status: superseded by [`sync-spec-lite.md`](sync-spec-lite.md)
+Feature: V2 Feature 2
 Date: 2026-08-04
+
+This document is retained as design history. New implementation work must not
+use its WAL, compaction, or scheduling architecture unless a later accepted
+specification explicitly restores those features.
 
 Repository-specific sequencing and file ownership are defined in
 [`sync-implementation-plan.md`](sync-implementation-plan.md).

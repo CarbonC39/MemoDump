@@ -1,8 +1,12 @@
-# MemoDump Cloud Sync Implementation Plan
+# MemoDump Cloud Sync Implementation Plan (Historical Proposal)
 
-Status: proposed execution plan
+Status: superseded by [`sync-spec-lite.md`](sync-spec-lite.md)
 Date: 2026-08-04
 Architecture contract: [`sync-spec.md`](sync-spec.md)
+
+This phase plan is retained as design history. Do not continue its Phase 3+
+WAL/compaction architecture; write a new implementation plan only after the
+simplified specification is accepted.
 
 ## 1. Purpose and authority
 
