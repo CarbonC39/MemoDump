@@ -383,6 +383,62 @@ func TestRecoveryFrozenBytesTriggerCompaction(t *testing.T) {
 	}
 }
 
+func TestEmptyKeyNeverTouchesWal(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Replay would reject an empty key after the record was fsynced, leaving an
+	// unrecoverable WAL, so it must be rejected while building the payload.
+	if _, err := s.Put("", 1); err == nil {
+		t.Fatal("empty key accepted")
+	}
+	if _, err := s.Delete(""); err == nil {
+		t.Fatal("empty-key delete accepted")
+	}
+	// The WAL was not corrupted: a valid append succeeds and recovery is clean.
+	if _, err := s.Put("good", 1); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s2, err := Open(dir, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if _, ok := s2.Get("good"); !ok {
+		t.Fatal("valid append lost; an empty-key operation touched the WAL")
+	}
+}
+
+func TestGetAndSnapshotDoNotExposeInternalState(t *testing.T) {
+	s, err := Open(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Put("k", map[string]any{"x": int64(1)}); err != nil {
+		t.Fatal(err)
+	}
+	// Get returns a clone: mutating it must not change the store.
+	v, ok := s.Get("k")
+	if !ok {
+		t.Fatal("k missing")
+	}
+	v[0] = 'X'
+	got, _ := s.Get("k")
+	if got[0] != '{' {
+		t.Fatalf("Get leaked internal state: %s", got)
+	}
+	// Snapshot deep-copies values: mutating them must not change the store.
+	snap := s.Snapshot()
+	snap["k"][0] = 'Y'
+	got2, _ := s.Get("k")
+	if got2[0] != '{' {
+		t.Fatalf("Snapshot leaked internal state: %s", got2)
+	}
+}
+
 func TestInvalidRawValueNeverTouchesWal(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir, Options{})

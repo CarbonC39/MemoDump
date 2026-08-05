@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -106,10 +107,14 @@ type walPayload struct {
 }
 
 // putPayload builds the canonical payload for a put of value under key. The
-// result is validated as JSON so a caller error (for example an invalid
-// json.RawMessage value) is rejected here, before any record is serialized or
-// written to the WAL — a caller error must never touch durable state.
+// key and the result are validated here, before any record is serialized or
+// written to the WAL — a caller error must never touch durable state. In
+// particular an empty key is rejected because replay (decodePayload) would
+// reject it after the record was already fsynced, leaving an unrecoverable WAL.
 func putPayload(key string, value any) (json.RawMessage, error) {
+	if key == "" {
+		return nil, fmt.Errorf("wal payload: empty key")
+	}
 	data, err := cloudsync.CanonicalBytes(map[string]any{"key": key, "value": value})
 	if err != nil {
 		return nil, err
@@ -120,8 +125,12 @@ func putPayload(key string, value any) (json.RawMessage, error) {
 	return json.RawMessage(data), nil
 }
 
-// deletePayload builds the canonical payload for deleting key.
+// deletePayload builds the canonical payload for deleting key. An empty key is
+// rejected for the same reason as putPayload.
 func deletePayload(key string) (json.RawMessage, error) {
+	if key == "" {
+		return nil, fmt.Errorf("wal payload: empty key")
+	}
 	data, err := cloudsync.CanonicalBytes(map[string]any{"key": key})
 	if err != nil {
 		return nil, err
@@ -159,12 +168,14 @@ type snapshot struct {
 	Checksum       string                     `json:"checksum"`
 }
 
-// writeSnapshotBody streams the canonical snapshot body (the checksum input)
-// to w and h: {"data":D,"lastAppliedSeq":N,"schemaVersion":1 WITHOUT the
-// closing brace, because the checksum field closes the document. The same bytes
-// are written to w (the destination) and h (a hash), and ctx is checked per
-// data key so a cancelled compactor stops during the long encode. Verification
-// calls it with w = io.Discard to re-encode the decoded body into a hash only.
+// writeSnapshotBody streams the canonical snapshot body to w and h, WITHOUT the
+// closing brace: the body is {"data":D,"lastAppliedSeq":N,"schemaVersion":1.
+// The caller writes the closing brace into the checksum hash (so the checksum
+// covers the complete, self-contained body object per spec) and the checksum
+// field into the document (closing it). The same bytes are written to w (the
+// destination) and h (a hash), and ctx is checked per data key so a cancelled
+// compactor stops during the long encode. Verification calls it with
+// w = io.Discard to re-encode the decoded body into a hash only.
 func writeSnapshotBody(ctx context.Context, w, h io.Writer, lastApplied int64, data map[string]json.RawMessage) error {
 	mw := io.MultiWriter(w, h)
 	if _, err := io.WriteString(mw, `{"data":{`); err != nil {
@@ -209,6 +220,7 @@ func writeSnapshotFile(ctx context.Context, w io.Writer, lastApplied int64, data
 	if err := writeSnapshotBody(ctx, cw, h, lastApplied, data); err != nil {
 		return 0, err
 	}
+	h.Write([]byte("}")) // close the body object in the hash (checksum input)
 	sum := hex.EncodeToString(h.Sum(nil))
 	if _, err := io.WriteString(cw, `,"checksum":"`+sum+`"}`); err != nil {
 		return 0, err
@@ -226,6 +238,19 @@ func writeSnapshotFile(ctx context.Context, w io.Writer, lastApplied int64, data
 // are deliberately NOT wrapped: they are not corruption.
 func corrupt(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrStateCorrupt, fmt.Sprintf(format, args...))
+}
+
+// classifyDecode reports a decoder error as corruption only for JSON parse and
+// type problems (or an unexpected end of input); an underlying I/O error (for
+// example EIO mid-read) is returned unchanged so it is not misreported as
+// device corruption.
+func classifyDecode(what string, err error) error {
+	var syn *json.SyntaxError
+	var typ *json.UnmarshalTypeError
+	if errors.As(err, &syn) || errors.As(err, &typ) || errors.Is(err, io.EOF) {
+		return corrupt("%s: %v", what, err)
+	}
+	return err
 }
 
 // readSnapshot streams state.snapshot.json from a file with a token-based
@@ -247,7 +272,7 @@ func readSnapshot(ctx context.Context, wio walIO, path string) (*snapshot, error
 
 	tok, err := dec.Token()
 	if err != nil {
-		return nil, corrupt("parse snapshot: %v", err)
+		return nil, classifyDecode("parse snapshot", err)
 	}
 	if d, ok := tok.(json.Delim); !ok || d != '{' {
 		return nil, corrupt("parse snapshot: not an object")
@@ -260,7 +285,7 @@ func readSnapshot(ctx context.Context, wio walIO, path string) (*snapshot, error
 		}
 		keyTok, err := dec.Token()
 		if err != nil {
-			return nil, corrupt("parse snapshot: %v", err)
+			return nil, classifyDecode("parse snapshot", err)
 		}
 		key, ok := keyTok.(string)
 		if !ok {
@@ -273,7 +298,7 @@ func readSnapshot(ctx context.Context, wio walIO, path string) (*snapshot, error
 		switch key {
 		case "checksum":
 			if err := dec.Decode(&s.Checksum); err != nil {
-				return nil, corrupt("parse snapshot checksum: %v", err)
+				return nil, classifyDecode("parse snapshot checksum", err)
 			}
 		case "data":
 			data, err := decodeDataMap(ctx, dec)
@@ -283,18 +308,18 @@ func readSnapshot(ctx context.Context, wio walIO, path string) (*snapshot, error
 			s.Data = data
 		case "lastAppliedSeq":
 			if err := dec.Decode(&s.LastAppliedSeq); err != nil {
-				return nil, corrupt("parse snapshot lastAppliedSeq: %v", err)
+				return nil, classifyDecode("parse snapshot lastAppliedSeq", err)
 			}
 		case "schemaVersion":
 			if err := dec.Decode(&s.SchemaVersion); err != nil {
-				return nil, corrupt("parse snapshot schemaVersion: %v", err)
+				return nil, classifyDecode("parse snapshot schemaVersion", err)
 			}
 		default:
 			return nil, corrupt("parse snapshot: unknown field %q", key)
 		}
 	}
 	if _, err := dec.Token(); err != nil {
-		return nil, corrupt("parse snapshot: %v", err) // closing brace
+		return nil, classifyDecode("parse snapshot", err) // closing brace
 	}
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
@@ -314,11 +339,13 @@ func readSnapshot(ctx context.Context, wio walIO, path string) (*snapshot, error
 		return nil, corrupt("negative lastAppliedSeq %d", s.LastAppliedSeq)
 	}
 	// Verify the checksum by re-encoding the decoded body into a hash (no
-	// whole-document byte slice).
+	// whole-document byte slice), closing the body object exactly as the writer
+	// did.
 	h := sha256.New()
 	if err := writeSnapshotBody(ctx, io.Discard, h, s.LastAppliedSeq, s.Data); err != nil {
 		return nil, err
 	}
+	h.Write([]byte("}"))
 	if hex.EncodeToString(h.Sum(nil)) != s.Checksum {
 		return nil, corrupt("snapshot checksum mismatch")
 	}
@@ -330,7 +357,7 @@ func readSnapshot(ctx context.Context, wio walIO, path string) (*snapshot, error
 func decodeDataMap(ctx context.Context, dec *json.Decoder) (map[string]json.RawMessage, error) {
 	tok, err := dec.Token()
 	if err != nil {
-		return nil, corrupt("parse snapshot data: %v", err)
+		return nil, classifyDecode("parse snapshot data", err)
 	}
 	if d, ok := tok.(json.Delim); !ok || d != '{' {
 		return nil, corrupt("parse snapshot data: not an object")
@@ -342,7 +369,7 @@ func decodeDataMap(ctx context.Context, dec *json.Decoder) (map[string]json.RawM
 		}
 		keyTok, err := dec.Token()
 		if err != nil {
-			return nil, corrupt("parse snapshot data key: %v", err)
+			return nil, classifyDecode("parse snapshot data key", err)
 		}
 		key, ok := keyTok.(string)
 		if !ok {
@@ -350,7 +377,7 @@ func decodeDataMap(ctx context.Context, dec *json.Decoder) (map[string]json.RawM
 		}
 		var raw json.RawMessage
 		if err := dec.Decode(&raw); err != nil {
-			return nil, corrupt("parse snapshot data value %q: %v", key, err)
+			return nil, classifyDecode(fmt.Sprintf("parse snapshot data value %q", key), err)
 		}
 		if _, dup := out[key]; dup {
 			return nil, corrupt("parse snapshot data: duplicate key %q", key)
@@ -358,7 +385,7 @@ func decodeDataMap(ctx context.Context, dec *json.Decoder) (map[string]json.RawM
 		out[key] = raw
 	}
 	if _, err := dec.Token(); err != nil {
-		return nil, corrupt("parse snapshot data: %v", err) // closing brace
+		return nil, classifyDecode("parse snapshot data", err) // closing brace
 	}
 	return out, nil
 }

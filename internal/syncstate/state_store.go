@@ -358,21 +358,26 @@ func (s *Store) append(op string, payload json.RawMessage) (int64, error) {
 	return seq, nil
 }
 
-// Get returns the current durable value for key, if any.
+// Get returns the current durable value for key, if any. The value is cloned so
+// a caller cannot mutate the store's internal state (and bypass the WAL).
 func (s *Store) Get(key string) ([]byte, bool) {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
 	v, ok := s.state[key]
-	return v, ok
+	if !ok {
+		return nil, false
+	}
+	return bytes.Clone(v), true
 }
 
-// Snapshot returns a copy of the applied state.
+// Snapshot returns a deep copy of the applied state: keys and every value are
+// cloned so the caller can never mutate the store's internal state.
 func (s *Store) Snapshot() map[string]json.RawMessage {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
 	out := make(map[string]json.RawMessage, len(s.state))
 	for k, v := range s.state {
-		out[k] = v
+		out[k] = bytes.Clone(v)
 	}
 	return out
 }
