@@ -256,7 +256,15 @@ containment, entity kind, and actual file presence are validated before use.
 
 Device state uses two formats:
 
-- `state.snapshot.json`: a compacted state with `lastAppliedSeq`.
+- `state.snapshot.json`: a compacted state with `lastAppliedSeq` and a canonical
+  checksum over the compacted body (the data map plus `lastAppliedSeq` and
+  `schemaVersion`). The checksum field is written last (it is unknown until the
+  body is streamed), so the checksum covers a complete, self-contained body
+  object and corruption that still parses as JSON (for example a cursor value
+  changing) is detected. The implementation must verify it by re-encoding the
+  decoded body into a hash — never by reading the whole document into memory —
+  and a snapshot missing any of `checksum`, `data`, `lastAppliedSeq`, or
+  `schemaVersion` is corruption.
 - `state.wal.ndjson`: the only active append target.
 
 Each WAL line is a complete JSON record with a monotonically increasing `seq`,

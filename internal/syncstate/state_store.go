@@ -149,6 +149,9 @@ func Open(dir string, opts Options) (*Store, error) {
 // (one past the maximum durable sequence).
 func (s *Store) recover() (truncateTo, nextSeq int64, err error) {
 	// Snapshot base, streamed from the file (recovery is not cancellable).
+	// readSnapshot classifies its own errors: corruption is wrapped with
+	// ErrStateCorrupt, a failed open is an I/O error (not corruption), and a
+	// missing snapshot is os.ErrNotExist.
 	snap, rerr := readSnapshot(context.Background(), s.io, filepath.Join(s.dir, snapshotName))
 	if rerr == nil {
 		s.state = snap.Data
@@ -157,7 +160,7 @@ func (s *Store) recover() (truncateTo, nextSeq int64, err error) {
 			s.snapshotSize = info.Size()
 		}
 	} else if !os.IsNotExist(rerr) {
-		return 0, 0, fmt.Errorf("%w: snapshot: %v", ErrStateCorrupt, rerr)
+		return 0, 0, rerr
 	}
 	nextSeq = s.lastApplied
 

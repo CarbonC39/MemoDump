@@ -146,20 +146,28 @@ func decodePayload(raw json.RawMessage) (walPayload, error) {
 // --- snapshot ----------------------------------------------------------------
 
 // snapshot is the compacted device state: the last applied sequence plus the
-// full state map. It carries no checksum (spec §5.5 defines it as the compacted
-// state plus lastAppliedSeq; the WAL records carry the checksums, and snapshot
-// corruption is caught by strict JSON parsing). Keeping the snapshot
-// checksum-free is what lets it stream both ways without a whole-document pass.
+// full state map. It carries a canonical checksum over the body (data,
+// lastAppliedSeq, schemaVersion), so corruption that still parses as JSON (for
+// example a cursor value silently changing) is detected. The document is
+// written as {"data":D,"lastAppliedSeq":N,"schemaVersion":1,"checksum":"C"}:
+// the checksum field comes last because it cannot be known until the body has
+// been streamed.
 type snapshot struct {
 	SchemaVersion  int                        `json:"schemaVersion"`
 	LastAppliedSeq int64                      `json:"lastAppliedSeq"`
 	Data           map[string]json.RawMessage `json:"data"`
+	Checksum       string                     `json:"checksum"`
 }
 
-// writeSnapshotDoc streams the canonical snapshot document, checking ctx per
-// data key so a cancelled compactor stops during the long encode.
-func writeSnapshotDoc(ctx context.Context, w io.Writer, lastApplied int64, data map[string]json.RawMessage) error {
-	if _, err := io.WriteString(w, `{"data":{`); err != nil {
+// writeSnapshotBody streams the canonical snapshot body (the checksum input)
+// to w and h: {"data":D,"lastAppliedSeq":N,"schemaVersion":1 WITHOUT the
+// closing brace, because the checksum field closes the document. The same bytes
+// are written to w (the destination) and h (a hash), and ctx is checked per
+// data key so a cancelled compactor stops during the long encode. Verification
+// calls it with w = io.Discard to re-encode the decoded body into a hash only.
+func writeSnapshotBody(ctx context.Context, w, h io.Writer, lastApplied int64, data map[string]json.RawMessage) error {
+	mw := io.MultiWriter(w, h)
+	if _, err := io.WriteString(mw, `{"data":{`); err != nil {
 		return err
 	}
 	keys := make([]string, 0, len(data))
@@ -172,21 +180,21 @@ func writeSnapshotDoc(ctx context.Context, w io.Writer, lastApplied int64, data 
 			return err
 		}
 		if i > 0 {
-			if _, err := io.WriteString(w, ","); err != nil {
+			if _, err := io.WriteString(mw, ","); err != nil {
 				return err
 			}
 		}
-		if err := writeJSONString(w, k); err != nil {
+		if err := writeJSONString(mw, k); err != nil {
 			return err
 		}
-		if _, err := io.WriteString(w, ":"); err != nil {
+		if _, err := io.WriteString(mw, ":"); err != nil {
 			return err
 		}
-		if _, err := w.Write(data[k]); err != nil {
+		if _, err := mw.Write(data[k]); err != nil {
 			return err
 		}
 	}
-	if _, err := fmt.Fprintf(w, `},"lastAppliedSeq":%d,"schemaVersion":1}`, lastApplied); err != nil {
+	if _, err := fmt.Fprintf(mw, `},"lastAppliedSeq":%d,"schemaVersion":1`, lastApplied); err != nil {
 		return err
 	}
 	return nil
@@ -197,7 +205,12 @@ func writeSnapshotDoc(ctx context.Context, w io.Writer, lastApplied int64, data 
 func writeSnapshotFile(ctx context.Context, w io.Writer, lastApplied int64, data map[string]json.RawMessage) (int64, error) {
 	bw := bufio.NewWriter(w)
 	cw := &countingWriter{w: bw}
-	if err := writeSnapshotDoc(ctx, cw, lastApplied, data); err != nil {
+	h := sha256.New()
+	if err := writeSnapshotBody(ctx, cw, h, lastApplied, data); err != nil {
+		return 0, err
+	}
+	sum := hex.EncodeToString(h.Sum(nil))
+	if _, err := io.WriteString(cw, `,"checksum":"`+sum+`"}`); err != nil {
 		return 0, err
 	}
 	if _, err := cw.Write([]byte("\n")); err != nil {
@@ -209,25 +222,35 @@ func writeSnapshotFile(ctx context.Context, w io.Writer, lastApplied int64, data
 	return cw.n, nil
 }
 
+// corrupt wraps an error as device-state corruption. I/O errors (a failed open)
+// are deliberately NOT wrapped: they are not corruption.
+func corrupt(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrStateCorrupt, fmt.Sprintf(format, args...))
+}
+
 // readSnapshot streams state.snapshot.json from a file with a token-based
 // decoder, checking ctx between fields, so a large snapshot is decoded
-// incrementally and a cancelled compactor stops at a field boundary. Unknown
-// fields, duplicate fields, trailing content, a bad schema, and a negative
-// watermark are all corruption.
+// incrementally and a cancelled compactor stops at a field boundary. The data
+// map is decoded one entry at a time. All four fields (checksum, data,
+// lastAppliedSeq, schemaVersion) must appear exactly once, and the checksum is
+// verified by canonically re-encoding the decoded body into a hash. Parse,
+// schema, checksum, unknown-field, and missing-field problems are corruption;
+// a failed open is returned as-is (I/O, not corruption), and a missing file is
+// os.ErrNotExist.
 func readSnapshot(ctx context.Context, wio walIO, path string) (*snapshot, error) {
 	f, err := wio.OpenRead(path)
 	if err != nil {
-		return nil, err // propagates os.ErrNotExist
+		return nil, err // propagates os.ErrNotExist and raw I/O errors
 	}
 	defer f.Close()
 	dec := json.NewDecoder(f)
 
 	tok, err := dec.Token()
 	if err != nil {
-		return nil, fmt.Errorf("parse snapshot: %w", err)
+		return nil, corrupt("parse snapshot: %v", err)
 	}
 	if d, ok := tok.(json.Delim); !ok || d != '{' {
-		return nil, fmt.Errorf("parse snapshot: not an object")
+		return nil, corrupt("parse snapshot: not an object")
 	}
 	var s snapshot
 	seen := make(map[string]bool)
@@ -237,50 +260,107 @@ func readSnapshot(ctx context.Context, wio walIO, path string) (*snapshot, error
 		}
 		keyTok, err := dec.Token()
 		if err != nil {
-			return nil, fmt.Errorf("parse snapshot: %w", err)
+			return nil, corrupt("parse snapshot: %v", err)
 		}
 		key, ok := keyTok.(string)
 		if !ok {
-			return nil, fmt.Errorf("parse snapshot: non-string key")
+			return nil, corrupt("parse snapshot: non-string key")
 		}
 		if seen[key] {
-			return nil, fmt.Errorf("parse snapshot: duplicate field %q", key)
+			return nil, corrupt("parse snapshot: duplicate field %q", key)
 		}
 		seen[key] = true
 		switch key {
+		case "checksum":
+			if err := dec.Decode(&s.Checksum); err != nil {
+				return nil, corrupt("parse snapshot checksum: %v", err)
+			}
 		case "data":
-			if err := dec.Decode(&s.Data); err != nil {
-				return nil, fmt.Errorf("parse snapshot data: %w", err)
+			data, err := decodeDataMap(ctx, dec)
+			if err != nil {
+				return nil, err
 			}
-			if s.Data == nil {
-				s.Data = make(map[string]json.RawMessage)
-			}
+			s.Data = data
 		case "lastAppliedSeq":
 			if err := dec.Decode(&s.LastAppliedSeq); err != nil {
-				return nil, fmt.Errorf("parse snapshot lastAppliedSeq: %w", err)
+				return nil, corrupt("parse snapshot lastAppliedSeq: %v", err)
 			}
 		case "schemaVersion":
 			if err := dec.Decode(&s.SchemaVersion); err != nil {
-				return nil, fmt.Errorf("parse snapshot schemaVersion: %w", err)
+				return nil, corrupt("parse snapshot schemaVersion: %v", err)
 			}
 		default:
-			return nil, fmt.Errorf("parse snapshot: unknown field %q", key)
+			return nil, corrupt("parse snapshot: unknown field %q", key)
 		}
 	}
 	if _, err := dec.Token(); err != nil {
-		return nil, fmt.Errorf("parse snapshot: %w", err) // closing brace
+		return nil, corrupt("parse snapshot: %v", err) // closing brace
 	}
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
-		return nil, fmt.Errorf("trailing content after snapshot")
+		return nil, corrupt("trailing content after snapshot")
+	}
+	// Every field must appear exactly once: a snapshot missing lastAppliedSeq
+	// must not silently decode as a 0 watermark and reuse durable sequences.
+	for _, req := range []string{"checksum", "data", "lastAppliedSeq", "schemaVersion"} {
+		if !seen[req] {
+			return nil, corrupt("parse snapshot: missing field %q", req)
+		}
 	}
 	if s.SchemaVersion != WalSchemaVersion {
-		return nil, fmt.Errorf("unsupported snapshot schema %d", s.SchemaVersion)
+		return nil, corrupt("unsupported snapshot schema %d", s.SchemaVersion)
 	}
 	if s.LastAppliedSeq < 0 {
-		return nil, fmt.Errorf("negative lastAppliedSeq %d", s.LastAppliedSeq)
+		return nil, corrupt("negative lastAppliedSeq %d", s.LastAppliedSeq)
+	}
+	// Verify the checksum by re-encoding the decoded body into a hash (no
+	// whole-document byte slice).
+	h := sha256.New()
+	if err := writeSnapshotBody(ctx, io.Discard, h, s.LastAppliedSeq, s.Data); err != nil {
+		return nil, err
+	}
+	if hex.EncodeToString(h.Sum(nil)) != s.Checksum {
+		return nil, corrupt("snapshot checksum mismatch")
 	}
 	return &s, nil
+}
+
+// decodeDataMap decodes the snapshot's data object one entry at a time, so a
+// large map is built incrementally and ctx is checked per key.
+func decodeDataMap(ctx context.Context, dec *json.Decoder) (map[string]json.RawMessage, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, corrupt("parse snapshot data: %v", err)
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, corrupt("parse snapshot data: not an object")
+	}
+	out := make(map[string]json.RawMessage)
+	for dec.More() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, corrupt("parse snapshot data key: %v", err)
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return nil, corrupt("parse snapshot data: non-string key")
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return nil, corrupt("parse snapshot data value %q: %v", key, err)
+		}
+		if _, dup := out[key]; dup {
+			return nil, corrupt("parse snapshot data: duplicate key %q", key)
+		}
+		out[key] = raw
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, corrupt("parse snapshot data: %v", err) // closing brace
+	}
+	return out, nil
 }
 
 // writeJSONString emits an escaped JSON string (same rules as the canonical

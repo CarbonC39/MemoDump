@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,29 +128,87 @@ func TestSnapshotWriteParseRoundTrip(t *testing.T) {
 func TestSnapshotDetectsCorruption(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "snap.json")
+	writeValid := func() {
+		t.Helper()
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writeSnapshotFile(context.Background(), f, 1,
+			map[string]json.RawMessage{"k": json.RawMessage(`1`)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeValid()
+	if _, err := readSnapshot(context.Background(), osWalIO{}, path); err != nil {
+		t.Fatalf("valid snapshot rejected: %v", err)
+	}
+
+	// A value that still parses as JSON must be caught by the checksum.
+	corrupt := func(replacer func([]byte) []byte) {
+		t.Helper()
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = replacer(raw)
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	corrupt(func(b []byte) []byte { return bytes.Replace(b, []byte(`"k":1`), []byte(`"k":2`), 1) })
+	if _, err := readSnapshot(context.Background(), osWalIO{}, path); err == nil {
+		t.Fatal("value corruption with valid JSON was not caught by the checksum")
+	}
+
 	write := func(body string) {
 		t.Helper()
 		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write(`{"data":{},"lastAppliedSeq":1,"schemaVersion":1}`)
-	if _, err := readSnapshot(context.Background(), osWalIO{}, path); err != nil {
-		t.Fatalf("valid snapshot rejected: %v", err)
-	}
+	// Structural and schema corruption.
 	cases := []string{
 		`{not json`,
-		`{"data":{},"lastAppliedSeq":1,"schemaVersion":1,"extra":1}`,
-		`{"data":{},"lastAppliedSeq":1,"schemaVersion":1} junk`,
-		`{"data":{},"lastAppliedSeq":1,"schemaVersion":9}`,
-		`{"data":{},"lastAppliedSeq":-1,"schemaVersion":1}`,
-		`{"data":{},"lastAppliedSeq":1,"schemaVersion":1,"schemaVersion":2}`,
+		`{"data":{},"lastAppliedSeq":1,"schemaVersion":1,"extra":1,"checksum":"` + strings.Repeat("0", 64) + `"}`,
+		`{"data":{},"lastAppliedSeq":1,"schemaVersion":1,"checksum":"` + strings.Repeat("0", 64) + `"} junk`,
+		`{"data":{},"lastAppliedSeq":1,"schemaVersion":9,"checksum":"` + strings.Repeat("0", 64) + `"}`,
+		`{"data":{},"lastAppliedSeq":-1,"schemaVersion":1,"checksum":"` + strings.Repeat("0", 64) + `"}`,
+		// A missing field must be rejected (a missing lastAppliedSeq could
+		// silently decode as a 0 watermark and reuse durable sequences).
+		`{"data":{},"schemaVersion":1,"checksum":"` + strings.Repeat("0", 64) + `"}`,
 	}
 	for _, body := range cases {
 		write(body)
 		if _, err := readSnapshot(context.Background(), osWalIO{}, path); err == nil {
 			t.Errorf("corrupt snapshot accepted: %s", body)
 		}
+	}
+}
+
+func TestSnapshotReadIOErrorIsNotCorruption(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeSnapshotFile(context.Background(), f, 1, map[string]json.RawMessage{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A transient open failure is an I/O error, never corruption.
+	fault := newFaultWalIO(osWalIO{})
+	fault.armNext("read", errors.New("transient io"))
+	if _, err := readSnapshot(context.Background(), fault, path); err == nil {
+		t.Fatal("read succeeded despite the injected failure")
+	} else if errors.Is(err, ErrStateCorrupt) {
+		t.Fatalf("I/O error misclassified as corruption: %v", err)
 	}
 }
 
