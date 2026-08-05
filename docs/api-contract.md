@@ -1,7 +1,7 @@
 # MemoDump API v2 Contract
 
 Status: implementation contract  
-Version: 2026-07-29
+Version: 2026-08-04 (Phase 0: local revision + repository boundary)
 
 ## Identity
 
@@ -25,6 +25,7 @@ interface NoteSummary {
 
 interface NoteDocument extends NoteSummary {
   content: string
+  revision: string // opaque local CAS token — see Optimistic concurrency
 }
 
 interface FolderSummary {
@@ -47,6 +48,30 @@ interface ApiError {
 }
 ```
 
+## Optimistic concurrency (Phase 0)
+
+`NoteDocument.revision` is an **opaque, versioned digest** of the adapter's
+durable local representation — raw Markdown bytes for filesystem notes, the
+canonical note record for IndexedDB. It is local CAS state, never a remote
+content hash, and is **not compared across replicas**. A same-content rewrite
+may retain the same revision; a content change cannot.
+
+- `PUT /api/v2/notes/{path}` and `DELETE /api/v2/notes/{path}` require
+  `baseRevision`.
+- A stale `baseRevision` returns `409 local_revision_conflict` **without
+  touching the destination**; the server re-reads the current bytes under the
+  per-path lock and compares before writing.
+- Applying a remote sync change or an external filesystem change advances the
+  revision. An editor holding stale bytes keeps its buffer and enters a local
+  conflict flow instead of overwriting.
+- Applies even while cloud sync is disabled: it protects self-hosted
+  multi-tab / multi-client editing.
+
+The server serializes its own concurrent requests per path (create locks the
+target; update/delete lock the source; rename/move lock source and target in
+sorted order). An external editor racing the final verification-and-rename
+window is a platform boundary that ordinary filesystems cannot fully close.
+
 ## Listing
 
 ```http
@@ -62,22 +87,43 @@ GET /api/v2/search?q={query}&tag={tag}&limit=50&cursor={cursor}
 - cursors are opaque URL-safe strings containing the final ordering tuple.
 - a malformed cursor returns `400 invalid_cursor`.
 
-## Mutations
+## Note mutations
 
-- Create returns `201 NoteDocument`.
-- Update returns `200 NoteDocument`.
-- Rename/move additionally returns `previousId`.
-- Name/path collision returns `409 note_name_conflict`.
-- Missing notes return `404 note_not_found`.
-- Invalid names return `400 invalid_note_name`.
-- Request bodies larger than 10 MiB return `413 request_too_large`.
+```http
+GET    /api/v2/notes/{path}            → 200 NoteDocument
+POST   /api/v2/notes                   → 201 NoteDocument
+PUT    /api/v2/notes/{path}            → 200 NoteDocument
+DELETE /api/v2/notes/{path}            → 200 { status: "ok" }
+PUT    /api/v2/move/{path}             → 200 NoteDocument
+POST   /api/v2/duplicate/{path}        → 201 NoteDocument
+```
 
-Names are trimmed, limited to 200 Unicode code points, made safe on Windows and
-POSIX, and stored with one `.md` suffix. Tags preserve order and exact string
-content, including commas, quotes and backslashes.
+- `GET` returns the document including `revision`.
+- `POST` body: `{ name, folder?, content, tags? }`. A name that sanitizes to
+  nothing falls back to a timestamp name.
+- `PUT` body: `{ content?, tags?, rename?, baseRevision }`. `baseRevision` is
+  **required**; `rename` moves the note to a new name in the same folder.
+- `DELETE` query: `?baseRevision=...` (**required**).
+- `PUT /api/v2/move/{path}` body: `{ destination }` (empty = root).
+- Rename/move responses include `previousId` when the `id` changed.
+
+### Error codes
+
+| Code | HTTP | Condition |
+|---|---|---|
+| `invalid_note_path` | 400 | path escapes the repository or is unusable |
+| `invalid_request` | 400 | malformed JSON body |
+| `base_revision_required` | 400 | `baseRevision` missing on update/delete |
+| `front_matter_not_editable` | 400 | front matter cannot be safely modified |
+| `note_not_found` | 404 | no such note |
+| `local_revision_conflict` | 409 | `baseRevision` is stale — nothing written |
+| `note_name_conflict` | 409 | destination path already exists |
+| `mutation_failed` | 500 | other storage error |
 
 ## Compatibility
 
 Existing `/api/*` endpoints remain available during migration. New frontend
 repository code targets `/api/v2`; old response shapes do not leak beyond the
-legacy adapter.
+legacy adapter. Legacy `PUT /api/notes/{path}` and `DELETE` accept an *optional*
+`baseRevision` (body field / `?baseRevision=` query) and return the same `409`
+when it is stale; without it they behave as before.
