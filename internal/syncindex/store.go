@@ -162,6 +162,15 @@ func Enable(root string) (*Store, error) {
 	if err := checkMetadataSafe(root); err != nil {
 		return nil, err
 	}
+	// Scan BEFORE the enable lock creates the metadata directory: a scan
+	// failure (unreadable subdirectory, I/O error) must leave no trace so the
+	// next enable retries cleanly instead of looking like lost identity. The
+	// lock below still serializes the commit, so two concurrent first enables
+	// cannot race.
+	notes, folders, scanErr := scanVault(root)
+	if scanErr != nil {
+		return nil, scanErr
+	}
 	dirExisted, err := metadataDirExists(root)
 	if err != nil {
 		return nil, err
@@ -175,12 +184,9 @@ func Enable(root string) (*Store, error) {
 	if !dirExisted && (errors.Is(err, ErrNotEnabled) || errors.Is(err, ErrCorrupt)) {
 		// We hold the enable lock, so no other process is creating the index
 		// concurrently; the ErrCorrupt (if any) is only the lock-created
-		// directory. Build the complete index, then write it once.
+		// directory. Build the complete index from the pre-lock scan, then
+		// write it once.
 		idx := New(NewVaultID())
-		notes, folders, scanErr := scanVault(root)
-		if scanErr != nil {
-			return nil, scanErr
-		}
 		for _, p := range notes {
 			idx.Entities[NewVaultID()] = Entity{Kind: "note", Path: p}
 		}
@@ -204,8 +210,9 @@ func Enable(root string) (*Store, error) {
 		// whether to rebuild.
 		return nil, err
 	}
-	// Already enabled: index only the newly discovered entities.
-	notes, folders, scanErr := scanVault(root)
+	// Already enabled: re-scan under the lock (the vault may have changed
+	// during the pre-lock scan) and index only the newly discovered entities.
+	notes, folders, scanErr = scanVault(root)
 	if scanErr != nil {
 		return nil, scanErr
 	}
@@ -448,16 +455,22 @@ func Rebuild(root, vaultID string) (*Store, error) {
 }
 
 // scanVault returns sorted note and folder slash-relative paths, ignoring
-// hidden/reserved directories and never following symlinks. Only those two
-// categories are skipped: any other walk error (a missing root, an unreadable
-// directory, an I/O failure) is returned so Enable/Rebuild abort instead of
-// committing a partial or empty index.
+// hidden/reserved directories and never following inner symlinks. The vault
+// ROOT symlink is resolved first: filepath.Walk uses Lstat and would otherwise
+// treat a symlinked root as a non-directory and scan nothing. Only the two
+// allowed skips (hidden dirs, symlinks) are silent — any other walk error (a
+// missing root, an unreadable directory, an I/O failure) is returned so
+// Enable/Rebuild abort instead of committing a partial or empty index.
 func scanVault(root string) (notes, folders []string, err error) {
-	walkErr := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve vault root: %w", err)
+	}
+	walkErr := filepath.Walk(realRoot, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		rel, relErr := filepath.Rel(root, path)
+		rel, relErr := filepath.Rel(realRoot, path)
 		if relErr != nil {
 			return relErr
 		}

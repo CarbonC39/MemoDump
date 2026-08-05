@@ -244,6 +244,86 @@ func TestEnableAbortsOnScanError(t *testing.T) {
 	}
 }
 
+func TestEnableRetriesAfterScanError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission-based scan errors are bypassed")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.md"), []byte("# A"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(root, "locked")
+	if err := os.MkdirAll(locked, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "b.md"), []byte("# B"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first enable fails at the scan. Because no identity was committed,
+	// it must leave NO metadata behind — otherwise the next enable would see a
+	// directory with no index files and report ErrCorrupt instead of retrying.
+	if _, err := Enable(root); err == nil {
+		t.Fatal("Enable committed despite an unreadable subdirectory")
+	}
+	if _, err := os.Stat(filepath.Join(root, DirName)); !os.IsNotExist(err) {
+		t.Fatal("failed enable left .memodump behind")
+	}
+
+	// Fixing the problem lets the SAME enable retry cleanly (no Rebuild).
+	if err := os.Chmod(locked, 0755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Enable(root)
+	if err != nil {
+		t.Fatalf("retry after scan error failed: %v", err)
+	}
+	// a.md, locked/b.md, and the locked folder all indexed on retry.
+	if s.Len() != 3 {
+		t.Fatalf("retry indexed %d entities, want 3", s.Len())
+	}
+	for _, p := range []string{"a.md", "locked/b.md", "locked"} {
+		if _, ok := s.FindByPath(p); !ok {
+			t.Fatalf("%q not indexed on retry", p)
+		}
+	}
+}
+
+func TestEnableSymlinkedVaultRootScansRealNotes(t *testing.T) {
+	realRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(realRoot, "a.md"), []byte("# A"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(realRoot, "sub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realRoot, "sub", "b.md"), []byte("# B"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "vault")
+	if err := os.Symlink(realRoot, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	// filepath.Walk does not follow a root symlink, so the scan must resolve
+	// the real root first or the first enable would commit an empty index.
+	s, err := Enable(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 3 {
+		t.Fatalf("enable through a symlinked root indexed %d, want 3", s.Len())
+	}
+	for _, p := range []string{"a.md", "sub/b.md", "sub"} {
+		if _, ok := s.FindByPath(p); !ok {
+			t.Fatalf("note/folder %q not indexed through the symlink", p)
+		}
+	}
+}
+
 func mustSyncID(t *testing.T, s *Store, path string) string {
 	t.Helper()
 	id, ok := s.FindByPath(path)
