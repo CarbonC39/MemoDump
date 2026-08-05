@@ -140,7 +140,11 @@ func (s *Store) rotate() error {
 		return fmt.Errorf("rotate: open new active wal: %w", err)
 	}
 	s.f = f
+	// The rotated bytes become un-consumed frozen work, so a snapshot
+	// read/fsync failure later in this compaction keeps shouldCompact true and
+	// the leftover generation is retried without waiting for new writes.
 	s.stateMu.Lock()
+	s.frozenBytes += s.walBytes
 	s.walBytes = 0
 	s.walRecords = 0
 	s.stateMu.Unlock()
@@ -165,17 +169,16 @@ func (s *Store) buildSnapshot(ctx context.Context) ([]int64, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if data, err := s.io.ReadFile(filepath.Join(s.dir, snapshotName)); err == nil {
-		snap, perr := parseSnapshot(data)
-		if perr != nil {
-			return nil, fmt.Errorf("compact: snapshot: %v", perr)
-		}
+	// Snapshot base, streamed from the file; the data map is the base state the
+	// compaction must keep in memory for key replacement.
+	snap, rerr := readSnapshot(ctx, s.io, filepath.Join(s.dir, snapshotName))
+	if rerr == nil {
 		for k, v := range snap.Data {
 			state[k] = v
 		}
 		lastApplied = snap.LastAppliedSeq
-	} else if !os.IsNotExist(err) {
-		return nil, err
+	} else if !os.IsNotExist(rerr) {
+		return nil, rerr
 	}
 
 	gens, err := s.frozenGens()
@@ -201,13 +204,10 @@ func (s *Store) buildSnapshot(ctx context.Context) ([]int64, error) {
 	// Stream the compacted state through the durable-replace helper: unique
 	// temp file, fsync, atomic rename, and a directory sync.
 	var snapshotSize int64
-	err = s.durableReplaceSnapshot(func(w io.Writer) error {
-		cw := &countingWriter{w: w}
-		if _, werr := writeSnapshotFile(cw, lastApplied, state); werr != nil {
-			return werr
-		}
-		snapshotSize = cw.n
-		return nil
+	err = s.durableReplaceSnapshot(ctx, func(w io.Writer) error {
+		size, werr := writeSnapshotFile(ctx, w, lastApplied, state)
+		snapshotSize = size
+		return werr
 	})
 	if err != nil {
 		return nil, err
@@ -275,10 +275,15 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 }
 
 // durableReplaceSnapshot atomically installs a new snapshot: a uniquely named
-// temp file written by write, fsynced, renamed over the snapshot, and the
-// directory synced. The fsync and rename go through s.io so tests can inject
-// failures; a failed fsync or atomic replacement stops the compaction commit.
-func (s *Store) durableReplaceSnapshot(write func(io.Writer) error) error {
+// temp file written by write, fsynced, renamed over the snapshot through the
+// build-tagged atomicReplace, and the directory synced. The fsync and rename
+// go through s.io so tests can inject failures; a failed fsync or atomic
+// replacement stops the compaction commit. ctx is checked before and after the
+// write so a cancelled compactor stops at a safe boundary.
+func (s *Store) durableReplaceSnapshot(ctx context.Context, write func(io.Writer) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(s.dir, ".state-snapshot-*.tmp")
 	if err != nil {
 		return err
@@ -287,6 +292,10 @@ func (s *Store) durableReplaceSnapshot(write func(io.Writer) error) error {
 	defer os.Remove(tmpPath)
 
 	if err := write(tmp); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		tmp.Close()
 		return err
 	}

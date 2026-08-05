@@ -333,6 +333,35 @@ func TestCompactionHandlesLargeRecords(t *testing.T) {
 	}
 }
 
+func TestRotationFailureKeepsCompactionPending(t *testing.T) {
+	dir := t.TempDir()
+	fault := newFaultWalIO(osWalIO{})
+	s, err := Open(dir, Options{FS: fault, WALBytesThreshold: 100, SnapshotRatioThreshold: 0.01, RecordsThreshold: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	putN(t, s, 5)
+	if err := s.rotate(); err != nil {
+		t.Fatal(err)
+	}
+	// The snapshot read fails after the rotation; the rotated bytes must be
+	// counted as pending frozen work so shouldCompact stays true.
+	fault.armNext("read", errInjected)
+	if _, err := s.buildSnapshot(context.Background()); err == nil {
+		t.Fatal("snapshot read failure not surfaced")
+	}
+	if !s.shouldCompact() {
+		t.Fatal("leftover frozen generation no longer triggers compaction")
+	}
+	// A retry succeeds and consumes the leftover generation.
+	if err := s.Compact(); err != nil {
+		t.Fatal(err)
+	}
+	if s.frozenBytes != 0 {
+		t.Fatal("frozen bytes not consumed by the retry")
+	}
+}
+
 func TestDirSyncCapabilityMatchesPlatform(t *testing.T) {
 	// The capability must be explicit per platform, never silently assumed.
 	if runtime.GOOS == "windows" {

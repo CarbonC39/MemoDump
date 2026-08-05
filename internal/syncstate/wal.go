@@ -3,6 +3,7 @@ package syncstate
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -145,23 +146,20 @@ func decodePayload(raw json.RawMessage) (walPayload, error) {
 // --- snapshot ----------------------------------------------------------------
 
 // snapshot is the compacted device state: the last applied sequence plus the
-// full state map, with a canonical checksum so corruption is detected even when
-// the JSON still parses.
+// full state map. It carries no checksum (spec §5.5 defines it as the compacted
+// state plus lastAppliedSeq; the WAL records carry the checksums, and snapshot
+// corruption is caught by strict JSON parsing). Keeping the snapshot
+// checksum-free is what lets it stream both ways without a whole-document pass.
 type snapshot struct {
 	SchemaVersion  int                        `json:"schemaVersion"`
 	LastAppliedSeq int64                      `json:"lastAppliedSeq"`
 	Data           map[string]json.RawMessage `json:"data"`
-	Checksum       string                     `json:"checksum"`
 }
 
-// writeSnapshotDoc writes the canonical snapshot document. When sum is empty
-// the checksum field is omitted; that form is the checksum input.
-func writeSnapshotDoc(w io.Writer, sum string, lastApplied int64, data map[string]json.RawMessage) error {
-	if sum != "" {
-		if _, err := fmt.Fprintf(w, `{"checksum":"%s","data":{`, sum); err != nil {
-			return err
-		}
-	} else if _, err := io.WriteString(w, `{"data":{`); err != nil {
+// writeSnapshotDoc streams the canonical snapshot document, checking ctx per
+// data key so a cancelled compactor stops during the long encode.
+func writeSnapshotDoc(ctx context.Context, w io.Writer, lastApplied int64, data map[string]json.RawMessage) error {
+	if _, err := io.WriteString(w, `{"data":{`); err != nil {
 		return err
 	}
 	keys := make([]string, 0, len(data))
@@ -170,6 +168,9 @@ func writeSnapshotDoc(w io.Writer, sum string, lastApplied int64, data map[strin
 	}
 	sort.Strings(keys)
 	for i, k := range keys {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if i > 0 {
 			if _, err := io.WriteString(w, ","); err != nil {
 				return err
@@ -191,44 +192,83 @@ func writeSnapshotDoc(w io.Writer, sum string, lastApplied int64, data map[strin
 	return nil
 }
 
-// snapshotChecksum returns the hex digest over the snapshot document without
-// the checksum field.
-func snapshotChecksum(lastApplied int64, data map[string]json.RawMessage) (string, error) {
-	h := sha256.New()
-	if err := writeSnapshotDoc(h, "", lastApplied, data); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
 // writeSnapshotFile streams the snapshot document to w (data emitted through a
-// buffered encoder, never a whole-document string) and returns the checksum.
-func writeSnapshotFile(w io.Writer, lastApplied int64, data map[string]json.RawMessage) (string, error) {
-	sum, err := snapshotChecksum(lastApplied, data)
-	if err != nil {
-		return "", err
-	}
+// buffered encoder, never a whole-document string) and returns the byte size.
+func writeSnapshotFile(ctx context.Context, w io.Writer, lastApplied int64, data map[string]json.RawMessage) (int64, error) {
 	bw := bufio.NewWriter(w)
-	if err := writeSnapshotDoc(bw, sum, lastApplied, data); err != nil {
-		return "", err
+	cw := &countingWriter{w: bw}
+	if err := writeSnapshotDoc(ctx, cw, lastApplied, data); err != nil {
+		return 0, err
 	}
-	if _, err := bw.WriteString("\n"); err != nil {
-		return "", err
+	if _, err := cw.Write([]byte("\n")); err != nil {
+		return 0, err
 	}
 	if err := bw.Flush(); err != nil {
-		return "", err
+		return 0, err
 	}
-	return sum, nil
+	return cw.n, nil
 }
 
-// parseSnapshot decodes and verifies state.snapshot.json. A corrupt or
-// checksum-mismatched snapshot is an error; the caller stops recovery.
-func parseSnapshot(data []byte) (*snapshot, error) {
-	var s snapshot
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&s); err != nil {
+// readSnapshot streams state.snapshot.json from a file with a token-based
+// decoder, checking ctx between fields, so a large snapshot is decoded
+// incrementally and a cancelled compactor stops at a field boundary. Unknown
+// fields, duplicate fields, trailing content, a bad schema, and a negative
+// watermark are all corruption.
+func readSnapshot(ctx context.Context, wio walIO, path string) (*snapshot, error) {
+	f, err := wio.OpenRead(path)
+	if err != nil {
+		return nil, err // propagates os.ErrNotExist
+	}
+	defer f.Close()
+	dec := json.NewDecoder(f)
+
+	tok, err := dec.Token()
+	if err != nil {
 		return nil, fmt.Errorf("parse snapshot: %w", err)
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, fmt.Errorf("parse snapshot: not an object")
+	}
+	var s snapshot
+	seen := make(map[string]bool)
+	for dec.More() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, fmt.Errorf("parse snapshot: %w", err)
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return nil, fmt.Errorf("parse snapshot: non-string key")
+		}
+		if seen[key] {
+			return nil, fmt.Errorf("parse snapshot: duplicate field %q", key)
+		}
+		seen[key] = true
+		switch key {
+		case "data":
+			if err := dec.Decode(&s.Data); err != nil {
+				return nil, fmt.Errorf("parse snapshot data: %w", err)
+			}
+			if s.Data == nil {
+				s.Data = make(map[string]json.RawMessage)
+			}
+		case "lastAppliedSeq":
+			if err := dec.Decode(&s.LastAppliedSeq); err != nil {
+				return nil, fmt.Errorf("parse snapshot lastAppliedSeq: %w", err)
+			}
+		case "schemaVersion":
+			if err := dec.Decode(&s.SchemaVersion); err != nil {
+				return nil, fmt.Errorf("parse snapshot schemaVersion: %w", err)
+			}
+		default:
+			return nil, fmt.Errorf("parse snapshot: unknown field %q", key)
+		}
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, fmt.Errorf("parse snapshot: %w", err) // closing brace
 	}
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
@@ -239,16 +279,6 @@ func parseSnapshot(data []byte) (*snapshot, error) {
 	}
 	if s.LastAppliedSeq < 0 {
 		return nil, fmt.Errorf("negative lastAppliedSeq %d", s.LastAppliedSeq)
-	}
-	want, err := snapshotChecksum(s.LastAppliedSeq, s.Data)
-	if err != nil {
-		return nil, err
-	}
-	if s.Checksum != want {
-		return nil, fmt.Errorf("snapshot checksum mismatch")
-	}
-	if s.Data == nil {
-		s.Data = make(map[string]json.RawMessage)
 	}
 	return &s, nil
 }

@@ -2,6 +2,7 @@ package syncstate
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -147,17 +148,16 @@ func Open(dir string, opts Options) (*Store, error) {
 // active WAL to (-1 = no truncation) and the next sequence number to allocate
 // (one past the maximum durable sequence).
 func (s *Store) recover() (truncateTo, nextSeq int64, err error) {
-	// Snapshot base.
-	if data, rerr := s.io.ReadFile(filepath.Join(s.dir, snapshotName)); rerr == nil {
-		snap, perr := parseSnapshot(data)
-		if perr != nil {
-			return 0, 0, fmt.Errorf("%w: snapshot: %v", ErrStateCorrupt, perr)
-		}
+	// Snapshot base, streamed from the file (recovery is not cancellable).
+	snap, rerr := readSnapshot(context.Background(), s.io, filepath.Join(s.dir, snapshotName))
+	if rerr == nil {
 		s.state = snap.Data
 		s.lastApplied = snap.LastAppliedSeq
-		s.snapshotSize = int64(len(data))
+		if info, serr := os.Stat(filepath.Join(s.dir, snapshotName)); serr == nil {
+			s.snapshotSize = info.Size()
+		}
 	} else if !os.IsNotExist(rerr) {
-		return 0, 0, rerr
+		return 0, 0, fmt.Errorf("%w: snapshot: %v", ErrStateCorrupt, rerr)
 	}
 	nextSeq = s.lastApplied
 

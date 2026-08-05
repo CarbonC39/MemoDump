@@ -2,7 +2,10 @@ package syncstate
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -81,43 +84,72 @@ func TestWalRecordDetectsCorruption(t *testing.T) {
 }
 
 func TestSnapshotWriteParseRoundTrip(t *testing.T) {
-	var buf bytes.Buffer
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	data := map[string]json.RawMessage{
 		"b": json.RawMessage(`2`),
 		"a": json.RawMessage(`{"x":1}`),
 	}
-	sum, err := writeSnapshotFile(&buf, 99, data)
+	size, err := writeSnapshotFile(context.Background(), f, 99, data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap, err := parseSnapshot(buf.Bytes())
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := readSnapshot(context.Background(), osWalIO{}, path)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if snap.LastAppliedSeq != 99 {
 		t.Fatalf("lastAppliedSeq = %d", snap.LastAppliedSeq)
 	}
-	if snap.Checksum != sum {
-		t.Fatalf("checksum mismatch")
-	}
 	if string(snap.Data["a"]) != `{"x":1}` || string(snap.Data["b"]) != `2` {
 		t.Fatalf("data mismatch: %v", snap.Data)
 	}
-	// Keys are sorted in the canonical document.
-	if !bytes.Contains(buf.Bytes(), []byte(`"data":{"a":{"x":1},"b":2}`)) {
-		t.Fatalf("snapshot not canonical: %s", buf.String())
+	// Keys are sorted in the canonical document and the size is exact.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"data":{"a":{"x":1},"b":2},"lastAppliedSeq":99,"schemaVersion":1`)) {
+		t.Fatalf("snapshot not canonical: %s", raw)
+	}
+	if size != int64(len(raw)) {
+		t.Fatalf("snapshot size = %d, want %d", size, len(raw))
 	}
 }
 
 func TestSnapshotDetectsCorruption(t *testing.T) {
-	var buf bytes.Buffer
-	if _, err := writeSnapshotFile(&buf, 5, map[string]json.RawMessage{"k": json.RawMessage(`1`)}); err != nil {
-		t.Fatal(err)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	// Corrupt a value; the checksum must catch it even though the JSON parses.
-	corrupt := bytes.Replace(buf.Bytes(), []byte(`"k":1`), []byte(`"k":2`), 1)
-	if _, err := parseSnapshot(corrupt); err == nil {
-		t.Fatal("corrupt snapshot accepted")
+	write(`{"data":{},"lastAppliedSeq":1,"schemaVersion":1}`)
+	if _, err := readSnapshot(context.Background(), osWalIO{}, path); err != nil {
+		t.Fatalf("valid snapshot rejected: %v", err)
+	}
+	cases := []string{
+		`{not json`,
+		`{"data":{},"lastAppliedSeq":1,"schemaVersion":1,"extra":1}`,
+		`{"data":{},"lastAppliedSeq":1,"schemaVersion":1} junk`,
+		`{"data":{},"lastAppliedSeq":1,"schemaVersion":9}`,
+		`{"data":{},"lastAppliedSeq":-1,"schemaVersion":1}`,
+		`{"data":{},"lastAppliedSeq":1,"schemaVersion":1,"schemaVersion":2}`,
+	}
+	for _, body := range cases {
+		write(body)
+		if _, err := readSnapshot(context.Background(), osWalIO{}, path); err == nil {
+			t.Errorf("corrupt snapshot accepted: %s", body)
+		}
 	}
 }
 
