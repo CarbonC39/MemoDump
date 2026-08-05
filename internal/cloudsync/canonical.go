@@ -3,6 +3,7 @@ package cloudsync
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -21,6 +22,11 @@ func canonicalBytes(v map[string]any) ([]byte, error) {
 	}
 	return []byte(sb.String()), nil
 }
+
+// CanonicalBytes is the exported form of canonicalBytes. It is used by the
+// device-state WAL for checksums and record serialization so one canonical JSON
+// implementation serves both the wire contract and durable local state.
+func CanonicalBytes(v map[string]any) ([]byte, error) { return canonicalBytes(v) }
 
 func writeCanonicalObject(sb *strings.Builder, v map[string]any) error {
 	keys := make([]string, 0, len(v))
@@ -59,6 +65,14 @@ func writeCanonicalValue(sb *strings.Builder, v any) error {
 		sb.WriteString(strconv.FormatInt(val, 10))
 	case int:
 		sb.WriteString(strconv.Itoa(val))
+	case json.Number:
+		// Numbers decoded with a UseNumber decoder arrive here; emit their
+		// literal form so integer-valued fields never become float64.
+		sb.WriteString(val.String())
+	case json.RawMessage:
+		// Raw bytes are emitted verbatim; callers pass already-canonical bytes
+		// (the device-state WAL constructs payloads through CanonicalBytes).
+		sb.Write(val)
 	case []any:
 		sb.WriteByte('[')
 		for i, item := range val {
