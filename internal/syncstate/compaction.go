@@ -1,7 +1,7 @@
 package syncstate
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,12 +12,17 @@ import (
 	"time"
 )
 
-// shouldCompact reports whether the active WAL has grown enough: at least the
-// byte threshold AND either the ratio of the snapshot size or the record count
-// threshold (the plan's defaults: >=1 MiB and >=25% of snapshot or >=10k records).
+// shouldCompact reports whether there is compaction work: the active WAL has
+// reached the byte threshold AND either the ratio of the snapshot size or the
+// record count threshold (the plan's defaults: >=1 MiB and >=25% of snapshot or
+// >=10k records), OR un-consumed frozen generations recovered from a previous
+// run have reached the byte threshold.
 func (s *Store) shouldCompact() bool {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
+	if s.frozenBytes >= s.opts.WALBytesThreshold {
+		return true
+	}
 	if s.walBytes < s.opts.WALBytesThreshold {
 		return false
 	}
@@ -27,11 +32,15 @@ func (s *Store) shouldCompact() bool {
 	return recordsMet || ratioMet
 }
 
-// Compact runs one full compaction, coalescing concurrent requests: only one
-// compactor executes at a time; a request that arrives while one is running is
-// marked pending and re-evaluated after the current snapshot is durable. A
-// manual call always compacts regardless of thresholds.
+// Compact runs one full compaction (not cancellable; manual call), coalescing
+// concurrent requests: only one compactor executes at a time; a request that
+// arrives while one is running is marked pending and re-evaluated after the
+// current snapshot is durable.
 func (s *Store) Compact() error {
+	return s.compact(context.Background())
+}
+
+func (s *Store) compact(ctx context.Context) error {
 	if !s.compMu.TryLock() {
 		s.pendingCompact.Store(true)
 		return nil
@@ -39,7 +48,7 @@ func (s *Store) Compact() error {
 	defer s.compMu.Unlock()
 	for {
 		start := time.Now()
-		if err := s.doCompact(); err != nil {
+		if err := s.doCompact(ctx); err != nil {
 			return err
 		}
 		s.metricsMu.Lock()
@@ -56,16 +65,24 @@ func (s *Store) Compact() error {
 
 // doCompact rotates the active WAL into a frozen generation, builds a new
 // snapshot from the snapshot plus all frozen generations, and prunes the
-// covered frozen generations.
-func (s *Store) doCompact() error {
+// covered frozen generations. It checks ctx between generations so a cancelled
+// compactor stops at a safe boundary.
+func (s *Store) doCompact(ctx context.Context) error {
 	if err := s.rotate(); err != nil {
 		return err
 	}
-	covered, err := s.buildSnapshot()
+	covered, err := s.buildSnapshot(ctx)
 	if err != nil {
 		return err
 	}
-	return s.pruneFrozen(covered)
+	if err := s.pruneFrozen(ctx, covered); err != nil {
+		return err
+	}
+	// Every frozen generation was consumed by the new snapshot.
+	s.stateMu.Lock()
+	s.frozenBytes = 0
+	s.stateMu.Unlock()
+	return nil
 }
 
 // rotate moves the active WAL into a uniquely named frozen generation and opens
@@ -83,12 +100,16 @@ func (s *Store) rotate() error {
 	if err := s.f.Close(); err != nil {
 		return fmt.Errorf("rotate: close active wal: %w", err)
 	}
-	// 2. Rename to a unique frozen generation and sync the directory.
+	// 2. Rename to a unique frozen generation with no-replace semantics and
+	// sync the directory. An existing generation is never overwritten.
 	gen := s.nextGen
 	s.nextGen++
 	active := filepath.Join(s.dir, activeWalName)
 	frozen := filepath.Join(s.dir, frozenName(gen))
-	if err := s.io.Rename(active, frozen); err != nil {
+	if err := s.io.RenameNoClobber(active, frozen); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("rotate: frozen generation %d already exists; refusing to overwrite: %w", gen, os.ErrExist)
+		}
 		// The active descriptor is closed but the file is still active; reopen
 		// it so a failed rotation leaves the store writable.
 		f, oerr := s.io.OpenAppend(active)
@@ -122,7 +143,10 @@ func (s *Store) rotate() error {
 // active WAL), streams it to a temporary file, and installs it with a durable
 // replace. It returns the frozen generations fully covered by the new snapshot.
 // It runs without the writer lock: frozen files are immutable after rotation.
-func (s *Store) buildSnapshot() ([]int64, error) {
+// Frozen generations are decoded incrementally through a buffered scanner (one
+// buffer at a time, released per generation) and ctx is checked between
+// generations so a cancelled compactor stops at a safe boundary.
+func (s *Store) buildSnapshot(ctx context.Context) ([]int64, error) {
 	state := make(map[string]json.RawMessage)
 	lastApplied := int64(0)
 
@@ -144,25 +168,11 @@ func (s *Store) buildSnapshot() ([]int64, error) {
 		return nil, err
 	}
 	for _, gen := range gens {
-		data, rerr := s.io.ReadFile(filepath.Join(s.dir, frozenName(gen)))
-		if rerr != nil {
-			return nil, rerr
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		for _, line := range bytes.Split(data, []byte{'\n'}) {
-			if len(line) == 0 {
-				continue
-			}
-			rec, perr := parseWalRecord(line)
-			if perr != nil {
-				return nil, fmt.Errorf("compact: frozen %d: %v", gen, perr)
-			}
-			if rec.Seq <= lastApplied {
-				continue // already in the snapshot watermark
-			}
-			if aerr := applyTo(state, rec); aerr != nil {
-				return nil, aerr
-			}
-			lastApplied = rec.Seq
+		if err := s.replayFrozen(ctx, gen, state, &lastApplied); err != nil {
+			return nil, err
 		}
 	}
 
@@ -185,6 +195,39 @@ func (s *Store) buildSnapshot() ([]int64, error) {
 	s.snapshotSize = snapshotSize
 	s.stateMu.Unlock()
 	return gens, nil
+}
+
+// replayFrozen decodes one frozen generation incrementally, applying records
+// with seq above the snapshot watermark.
+func (s *Store) replayFrozen(ctx context.Context, gen int64, state map[string]json.RawMessage, lastApplied *int64) error {
+	f, err := s.io.OpenRead(filepath.Join(s.dir, frozenName(gen)))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
+	for sc.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		rec, perr := parseWalRecord(line)
+		if perr != nil {
+			return fmt.Errorf("compact: frozen %d: %v", gen, perr)
+		}
+		if rec.Seq <= *lastApplied {
+			continue // already in the snapshot watermark
+		}
+		if aerr := applyTo(state, rec); aerr != nil {
+			return aerr
+		}
+		*lastApplied = rec.Seq
+	}
+	return sc.Err()
 }
 
 // countingWriter counts the bytes written through it.
@@ -230,8 +273,11 @@ func (s *Store) durableReplaceSnapshot(write func(io.Writer) error) error {
 
 // pruneFrozen deletes the frozen generations fully covered by the durable
 // snapshot, then syncs the directory.
-func (s *Store) pruneFrozen(covered []int64) error {
+func (s *Store) pruneFrozen(ctx context.Context, covered []int64) error {
 	for _, gen := range covered {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := s.io.Remove(filepath.Join(s.dir, frozenName(gen))); err != nil {
 			return err
 		}
@@ -240,14 +286,14 @@ func (s *Store) pruneFrozen(covered []int64) error {
 }
 
 // RunCompactor runs the background compaction loop until ctx is cancelled. Only
-// one compactor runs per replica; concurrent threshold requests are coalesced
-// by Compact.
+// one compactor runs per replica; concurrent threshold requests are coalesced,
+// and an in-flight compaction checks ctx between generations.
 func (s *Store) RunCompactor(ctx context.Context) error {
 	t := time.NewTicker(s.opts.PollInterval)
 	defer t.Stop()
 	for {
 		if s.shouldCompact() {
-			if err := s.Compact(); err != nil {
+			if err := s.compact(ctx); err != nil {
 				return err
 			}
 		}

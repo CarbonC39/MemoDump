@@ -72,8 +72,10 @@ type Store struct {
 	walBytes     int64
 	walRecords   int64
 	snapshotSize int64
+	frozenBytes  int64 // total bytes of un-consumed frozen generations
 
 	closed         bool
+	poisoned       bool // an append/fsync failure left the WAL indeterminate
 	pendingCompact atomic.Bool
 	compMu         sync.Mutex
 
@@ -119,7 +121,13 @@ func Open(dir string, opts Options) (*Store, error) {
 	}
 	s.nextSeq = nextSeq
 	s.lastApplied = nextSeq - 1 // the recovered watermark (one below the next seq)
-	s.nextGen = s.maxFrozenGen() + 1
+	// A directory-list failure must fail Open: silently defaulting the next
+	// generation to 1 could collide with an existing frozen generation.
+	maxGen, err := s.maxFrozenGen()
+	if err != nil {
+		return nil, fmt.Errorf("list frozen generations: %w", err)
+	}
+	s.nextGen = maxGen + 1
 
 	f, err := s.io.OpenAppend(filepath.Join(dir, activeWalName))
 	if err != nil {
@@ -153,7 +161,10 @@ func (s *Store) recover() (truncateTo, nextSeq int64, err error) {
 	}
 	nextSeq = s.lastApplied
 
-	// Frozen generations, in sequence.
+	// Frozen generations, in sequence. Their total size is tracked so a large
+	// set of un-consumed generations from a previous run triggers compaction
+	// after restart.
+	frozenBytes := int64(0)
 	gens, err := s.frozenGens()
 	if err != nil {
 		return 0, 0, err
@@ -163,6 +174,7 @@ func (s *Store) recover() (truncateTo, nextSeq int64, err error) {
 		if rerr != nil {
 			return 0, 0, rerr
 		}
+		frozenBytes += int64(len(data))
 		maxSeq, perr := s.replayRecords(data)
 		if perr != nil {
 			return 0, 0, fmt.Errorf("%w: frozen %d: %v", ErrStateCorrupt, gen, perr)
@@ -171,22 +183,29 @@ func (s *Store) recover() (truncateTo, nextSeq int64, err error) {
 			nextSeq = maxSeq
 		}
 	}
+	s.frozenBytes = frozenBytes
 
-	// Active WAL: replay complete lines and locate the torn tail.
+	// Active WAL: replay complete lines and locate the torn tail. walBytes and
+	// walRecords reflect the recovered active WAL so its size triggers
+	// compaction without waiting for new writes.
 	data, rerr := s.io.ReadFile(filepath.Join(s.dir, activeWalName))
 	if rerr != nil {
 		if os.IsNotExist(rerr) {
+			s.walBytes = 0
+			s.walRecords = 0
 			return -1, nextSeq + 1, nil
 		}
 		return 0, 0, rerr
 	}
-	lastValidEnd, maxSeq, perr := s.replayActive(data)
+	lastValidEnd, maxSeq, records, perr := s.replayActive(data)
 	if perr != nil {
 		return 0, 0, fmt.Errorf("%w: active wal: %v", ErrStateCorrupt, perr)
 	}
 	if maxSeq > nextSeq {
 		nextSeq = maxSeq
 	}
+	s.walBytes = lastValidEnd
+	s.walRecords = records
 	return lastValidEnd, nextSeq + 1, nil
 }
 
@@ -215,9 +234,9 @@ func (s *Store) replayRecords(data []byte) (maxSeq int64, err error) {
 // replayActive parses the active WAL. Every complete line must verify; a
 // non-empty final fragment without a newline is a torn tail, truncated to the
 // end of the last valid complete line. It returns the truncation offset (or
-// len(data) when the file ends cleanly), the max valid seq, and an error for a
-// complete bad record or corruption before the tail.
-func (s *Store) replayActive(data []byte) (truncateTo, maxSeq int64, err error) {
+// len(data) when the file ends cleanly), the max valid seq, the number of valid
+// records, and an error for a complete bad record or corruption before the tail.
+func (s *Store) replayActive(data []byte) (truncateTo, maxSeq, records int64, err error) {
 	maxSeq = s.lastApplied
 	offset := int64(0)
 	truncateTo = int64(len(data))
@@ -227,23 +246,24 @@ func (s *Store) replayActive(data []byte) (truncateTo, maxSeq int64, err error) 
 			if len(line) > 0 {
 				truncateTo = offset // partial tail after the last complete line
 			}
-			return truncateTo, maxSeq, nil
+			return truncateTo, maxSeq, records, nil
 		}
 		if len(line) > 0 {
 			rec, perr := parseWalRecord(line)
 			if perr != nil {
-				return 0, 0, perr
+				return 0, 0, 0, perr
 			}
 			if err := applyTo(s.state, rec); err != nil {
-				return 0, 0, err
+				return 0, 0, 0, err
 			}
 			if rec.Seq > maxSeq {
 				maxSeq = rec.Seq
 			}
+			records++
 		}
 		offset += int64(len(line) + 1)
 	}
-	return truncateTo, maxSeq, nil
+	return truncateTo, maxSeq, records, nil
 }
 
 func applyTo(state map[string]json.RawMessage, rec *walRecord) error {
@@ -292,18 +312,28 @@ func (s *Store) append(op string, payload json.RawMessage) (int64, error) {
 	if s.closed {
 		return 0, errors.New("store is closed")
 	}
+	if s.poisoned {
+		return 0, errors.New("wal writer is poisoned by a prior write failure; reopen to recover")
+	}
 	seq := s.nextSeq
 	rec := &walRecord{SchemaVersion: WalSchemaVersion, Seq: seq, Op: op, Payload: payload}
 	line, err := rec.Serialize()
 	if err != nil {
-		return 0, err
+		return 0, err // caller error (bad value); the WAL is untouched, not poisoned
 	}
+	// A write or fsync failure leaves the WAL in an indeterminate state (the
+	// record may or may not be durable) and the sequence number cannot be
+	// safely reused for a different record. Poison the writer so no further
+	// append happens in this process; the caller must reopen, and recovery
+	// either truncates a torn tail or replays the uncertain record idempotently.
 	if err := s.io.WriteAll(s.f, line); err != nil {
-		return 0, fmt.Errorf("wal append %d: %w", seq, err)
+		s.poisoned = true
+		return 0, fmt.Errorf("wal append %d (writer poisoned, reopen to recover): %w", seq, err)
 	}
 	syncStart := time.Now()
 	if err := s.io.Sync(s.f); err != nil {
-		return 0, fmt.Errorf("wal fsync %d: %w", seq, err)
+		s.poisoned = true
+		return 0, fmt.Errorf("wal fsync %d (writer poisoned, reopen to recover): %w", seq, err)
 	}
 	s.metricsMu.Lock()
 	s.metrics.Appends++
@@ -418,10 +448,13 @@ func (s *Store) frozenGens() ([]int64, error) {
 	return gens, nil
 }
 
-func (s *Store) maxFrozenGen() int64 {
+func (s *Store) maxFrozenGen() (int64, error) {
 	gens, err := s.frozenGens()
-	if err != nil || len(gens) == 0 {
-		return 0
+	if err != nil {
+		return 0, err
 	}
-	return gens[len(gens)-1]
+	if len(gens) == 0 {
+		return 0, nil
+	}
+	return gens[len(gens)-1], nil
 }

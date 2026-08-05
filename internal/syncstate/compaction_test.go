@@ -1,10 +1,13 @@
 package syncstate
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 )
@@ -55,7 +58,7 @@ func TestCompactFailureAtEveryStepRecovers(t *testing.T) {
 				t.Fatal(err)
 			}
 			f.armNext("read", errInjected)
-			if _, err := s.buildSnapshot(); err == nil {
+			if _, err := s.buildSnapshot(context.Background()); err == nil {
 				t.Fatal("snapshot read failure not surfaced")
 			}
 		}},
@@ -64,7 +67,7 @@ func TestCompactFailureAtEveryStepRecovers(t *testing.T) {
 				t.Fatal(err)
 			}
 			f.armNext("sync", errInjected)
-			if _, err := s.buildSnapshot(); err == nil {
+			if _, err := s.buildSnapshot(context.Background()); err == nil {
 				t.Fatal("snapshot fsync failure not surfaced")
 			}
 		}},
@@ -73,7 +76,7 @@ func TestCompactFailureAtEveryStepRecovers(t *testing.T) {
 				t.Fatal(err)
 			}
 			f.armNext("rename", errInjected)
-			if _, err := s.buildSnapshot(); err == nil {
+			if _, err := s.buildSnapshot(context.Background()); err == nil {
 				t.Fatal("snapshot install failure not surfaced")
 			}
 		}},
@@ -81,12 +84,12 @@ func TestCompactFailureAtEveryStepRecovers(t *testing.T) {
 			if err := s.rotate(); err != nil {
 				t.Fatal(err)
 			}
-			covered, err := s.buildSnapshot()
+			covered, err := s.buildSnapshot(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
 			f.armNext("remove", errInjected)
-			if err := s.pruneFrozen(covered); err == nil {
+			if err := s.pruneFrozen(context.Background(), covered); err == nil {
 				t.Fatal("prune remove failure not surfaced")
 			}
 		}},
@@ -225,6 +228,48 @@ func TestAppendersDuringRepeatedCompaction(t *testing.T) {
 	// durable sequence space is exactly 1..total (no gap, no reuse).
 	if got := s2.LastAppliedSeq(); got != total {
 		t.Fatalf("last applied seq = %d, want %d (no missing/duplicate durable seq)", got, total)
+	}
+}
+
+// TestFrozenGenerationNeverOverwritten forces nextGen to collide with an
+// existing frozen generation (as a stale or corrupt counter would) and verifies
+// the no-replace rename refuses instead of overwriting.
+func TestFrozenGenerationNeverOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	putN(t, s, 3)
+	if err := s.rotate(); err != nil {
+		t.Fatal(err)
+	}
+	frozen1 := filepath.Join(dir, frozenName(1))
+	data1, err := os.ReadFile(frozen1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.nextGen = 1 // force a collision
+	if err := s.rotate(); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("rotate with a colliding generation = %v, want os.ErrExist", err)
+	}
+	data2, err := os.ReadFile(frozen1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data1, data2) {
+		t.Fatal("existing frozen generation was overwritten")
+	}
+}
+
+func TestDirSyncCapabilityMatchesPlatform(t *testing.T) {
+	// The capability must be explicit per platform, never silently assumed.
+	if runtime.GOOS == "windows" {
+		if DirSyncSupported() {
+			t.Fatal("DirSyncSupported() = true on windows")
+		}
+	} else if !DirSyncSupported() {
+		t.Fatal("DirSyncSupported() = false on a POSIX platform")
 	}
 }
 

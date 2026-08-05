@@ -2,9 +2,11 @@ package syncstate
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -260,7 +262,7 @@ func TestShortWriteLastAppendRecovers(t *testing.T) {
 	}
 }
 
-func TestShortWriteThenMoreAppendsIsCorrupt(t *testing.T) {
+func TestShortWritePoisonsAndFurtherAppendsAreRefused(t *testing.T) {
 	dir := t.TempDir()
 	fault := newFaultWalIO(osWalIO{})
 	s := openStore(t, dir, Options{FS: fault})
@@ -269,17 +271,29 @@ func TestShortWriteThenMoreAppendsIsCorrupt(t *testing.T) {
 	if _, err := s.Put("b", 2); err == nil {
 		t.Fatal("short write did not fail")
 	}
-	// A later append lands after the partial line: mid-WAL corruption.
-	if _, err := s.Put("c", 2); err != nil {
-		t.Fatal(err)
+	// A short write leaves a partial line; poisoning the writer prevents a
+	// later append from landing after it and turning the partial into
+	// mid-WAL corruption (which truncation cannot recover).
+	if _, err := s.Put("c", 3); err == nil {
+		t.Fatal("append after a short write succeeded on a poisoned writer")
 	}
 	s.Close()
-	if _, err := Open(dir, Options{}); !errors.Is(err, ErrStateCorrupt) {
-		t.Fatalf("Open = %v, want ErrStateCorrupt (partial line is not a tail)", err)
+
+	// The partial line is the torn tail; recovery truncates it.
+	s2 := openStore(t, dir, Options{})
+	if _, ok := s2.Get("b"); ok {
+		t.Fatal("failed append recovered as durable")
+	}
+	if _, ok := s2.Get("a"); !ok {
+		t.Fatal("valid record before the torn tail lost")
+	}
+	seq, err := s2.Put("b", 2)
+	if err != nil || seq != 2 {
+		t.Fatalf("retry after reopen = %d, %v", seq, err)
 	}
 }
 
-func TestFailedFsyncDoesNotAckAndRecoveryIsIdempotent(t *testing.T) {
+func TestFailedFsyncPoisonsAndReopenRecovers(t *testing.T) {
 	dir := t.TempDir()
 	fault := newFaultWalIO(osWalIO{})
 	s := openStore(t, dir, Options{FS: fault})
@@ -289,22 +303,82 @@ func TestFailedFsyncDoesNotAckAndRecoveryIsIdempotent(t *testing.T) {
 	if _, err := s.Put("b", 2); err == nil {
 		t.Fatal("fsync failure did not fail the append")
 	}
-	seq, err := s.Put("b", 2) // retry reuses the un-acked sequence
-	if err != nil || seq != 2 {
-		t.Fatalf("retry = %d, %v", seq, err)
+	// Reusing the sequence for a different record would make two records share
+	// a seq; compaction's watermark skip would drop the second, losing an acked
+	// write. The writer is poisoned instead, forcing a reopen.
+	if _, err := s.Put("c", 3); err == nil {
+		t.Fatal("append after an fsync failure succeeded on a poisoned writer")
 	}
 	s.Close()
 
+	// Recovery replays the written-but-unacked record idempotently.
 	s2 := openStore(t, dir, Options{})
 	if _, ok := s2.Get("b"); !ok {
-		t.Fatal("retried record lost across restart")
+		t.Fatal("written-but-unacked record not recovered idempotently")
 	}
 	seq2, err := s2.Put("d", 4)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if seq2 != 3 {
-		t.Fatalf("next seq = %d, want 3 (both seq-2 records replayed idempotently)", seq2)
+		t.Fatalf("next seq after reopen = %d, want 3", seq2)
+	}
+}
+
+func TestRecoveryRestoresActiveWalThresholdStats(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{WALBytesThreshold: 100, SnapshotRatioThreshold: 0.01, RecordsThreshold: 100}
+	s, err := Open(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		if _, err := s.Put(fmt.Sprintf("k%d", i), strings.Repeat("x", 50)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+
+	// A large pre-existing active WAL must trigger compaction after a restart
+	// without waiting for new writes.
+	s2, err := Open(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if !s2.shouldCompact() {
+		t.Fatal("recovered active WAL did not trigger compaction")
+	}
+}
+
+func TestRecoveryFrozenBytesTriggerCompaction(t *testing.T) {
+	dir := t.TempDir()
+	// Simulate a crash between rotate and snapshot: a large frozen generation
+	// and no active WAL.
+	var buf []byte
+	for i := int64(1); i <= 20; i++ {
+		buf = append(buf, walLine(i, "put", fmt.Sprintf("k%d", i), strings.Repeat("x", 100))...)
+	}
+	if err := os.WriteFile(filepath.Join(dir, frozenName(7)), buf, 0600); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{WALBytesThreshold: 100, SnapshotRatioThreshold: 0.01, RecordsThreshold: 1000}
+	s, err := Open(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if !s.shouldCompact() {
+		t.Fatal("recovered frozen generations did not trigger compaction")
+	}
+	if err := s.Compact(); err != nil {
+		t.Fatal(err)
+	}
+	if s.frozenBytes != 0 {
+		t.Fatal("frozen bytes not reset after compaction")
+	}
+	if _, err := filepathGlob(dir, "state.wal.*.frozen.ndjson"); err != nil {
+		t.Fatal("frozen generations not pruned by compaction")
 	}
 }
 

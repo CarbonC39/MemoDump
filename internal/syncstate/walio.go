@@ -12,8 +12,11 @@ import (
 // package directly.
 type walIO interface {
 	OpenAppend(name string) (*os.File, error)
+	OpenRead(name string) (*os.File, error)
 	ReadFile(name string) ([]byte, error)
 	Rename(oldpath, newpath string) error
+	// RenameNoClobber renames oldpath to newpath, failing if newpath exists.
+	RenameNoClobber(oldpath, newpath string) error
 	Remove(name string) error
 	ReadDir(name string) ([]os.DirEntry, error)
 	Sync(f *os.File) error
@@ -27,9 +30,15 @@ func (osWalIO) OpenAppend(name string) (*os.File, error) {
 	return os.OpenFile(name, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 }
 
+func (osWalIO) OpenRead(name string) (*os.File, error) { return os.Open(name) }
+
 func (osWalIO) ReadFile(name string) ([]byte, error) { return os.ReadFile(name) }
 
 func (osWalIO) Rename(oldpath, newpath string) error { return os.Rename(oldpath, newpath) }
+
+func (osWalIO) RenameNoClobber(oldpath, newpath string) error {
+	return renameNoClobber(oldpath, newpath)
+}
 
 func (osWalIO) Remove(name string) error { return os.Remove(name) }
 
@@ -129,6 +138,13 @@ func (f *faultWalIO) OpenAppend(name string) (*os.File, error) {
 	return f.walIO.OpenAppend(name)
 }
 
+func (f *faultWalIO) OpenRead(name string) (*os.File, error) {
+	if f.shouldFail("read") {
+		return nil, f.injected("read")
+	}
+	return f.walIO.OpenRead(name)
+}
+
 func (f *faultWalIO) ReadFile(name string) ([]byte, error) {
 	if f.shouldFail("read") {
 		return nil, f.injected("read")
@@ -141,6 +157,13 @@ func (f *faultWalIO) Rename(oldpath, newpath string) error {
 		return f.injected("rename")
 	}
 	return f.walIO.Rename(oldpath, newpath)
+}
+
+func (f *faultWalIO) RenameNoClobber(oldpath, newpath string) error {
+	if f.shouldFail("rename") {
+		return f.injected("rename")
+	}
+	return f.walIO.RenameNoClobber(oldpath, newpath)
 }
 
 func (f *faultWalIO) Remove(name string) error {
