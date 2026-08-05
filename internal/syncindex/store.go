@@ -72,6 +72,33 @@ func checkMetadataSafe(root string) error {
 	return nil
 }
 
+// metadataDirExists reports whether the sync metadata directory exists on disk.
+// checkMetadataSafe must have already run, so a symlink cannot pass here.
+func metadataDirExists(root string) (bool, error) {
+	_, err := os.Lstat(filepath.Join(root, DirName))
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+// requireVaultRoot verifies the vault root exists and is a directory before any
+// sync metadata is created or scanned, so a missing or wrong-typed root can
+// never yield an empty committed index.
+func requireVaultRoot(root string) error {
+	info, err := os.Stat(root)
+	if err != nil {
+		return fmt.Errorf("vault root: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("vault root %q is not a directory", root)
+	}
+	return nil
+}
+
 // Create writes an EMPTY fresh index for a vault that is enabling sync for the
 // first time. It is a low-level primitive; Enable is the normal entry point and
 // additionally assigns stable Sync IDs to every existing note and folder.
@@ -81,7 +108,16 @@ func Create(root, vaultID string) (*Store, error) {
 	if !cloudsync.IsUUIDv4(vaultID) {
 		return nil, fmt.Errorf("invalid vaultId %q", vaultID)
 	}
+	if err := requireVaultRoot(root); err != nil {
+		return nil, err
+	}
 	if err := checkMetadataSafe(root); err != nil {
+		return nil, err
+	}
+	// Capture the directory state BEFORE the enable lock creates it, so a
+	// lock-created directory is not mistaken for a lost identity.
+	dirExisted, err := metadataDirExists(root)
+	if err != nil {
 		return nil, err
 	}
 	l, err := acquireEnableLock(root)
@@ -89,32 +125,45 @@ func Create(root, vaultID string) (*Store, error) {
 		return nil, err
 	}
 	defer l.Close()
-	// Under the lock: an index that already exists must never be overwritten.
-	if _, err := Load(root); err == nil {
-		return nil, fmt.Errorf("sync already enabled for this vault")
-	} else if !errors.Is(err, ErrNotEnabled) {
-		return nil, err
+	_, err = Load(root)
+	if !dirExisted && (errors.Is(err, ErrNotEnabled) || errors.Is(err, ErrCorrupt)) {
+		// A genuine first create: the ErrCorrupt (if any) is only because the
+		// enable lock just created the directory.
+		idx := New(vaultID)
+		data, err := idx.Serialize()
+		if err != nil {
+			return nil, err
+		}
+		if err := writeDurable(root, data); err != nil {
+			return nil, err
+		}
+		return &Store{root: root, Index: idx}, nil
 	}
-	idx := New(vaultID)
-	data, err := idx.Serialize()
 	if err != nil {
+		// An existing index is never overwritten; a pre-existing directory with
+		// no identity files is corruption, and other errors propagate.
 		return nil, err
 	}
-	if err := writeDurable(root, data); err != nil {
-		return nil, err
-	}
-	return &Store{root: root, Index: idx}, nil
+	return nil, fmt.Errorf("sync already enabled for this vault")
 }
 
 // Enable makes sure a vault is synced: on first enable it creates the index and
 // assigns a stable Sync ID to every existing note and folder in ONE durable
 // write; on later calls it reuses the existing identity and only adds newly
 // discovered paths in one consolidated write. It never modifies Markdown. When
-// both index files are corrupt it returns ErrCorrupt and the caller offers a
-// rebuild. First creation is serialized across processes by the enable lock so
-// two concurrent enables agree on one Vault ID and one Sync ID set.
+// both index files are corrupt (or missing while .memodump exists) it returns
+// ErrCorrupt and the caller offers a rebuild. First creation is serialized
+// across processes by the enable lock so two concurrent enables agree on one
+// Vault ID and one Sync ID set.
 func Enable(root string) (*Store, error) {
+	if err := requireVaultRoot(root); err != nil {
+		return nil, err
+	}
 	if err := checkMetadataSafe(root); err != nil {
+		return nil, err
+	}
+	dirExisted, err := metadataDirExists(root)
+	if err != nil {
 		return nil, err
 	}
 	l, err := acquireEnableLock(root)
@@ -123,11 +172,15 @@ func Enable(root string) (*Store, error) {
 	}
 	defer l.Close()
 	s, err := Load(root)
-	if errors.Is(err, ErrNotEnabled) {
+	if !dirExisted && (errors.Is(err, ErrNotEnabled) || errors.Is(err, ErrCorrupt)) {
 		// We hold the enable lock, so no other process is creating the index
-		// concurrently. Build the complete index, then write it once.
+		// concurrently; the ErrCorrupt (if any) is only the lock-created
+		// directory. Build the complete index, then write it once.
 		idx := New(NewVaultID())
-		notes, folders := scanVault(root)
+		notes, folders, scanErr := scanVault(root)
+		if scanErr != nil {
+			return nil, scanErr
+		}
 		for _, p := range notes {
 			idx.Entities[NewVaultID()] = Entity{Kind: "note", Path: p}
 		}
@@ -147,11 +200,15 @@ func Enable(root string) (*Store, error) {
 		return &Store{root: root, Index: idx}, nil
 	}
 	if err != nil {
-		// Includes ErrCorrupt: the caller decides whether to rebuild.
+		// Includes ErrCorrupt with a pre-existing directory: the caller decides
+		// whether to rebuild.
 		return nil, err
 	}
 	// Already enabled: index only the newly discovered entities.
-	notes, folders := scanVault(root)
+	notes, folders, scanErr := scanVault(root)
+	if scanErr != nil {
+		return nil, scanErr
+	}
 	changed, err := indexScanned(s, notes, folders)
 	if err != nil {
 		return nil, err
@@ -164,6 +221,7 @@ func Enable(root string) (*Store, error) {
 	return s, nil
 }
 
+// Enable makes sure a vault is synced: on first enable it creates the index and
 // indexScanned adds stable Sync IDs for every scanned path not yet indexed.
 // It reports whether anything was added.
 func indexScanned(s *Store, notes, folders []string) (bool, error) {
@@ -208,6 +266,17 @@ func Load(root string) (*Store, error) {
 		idx, err2 := readIndex(backup)
 		if err2 != nil {
 			if errors.Is(err2, os.ErrNotExist) {
+				// Both identity files are gone. ErrNotEnabled means the vault
+				// NEVER enabled sync; a vault whose .memodump exists but whose
+				// identity files are lost is corruption — silently treating it
+				// as a first enable would reassign every Sync ID.
+				dirExists, deErr := metadataDirExists(root)
+				if deErr != nil {
+					return nil, fmt.Errorf("%w: %v", ErrCorrupt, deErr)
+				}
+				if dirExists {
+					return nil, ErrCorrupt
+				}
 				return nil, ErrNotEnabled
 			}
 			return nil, fmt.Errorf("%w: backup: %v", ErrCorrupt, err2)
@@ -343,6 +412,9 @@ func (s *Store) validateMutation(syncID string, e Entity) error {
 // Sync IDs to every note and folder. It is the conservative fallback when both
 // the primary index and its backup are corrupt: it never deletes local files.
 func Rebuild(root, vaultID string) (*Store, error) {
+	if err := requireVaultRoot(root); err != nil {
+		return nil, err
+	}
 	if err := checkMetadataSafe(root); err != nil {
 		return nil, err
 	}
@@ -352,7 +424,10 @@ func Rebuild(root, vaultID string) (*Store, error) {
 	}
 	defer l.Close()
 	idx := New(vaultID)
-	notes, folders := scanVault(root)
+	notes, folders, scanErr := scanVault(root)
+	if scanErr != nil {
+		return nil, scanErr
+	}
 	for _, p := range notes {
 		idx.Entities[uuid.NewString()] = Entity{Kind: "note", Path: p}
 	}
@@ -373,15 +448,18 @@ func Rebuild(root, vaultID string) (*Store, error) {
 }
 
 // scanVault returns sorted note and folder slash-relative paths, ignoring
-// reserved metadata directories and never following symlinks.
-func scanVault(root string) (notes, folders []string) {
-	_ = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+// hidden/reserved directories and never following symlinks. Only those two
+// categories are skipped: any other walk error (a missing root, an unreadable
+// directory, an I/O failure) is returned so Enable/Rebuild abort instead of
+// committing a partial or empty index.
+func scanVault(root string) (notes, folders []string, err error) {
+	walkErr := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
-			return nil
+			return walkErr
 		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return nil
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
 		}
 		if rel == "." {
 			return nil
@@ -406,9 +484,12 @@ func scanVault(root string) (notes, folders []string) {
 		}
 		return nil
 	})
+	if walkErr != nil {
+		return nil, nil, fmt.Errorf("scan vault: %w", walkErr)
+	}
 	sort.Strings(notes)
 	sort.Strings(folders)
-	return notes, folders
+	return notes, folders, nil
 }
 
 // writeDurable persists data to <root>/.memodump/sync-index.json following the

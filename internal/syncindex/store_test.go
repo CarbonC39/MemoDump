@@ -172,6 +172,78 @@ func TestEnableFailsOnDualCorruption(t *testing.T) {
 	}
 }
 
+func TestMissingIdentityFilesWithExistingMetadataIsCorrupt(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Enable(root); err != nil {
+		t.Fatal(err)
+	}
+	// Delete both identity files but leave .memodump (and its enable lock).
+	if err := os.Remove(IndexPath(root)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, DirName, BackupName)); err != nil {
+		t.Fatal(err)
+	}
+	// Load must not report "never enabled": identity was lost, not absent.
+	if _, err := Load(root); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("Load with lost identity files = %v, want ErrCorrupt", err)
+	}
+	// Enable must not silently mint a fresh Vault ID.
+	if _, err := Enable(root); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("Enable with lost identity files = %v, want ErrCorrupt", err)
+	}
+	// A truly never-enabled vault (no .memodump) still reports ErrNotEnabled.
+	fresh := t.TempDir()
+	if _, err := Load(fresh); !errors.Is(err, ErrNotEnabled) {
+		t.Fatalf("Load on a never-enabled vault = %v, want ErrNotEnabled", err)
+	}
+}
+
+func TestEnableRefusesMissingVaultRoot(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	if _, err := Enable(missing); err == nil {
+		t.Fatal("Enable on a missing root succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(missing, DirName)); !os.IsNotExist(err) {
+		t.Fatal("Enable created metadata for a missing vault root")
+	}
+}
+
+func TestScanVaultPropagatesMissingRoot(t *testing.T) {
+	if _, _, err := scanVault(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("scanVault accepted a missing root")
+	}
+}
+
+func TestEnableAbortsOnScanError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission-based scan errors are bypassed")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.md"), []byte("# A"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(root, "locked")
+	if err := os.MkdirAll(locked, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "b.md"), []byte("# B"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0755) })
+
+	if _, err := Enable(root); err == nil {
+		t.Fatal("Enable committed an index despite an unreadable subdirectory")
+	}
+	// Nothing was committed; a partial index must never be written.
+	if _, err := os.Stat(IndexPath(root)); !os.IsNotExist(err) {
+		t.Fatal("index was committed despite a scan error")
+	}
+}
+
 func mustSyncID(t *testing.T, s *Store, path string) string {
 	t.Helper()
 	id, ok := s.FindByPath(path)
