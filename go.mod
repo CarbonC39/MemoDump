@@ -5,7 +5,9 @@ go 1.25.0
 require github.com/wailsapp/wails/v2 v2.12.0
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/minio/minio-go/v7 v7.2.1
+	golang.org/x/sys v0.44.0
 	golang.org/x/text v0.37.0
 )
 
@@ -16,7 +18,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
@@ -48,6 +49,5 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
-	golang.org/x/sys v0.44.0 // indirect
 	gopkg.in/ini.v1 v1.67.2 // indirect
 )
