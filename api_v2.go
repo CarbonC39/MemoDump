@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+
+	"memodump/internal/vaultfs"
 )
 
 type noteSummaryV2 struct {
@@ -166,7 +169,7 @@ func handleV2ListNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parent := r.URL.Query().Get("parent")
-	dir, err := safePath(dataDir, parent)
+	dir, err := vaultfs.SafePath(dataDir, parent)
 	if err != nil {
 		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is invalid")
 		return
@@ -185,7 +188,7 @@ func handleV2ListNotes(w http.ResponseWriter, r *http.Request) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
-		note, readErr := readNote(filepath.Join(dir, entry.Name()), dataDir, false)
+		note, readErr := repo.Get(path.Join(parent, entry.Name()), false)
 		if readErr == nil {
 			notes = append(notes, noteToSummaryV2(*note))
 		}
@@ -196,7 +199,7 @@ func handleV2ListNotes(w http.ResponseWriter, r *http.Request) {
 
 func handleV2ListFolders(w http.ResponseWriter, r *http.Request) {
 	parent := r.URL.Query().Get("parent")
-	dir, err := safePath(dataDir, parent)
+	dir, err := vaultfs.SafePath(dataDir, parent)
 	if err != nil {
 		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is invalid")
 		return
@@ -248,7 +251,11 @@ func handleV2Search(w http.ResponseWriter, r *http.Request) {
 		if walkErr != nil || info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
 			return nil
 		}
-		note, readErr := readNote(path, dataDir, true)
+		rel, relErr := repo.Rel(path)
+		if relErr != nil {
+			return nil
+		}
+		note, readErr := repo.Get(rel, true)
 		if readErr != nil {
 			return nil
 		}

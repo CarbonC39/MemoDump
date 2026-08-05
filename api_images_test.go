@@ -65,6 +65,7 @@ func imageTestMux(t *testing.T) http.Handler {
 		dataDir = oldDataDir
 		noAuth = oldNoAuth
 	})
+	initRepo()
 	return buildAPIMux()
 }
 

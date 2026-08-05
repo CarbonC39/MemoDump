@@ -110,6 +110,8 @@ func main() {
 		log.Fatalf("Failed to create data directory: %v", err)
 	}
 
+	initRepo()
+
 	sessionFile = filepath.Join(dataDir, ".sessions.json")
 	imageConfigFile = filepath.Join(dataDir, ".image-config.json")
 	loadSessions()

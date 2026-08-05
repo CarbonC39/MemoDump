@@ -65,6 +65,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	dataDir = abs
 	os.MkdirAll(dataDir, 0755)
+	initRepo()
 	sessionFile = filepath.Join(dataDir, ".sessions.json")
 	if cfgDir, err := os.UserConfigDir(); err == nil {
 		imageConfigFile = filepath.Join(cfgDir, "memodump", "image-config.json")

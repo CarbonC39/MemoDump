@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -240,6 +241,34 @@ func (r *Repository) buildNote(rel string, info os.FileInfo, doc *Document) Note
 		ModTime: info.ModTime().UnixMilli(),
 		Preview: preview,
 	}
+}
+
+// ListNotes returns summary notes in a folder (rel, "" = root), sorted by
+// modified time descending. A missing folder returns ErrNotFound.
+func (r *Repository) ListNotes(rel string) ([]Note, error) {
+	abs, err := r.resolve(rel)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	var notes []Note
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		noteRel := path.Join(rel, e.Name())
+		if n, err := r.Get(noteRel, false); err == nil {
+			notes = append(notes, *n)
+		}
+	}
+	sort.Slice(notes, func(i, j int) bool { return notes[i].ModTime > notes[j].ModTime })
+	return notes, nil
 }
 
 // --- writes -----------------------------------------------------------------

@@ -15,13 +15,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"memodump/internal/vaultfs"
 )
 
 const (
 	// imageVaultDir is the image vault directory name inside the data dir. It is
 	// dot-prefixed so the folder-tree APIs hide it, and reserved so user folders
-	// can never shadow it.
-	imageVaultDir  = ".images"
+	// can never shadow it. The name is owned by the note repository boundary.
+	imageVaultDir  = vaultfs.ReservedVaultDir
 	imageSizeLimit = 20 << 20 // 20 MiB
 	imagePrefixLen = 4096
 )
@@ -99,17 +101,6 @@ func detectAvif(header []byte) (imageFormat, bool) {
 		}
 	}
 	return imageFormat{}, false
-}
-
-// containsReservedSegment reports whether any path segment is the reserved
-// image vault directory name.
-func containsReservedSegment(rel string) bool {
-	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
-		if seg == imageVaultDir {
-			return true
-		}
-	}
-	return false
 }
 
 func writeImageErrorCode(w http.ResponseWriter, status int, code, msg string) {
