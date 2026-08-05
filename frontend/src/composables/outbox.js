@@ -16,8 +16,9 @@ let _dbPromise = null
 function openDB() {
   if (_dbPromise) return _dbPromise
   _dbPromise = new Promise((resolve, reject) => {
-    if (!('indexedDB' in window)) { reject(new Error('indexeddb unavailable')); return }
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
+    const idb = globalThis.indexedDB
+    if (!idb) { reject(new Error('indexeddb unavailable')); return }
+    const req = idb.open(DB_NAME, DB_VERSION)
     req.onupgradeneeded = () => {
       const db = req.result
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'key' })
@@ -45,7 +46,24 @@ function asPromise(request, after) {
 
 export async function outboxPut(entry) {
   const s = await store('readwrite')
-  await asPromise(s.put(entry), refreshCount)
+  const existing = await asPromise(s.get(entry.key))
+  let merged = entry
+  if (existing) {
+    // Coalescing: consecutive offline edits to the same note keep the earliest
+    // baseRevision (the baseline they diverge from) and the latest content. A
+    // delete supersedes earlier create/update work for that key.
+    merged = {
+      ...entry,
+      baseRevision: existing.baseRevision || entry.baseRevision,
+      clientId: existing.clientId || entry.clientId,
+      originalName: existing.originalName ?? entry.originalName,
+      op: existing.op === 'delete' || entry.op === 'delete'
+        ? 'delete'
+        : (existing.op === 'create' ? 'create' : (entry.op || 'update')),
+      conflict: Boolean(existing.conflict || entry.conflict),
+    }
+  }
+  await asPromise(s.put(merged), refreshCount)
 }
 
 export async function outboxDelete(key) {
@@ -71,7 +89,9 @@ async function refreshCount() {
   } catch (_) { /* best-effort */ }
 }
 
-// Build a coalesced outbox entry from the live editor refs.
+// Build a coalesced outbox entry from the live editor refs. baseRevision is
+// the local CAS baseline the offline edit diverges from; replay sends it so an
+// offline change never bypasses optimistic concurrency.
 export function buildEntry({ editingNote, editContent, editName, editTags, editFolder }) {
   const n = editingNote.value || {}
   const clientId = n.clientId || null
@@ -85,6 +105,26 @@ export function buildEntry({ editingNote, editContent, editName, editTags, editF
     tags: [...(editTags.value || [])],
     folder: editFolder.value,
     op: n.path ? 'update' : 'create',
+    baseRevision: n.revision || '',
+    ts: Date.now(),
+  }
+}
+
+// Build an outbox entry for an offline delete, carrying the CAS baseline so a
+// stale delete (the note changed since it was read) is rejected on replay.
+export function buildDeleteEntry({ editingNote }) {
+  const n = editingNote.value || {}
+  return {
+    key: n.path,
+    clientId: n.clientId || null,
+    path: n.path || '',
+    originalName: n.name || '',
+    content: n.content || '',
+    name: n.name || '',
+    tags: [...(n.tags || [])],
+    folder: '',
+    op: 'delete',
+    baseRevision: n.revision || '',
     ts: Date.now(),
   }
 }

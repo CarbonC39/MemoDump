@@ -23,6 +23,10 @@ api.interceptors.response.use(
     }
 )
 
+// Normalize a v2 note document to the shape the rest of the UI reads: `id`
+// becomes `path`, and the optimistic-concurrency `revision` is carried through.
+const toLegacyNote = (doc) => ({ ...doc, path: doc.id })
+
 const remoteApi = {
     login(username, password) {
         return api.post('/login', { username, password })
@@ -35,22 +39,33 @@ const remoteApi = {
         return api.get('/notes', { params })
     },
     getNote(path) {
-        return api.get(`/notes/${path}`)
+        return api.get(`/v2/notes/${path}`).then(res => ({ ...res, data: toLegacyNote(res.data) }))
     },
     createNote(data) {
-        return api.post('/notes', data)
+        return api.post('/v2/notes', data).then(res => ({ ...res, data: toLegacyNote(res.data) }))
     },
     updateNote(path, data) {
-        return api.put(`/notes/${path}`, data)
+        // v2 requires baseRevision; callers pass it via data.baseRevision.
+        return api.put(`/v2/notes/${path}`, data).then(res => ({ ...res, data: toLegacyNote(res.data) }))
     },
-    deleteNote(path) {
-        return api.delete(`/notes/${path}`)
+    deleteNote(path, baseRevision) {
+        if (baseRevision) {
+            return api.delete(`/v2/notes/${path}`, { params: { baseRevision } })
+        }
+        // Fetch the current revision so every delete is CAS-protected. A note
+        // that is already gone counts as deleted.
+        return this.getNote(path)
+            .then(doc => api.delete(`/v2/notes/${path}`, { params: { baseRevision: doc.data.revision } }))
+            .catch(err => {
+                if (err?.response?.status === 404) return { data: { status: 'ok' } }
+                throw err
+            })
     },
     moveNote(path, destination) {
-        return api.put(`/move/${path}`, { destination })
+        return api.put(`/v2/move/${path}`, { destination }).then(res => ({ ...res, data: toLegacyNote(res.data) }))
     },
     duplicateNote(path) {
-        return api.post(`/duplicate/${path}`)
+        return api.post(`/v2/duplicate/${path}`).then(res => ({ ...res, data: toLegacyNote(res.data) }))
     },
     moveFolder(path, destination) {
         return api.put(`/move/folder/${path}`, { destination })

@@ -42,6 +42,7 @@ export function useNoteEditor() {
       name: entry.name || '',
       tags: entry.tags || [],
       clientId: entry.clientId || (entry.op === 'create' ? entry.key : createClientId()),
+      revision: entry.baseRevision || '',
     })
     editName.value = entry.name || ''
     editFolder.value = entry.folder || ''

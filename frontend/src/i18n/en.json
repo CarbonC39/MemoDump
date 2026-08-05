@@ -30,6 +30,7 @@
     "offlineTitle": "You're offline. Edits are saved on this device and sync when reconnected.",
     "syncedTitle": "All changes saved",
     "dirtyTitle": "Unsaved changes",
+    "conflictTitle": "Conflict — this note changed elsewhere",
     "errorTitle": "Save failed — will retry"
   },
   "login": {

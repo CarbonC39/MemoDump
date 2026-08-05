@@ -30,6 +30,7 @@
     "offlineTitle": "当前离线。编辑内容已保存在本机，恢复连接后将自动同步。",
     "syncedTitle": "所有更改已保存",
     "dirtyTitle": "有未保存的更改",
+    "conflictTitle": "冲突 — 该笔记已在其他位置被修改",
     "errorTitle": "保存失败 — 将重试"
   },
   "login": {

@@ -30,14 +30,14 @@ describe('useNotePersistence', () => {
       updateNote: vi.fn(() => new Promise(resolve => { resolveUpdate = resolve })),
     }
     const editor = useNoteEditor()
-    editor.loadDocument({ path: 'a.md', name: 'a', tags: [], content: 'old' })
+    editor.loadDocument({ path: 'a.md', name: 'a', tags: [], content: 'old', revision: 'r1' })
     editor.onEditorReady('old')
     editor.onEditorUpdate('saving')
     const persistence = useNotePersistence({ api, editor, enqueue: vi.fn() })
 
     const saving = persistence.saveNote()
     editor.onEditorUpdate('newer')
-    resolveUpdate({ data: { path: 'a.md', name: 'a', tags: [] } })
+    resolveUpdate({ data: { path: 'a.md', name: 'a', tags: [], revision: 'r2' } })
     await saving
 
     expect(editor.editContent.value).toBe('newer')
@@ -90,5 +90,78 @@ describe('useNotePersistence', () => {
       '2026-07-29_120000.md',
       { content: 'offline edit', tags: [] },
     )
+  })
+})
+
+describe('local revision contract (Phase 0)', () => {
+  it('sends the loaded revision as baseRevision and adopts the returned one', async () => {
+    const api = {
+      updateNote: vi.fn().mockResolvedValue({ data: { path: 'a.md', name: 'a', tags: [], revision: 'r2' } }),
+    }
+    const editor = useNoteEditor()
+    editor.loadDocument({ path: 'a.md', name: 'a', tags: [], content: 'old', revision: 'r1' })
+    editor.onEditorReady('old')
+    editor.onEditorUpdate('new')
+    const persistence = useNotePersistence({ api, editor, enqueue: vi.fn() })
+    await persistence.saveNote()
+    expect(api.updateNote).toHaveBeenCalledWith('a.md', expect.objectContaining({ baseRevision: 'r1' }))
+    expect(editor.editingNote.value.revision).toBe('r2')
+  })
+
+  it('flags a visible conflict on 409 and preserves the editor buffer', async () => {
+    const api = {
+      updateNote: vi.fn().mockRejectedValue({
+        response: { status: 409, data: { error: { code: 'local_revision_conflict' } } },
+      }),
+    }
+    const enqueue = vi.fn()
+    const editor = useNoteEditor()
+    editor.loadDocument({ path: 'a.md', name: 'a', tags: [], content: 'old', revision: 'r1' })
+    editor.onEditorReady('old')
+    editor.onEditorUpdate('mine')
+    const persistence = useNotePersistence({ api, editor, enqueue })
+    await persistence.saveNote()
+    expect(persistence.conflict.value).toBe(true)
+    expect(editor.editContent.value).toBe('mine')
+    expect(enqueue).not.toHaveBeenCalled()
+  })
+
+  it('replays an offline update with its captured baseRevision', async () => {
+    const api = {
+      updateNote: vi.fn().mockResolvedValue({ data: { path: 'a.md', name: 'a', tags: [] } }),
+    }
+    const editor = useNoteEditor()
+    const persistence = useNotePersistence({ api, editor, enqueue: vi.fn() })
+    await persistence.saveNote({
+      replay: {
+        path: 'a.md', content: 'offline', tags: [], name: 'a', folder: '',
+        baseRevision: 'r1', originalName: 'a',
+      },
+    })
+    expect(api.updateNote).toHaveBeenCalledWith('a.md', expect.objectContaining({ baseRevision: 'r1' }))
+  })
+
+  it('queues an offline delete carrying its baseRevision', async () => {
+    const api = { deleteNote: vi.fn().mockRejectedValue(new Error('offline')) }
+    const enqueue = vi.fn().mockResolvedValue(undefined)
+    const editor = useNoteEditor()
+    editor.loadDocument({ path: 'a.md', name: 'a', tags: [], content: 'x', revision: 'r1' })
+    const persistence = useNotePersistence({ api, editor, enqueue })
+    await persistence.deleteCurrent()
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ op: 'delete', path: 'a.md', baseRevision: 'r1' }))
+  })
+
+  it('removes a queued entry after a successful live save', async () => {
+    const api = {
+      updateNote: vi.fn().mockResolvedValue({ data: { path: 'a.md', name: 'a', tags: [], revision: 'r2' } }),
+    }
+    const remove = vi.fn().mockResolvedValue(undefined)
+    const editor = useNoteEditor()
+    editor.loadDocument({ path: 'a.md', name: 'a', tags: [], content: 'old', revision: 'r1' })
+    editor.onEditorReady('old')
+    editor.onEditorUpdate('new')
+    const persistence = useNotePersistence({ api, editor, enqueue: vi.fn(), remove })
+    await persistence.saveNote()
+    expect(remove).toHaveBeenCalledWith('a.md')
   })
 })

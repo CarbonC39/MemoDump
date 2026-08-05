@@ -57,7 +57,7 @@
         :can-delete="Boolean(editingNote?.path)"
         :save-button-class="saveBtnClass"
         :save-button-title="saveBtnTitle"
-        :save-problem="saveStatus === 'error' || saveStatus === 'offline'"
+        :save-problem="saveStatus === 'error' || saveStatus === 'offline' || saveStatus === 'conflict'"
         :sort-mode="sortMode"
         @toggle-mobile-menu="mobileSidebar = !mobileSidebar"
         @close-settings="showSettings = false"
@@ -316,7 +316,7 @@ watch(editingNote, (note) => {
 let updateUrlHandler = () => {}
 
 const {
-  saveError, openDocument, saveNote, deleteCurrent,
+  saveError, conflict, openDocument, saveNote, deleteCurrent,
 } = useNotePersistence({
   api: apiClient,
   editor: noteEditor,
@@ -326,6 +326,7 @@ const {
 const { showDraftRestoredBanner, saveStatus, replayAll } = useAutosave({
   editingNote, isDirty, saveNote,
   reload: loadAll, ping: () => apiClient.ping(), saveError,
+  api: apiClient, conflict,
 })
 
 const {
@@ -374,6 +375,7 @@ const saveBtnTitle = computed(() => {
   switch (saveStatus.value) {
     case 'offline': return t('status.offlineTitle')
     case 'dirty': return t('status.dirtyTitle')
+    case 'conflict': return t('status.conflictTitle')
     case 'error': return saveError.value || t('status.errorTitle')
     default: return t('status.syncedTitle')
   }
