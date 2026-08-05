@@ -17,6 +17,7 @@
     "@milkdown/plugin-listener": "^7.19.0",
     "@milkdown/theme-nord": "^7.19.0",
     "@prosemirror-adapter/vue": "^0.4.6",
+    "aws4fetch": "^1.0.20",
     "axios": "^1.13.6",
     "js-yaml": "^4.1.1",
     "material-icons": "^1.13.14",

@@ -23,6 +23,13 @@ func main() {
 	flag.StringVar(&password, "pass", "", "Login password")
 	flag.IntVar(&port, "port", 0, "Service port (default 8080)")
 	flag.StringVar(&cssFile, "css", "", "Custom CSS file to inject")
+	flag.StringVar(&imageS3Endpoint, "image-s3-endpoint", "", "S3-compatible endpoint (e.g. https://s3.region.amazonaws.com)")
+	flag.StringVar(&imageS3Region, "image-s3-region", "", "S3 region (default us-east-1)")
+	flag.StringVar(&imageS3Bucket, "image-s3-bucket", "", "S3 bucket name")
+	flag.StringVar(&imageS3Prefix, "image-s3-prefix", "", "S3 object prefix")
+	flag.StringVar(&imageS3PublicURL, "image-s3-public-url", "", "Public base URL for S3 objects")
+	flag.StringVar(&imageS3AccessKey, "image-s3-access-key", "", "S3 access key")
+	flag.StringVar(&imageS3SecretKey, "image-s3-secret-key", "", "S3 secret key")
 	flag.Parse()
 
 	// Load .env from CWD (lower priority than flags and env vars).
@@ -104,8 +111,10 @@ func main() {
 	}
 
 	sessionFile = filepath.Join(dataDir, ".sessions.json")
+	imageConfigFile = filepath.Join(dataDir, ".image-config.json")
 	loadSessions()
 	startSessionCleanup()
+	startImageCleanupLoop()
 
 	mux := buildAPIMux()
 

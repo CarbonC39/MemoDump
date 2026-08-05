@@ -137,6 +137,44 @@ Use browser developer tools to throttle the network or block the generated
 7. Test both light and dark themes and confirm raw text, selection, placeholders,
    and focus indicators remain readable.
 
+## Image support checklist
+
+Run against the local vault by default, and again with an S3 config (fake or
+real) if available.
+
+1. Paste a PNG into the rich editor; confirm an image appears and the markdown
+   contains `/api/images/<sha256>.png` (vault) or the configured public URL
+   (S3).
+2. Paste a JPEG, GIF, WebP and AVIF; confirm each uploads and renders. Confirm
+   a file whose content does not match its extension is rejected with a calm
+   notice.
+3. Paste a file larger than 20 MiB and a non-image file; confirm both are
+   refused without a modal.
+4. Drop an image onto the editor; confirm it inserts at the drop position and
+   that dropping a `.md` file elsewhere still imports it (no alert regression).
+5. Paste an image while offline; confirm it renders from the local blob, the
+   app shows a pending state, and it uploads automatically after reconnecting
+   (or via the retry action).
+6. Reload the page while an image is pending; confirm it still renders and
+   eventually uploads.
+7. Paste a large image and switch notes or switch to raw mode before hashing
+   finishes; confirm no image node is inserted into the new editing context.
+8. Save the note, reload, and confirm the image loads from its final URL.
+9. Open the raw editor and confirm the image is an ordinary markdown image link
+   with the final URL.
+10. In S3 mode, configure a bucket that rejects anonymous reads and confirm the
+   test connection reports it (and that uploads surface a readable error).
+11. In the settings panel, confirm the Images section is collapsed by default,
+   the mode summary is accurate, the privacy notice is visible, and saving a
+   config with empty secret fields preserves the existing secret. Reload the
+   page and confirm the same config can still be edited and saved.
+12. Change the server image destination while an upload is pending and confirm
+   the old entry becomes config-required instead of uploading to the new target.
+13. Confirm the Wails build serves vault images (`/api/images/...`) and that
+   the image settings are editable there.
+14. Confirm no `.tmp` files or `uploads` artifacts remain in the vault
+    directory after uploads.
+
 ## Completion criteria
 
 A release passes this checklist when:

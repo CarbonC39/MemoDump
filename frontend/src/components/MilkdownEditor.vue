@@ -24,10 +24,14 @@ import { languages } from '@codemirror/language-data'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { $prose, replaceAll } from '@milkdown/utils'
 import { Plugin, PluginKey } from '@milkdown/prose/state'
+import { editorViewCtx } from '@milkdown/kit/core'
+import { stageAndUploadImage, resolvePending, revokeObjectUrls } from '../composables/mediaOutbox'
+import { imageInsertStillCurrent } from './imageInsertGuard'
 
 const props = defineProps({
   documentVersion: { type: Number, required: true },
   initialContent: { type: String, default: '' },
+  active: { type: Boolean, default: true },
 })
 
 const { t } = useI18n()
@@ -74,6 +78,75 @@ let _latestMarkdown = props.initialContent
 let _hasUserInput = false
 let _handleUserInput = null
 let _handleEditorControl = null
+
+function imageFileCandidates(files) {
+  return Array.from(files || []).filter((file) =>
+    file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif)$/i.test(file.name || '')
+  )
+}
+
+function insertImageNode(url, pos = null) {
+  if (!_created || _destroyed || !crepeInstance) return 0
+  _hasUserInput = true
+  let insertedSize = 0
+  crepeInstance.editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    const node = view.state.schema.nodes['image-block']?.create({ src: url, ratio: 1 })
+    if (!node) return
+    let tr = view.state.tr
+    tr = pos != null ? tr.insert(pos, node) : tr.replaceSelectionWith(node)
+    view.dispatch(tr)
+    insertedSize = node.nodeSize
+  })
+  return insertedSize
+}
+
+async function stageForDocument(file, documentVersion) {
+  const url = await stageAndUploadImage(file)
+  if (!url || !imageInsertStillCurrent({
+    documentVersion,
+    currentDocumentVersion: props.documentVersion,
+    activeDocumentVersion: _activeDocumentVersion,
+    destroyed: _destroyed,
+    active: props.active,
+  })) return ''
+  return url
+}
+
+async function insertImageFiles(files, pos = null, documentVersion = props.documentVersion) {
+  let insertPos = pos
+  for (const file of files) {
+    const url = await stageForDocument(file, documentVersion)
+    if (!url) return
+    const insertedSize = insertImageNode(url, insertPos)
+    if (insertPos != null) insertPos += insertedSize
+  }
+}
+
+function handleImagePaste(e) {
+  const files = imageFileCandidates(e.clipboardData?.files)
+  if (!files.length) return
+  e.preventDefault()
+  e.stopPropagation()
+  insertImageFiles(files, null, props.documentVersion).catch(() => {})
+}
+
+function handleImageDrop(e) {
+  const files = imageFileCandidates(e.dataTransfer?.files)
+  if (!files.length) return
+  e.preventDefault()
+  e.stopPropagation()
+  const documentVersion = props.documentVersion
+  let pos = null
+  if (_created && crepeInstance) {
+    crepeInstance.editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const coords = view.posAtCoords({ left: e.clientX, top: e.clientY })
+      if (coords) pos = coords.pos
+    })
+  }
+  insertImageFiles(files, pos, documentVersion).catch(() => {})
+}
 
 function nextFrame() {
   return new Promise((resolve) => requestAnimationFrame(resolve))
@@ -124,6 +197,8 @@ onMounted(async () => {
   }
   _editorElRef.addEventListener('input', _handleUserInput, true)
   _editorElRef.addEventListener('pointerdown', _handleEditorControl, true)
+  _editorElRef.addEventListener('paste', handleImagePaste)
+  _editorElRef.addEventListener('drop', handleImageDrop)
   const startingDocumentVersion = props.documentVersion
 
   crepeInstance = new CrepeBuilder({
@@ -133,7 +208,17 @@ onMounted(async () => {
     .addFeature(cursor)
     .addFeature(listItem)
     .addFeature(linkTooltip)
-    .addFeature(imageBlock)
+    .addFeature(imageBlock, {
+      onUpload: (file) => stageForDocument(file, props.documentVersion),
+      proxyDomURL: (url) => resolvePending(url),
+      onImageLoadError: (event) => {
+        const img = event.target
+        if (img) {
+          img.classList.add('image-load-failed')
+          img.setAttribute('title', t('media.imageLoadFailed'))
+        }
+      },
+    })
     .addFeature(blockEdit)
     .addFeature(placeholder, { text: t('editorPlaceholder') })
     .addFeature(toolbar)
@@ -141,6 +226,11 @@ onMounted(async () => {
     .addFeature(table)
   crepeInstance.editor.use(resetEmptiedTaskItemPlugin)
 
+  // ---- image paste / drop ----
+  // Crepe's image components only handle the upload button and link input;
+  // pasting or dropping image files is MemoDump's responsibility. For image
+  // files we always preventDefault + stopPropagation so MainView's file-import
+  // drop handler (.md/.txt, alert on anything else) never swallows them.
   crepeInstance.on((listener) => {
     listener.markdownUpdated((_, markdown) => {
       if (!_destroyed) {
@@ -207,6 +297,11 @@ onBeforeUnmount(() => {
   if (_editorElRef && _handleEditorControl) {
     _editorElRef.removeEventListener('pointerdown', _handleEditorControl, true)
   }
+  if (_editorElRef) {
+    _editorElRef.removeEventListener('paste', handleImagePaste)
+    _editorElRef.removeEventListener('drop', handleImageDrop)
+  }
+  revokeObjectUrls()
   if (crepeInstance) {
     crepeInstance.destroy()
     crepeInstance = null

@@ -623,7 +623,9 @@ func buildFolderTree(dir string, base string) []Folder {
 func buildFolderNodes(parentDir string, base string, entries []os.DirEntry) []Folder {
 	var folders []Folder
 	for _, e := range entries {
-		if !e.IsDir() {
+		// Skip dot-prefixed directories (e.g. the .images vault) so the legacy
+		// folder tree matches the v2 API, which already hides them.
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		folderDir := filepath.Join(parentDir, e.Name())
@@ -661,6 +663,10 @@ func handleCreateFolder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"Request format error"}`, http.StatusBadRequest)
 		return
 	}
+	if containsReservedSegment(req.Path) {
+		http.Error(w, `{"error":"Reserved folder name"}`, http.StatusBadRequest)
+		return
+	}
 
 	fullPath, err := safePath(dataDir, req.Path)
 	if err != nil {
@@ -693,6 +699,10 @@ func handleRenameFolder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newRel := filepath.Join(filepath.Dir(folderPath), req.NewName)
+	if containsReservedSegment(newRel) {
+		http.Error(w, `{"error":"Reserved folder name"}`, http.StatusBadRequest)
+		return
+	}
 	newPath, err := safePath(dataDir, newRel)
 	if err != nil {
 		http.Error(w, `{"error":"Path is illegal"}`, http.StatusBadRequest)
@@ -817,6 +827,10 @@ func handleMoveFolder(w http.ResponseWriter, r *http.Request) {
 
 	destDir := dataDir
 	if req.Destination != "" {
+		if containsReservedSegment(req.Destination) {
+			http.Error(w, `{"error":"Reserved folder name"}`, http.StatusBadRequest)
+			return
+		}
 		destDir, err = safePath(dataDir, req.Destination)
 		if err != nil {
 			http.Error(w, `{"error":"Path is illegal"}`, http.StatusBadRequest)
@@ -867,7 +881,9 @@ func handlePing(w http.ResponseWriter, r *http.Request) {
 // handleConfig is unauthenticated and returns server configuration the UI needs
 // before login (e.g. whether auth is required so the Sign Out button can be hidden).
 func handleConfig(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"noAuth": noAuth})
+	cfg := effectiveImageS3Config()
+	image := imageConfigPublic(cfg)
+	writeJSON(w, http.StatusOK, map[string]any{"noAuth": noAuth, "image": image})
 }
 
 // handleUploadNote accepts a multipart .md/.txt file upload and saves it as a note.

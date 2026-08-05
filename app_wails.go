@@ -66,8 +66,12 @@ func (a *App) startup(ctx context.Context) {
 	dataDir = abs
 	os.MkdirAll(dataDir, 0755)
 	sessionFile = filepath.Join(dataDir, ".sessions.json")
+	if cfgDir, err := os.UserConfigDir(); err == nil {
+		imageConfigFile = filepath.Join(cfgDir, "memodump", "image-config.json")
+	}
 	loadSessions()
 	startSessionCleanup()
+	startImageCleanupLoop()
 }
 
 // GetDataDir returns the active data directory path (shown in the sidebar).
