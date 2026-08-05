@@ -7,11 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/google/uuid"
 
 	"memodump/internal/cloudsync"
+	"memodump/internal/vaultfs"
 )
 
 var (
@@ -23,16 +23,26 @@ var (
 	// must never be read or written through a symlink to a location outside the
 	// vault.
 	ErrSymlink = errors.New("sync metadata path must not be a symlink")
+	// ErrPoisoned reports a store whose last durable write failed. The on-disk
+	// index is indeterminate (the primary, the backup, or the directory sync
+	// may or may not have landed), so the in-memory index cannot be trusted and
+	// the store must be Reloaded before further use.
+	ErrPoisoned = errors.New("sync index store poisoned; reload to recover")
 )
 
 // Store is a file-backed portable index for one vault. Structural mutations
 // (add/update/remove an entity) mark it dirty; Save performs one durable,
 // atomic rewrite. Content-only saves never touch the file.
 type Store struct {
-	root   string
-	Index  *Index
-	dirty  bool
-	writes int // durable primary rewrites; observable by tests
+	root string
+	io   indexIO
+	// Index is the in-memory portable index. After a failed durable write the
+	// store is poisoned (poisoned == true) and Index is no longer trustworthy
+	// until Reload.
+	Index    *Index
+	dirty    bool
+	writes   int // durable primary rewrites; observable by tests
+	poisoned bool
 }
 
 // IndexPath returns the primary index path for a vault.
@@ -137,7 +147,7 @@ func Create(root, vaultID string) (*Store, error) {
 		if err := writeDurable(root, data); err != nil {
 			return nil, err
 		}
-		return &Store{root: root, Index: idx}, nil
+		return newStore(root, osIndexIO{}, idx), nil
 	}
 	if err != nil {
 		// An existing index is never overwritten; a pre-existing directory with
@@ -203,7 +213,7 @@ func Enable(root string) (*Store, error) {
 		if err := writeDurable(root, data); err != nil {
 			return nil, err
 		}
-		return &Store{root: root, Index: idx}, nil
+		return newStore(root, osIndexIO{}, idx), nil
 	}
 	if err != nil {
 		// Includes ErrCorrupt with a pre-existing directory: the caller decides
@@ -258,6 +268,12 @@ func indexScanned(s *Store, notes, folders []string) (bool, error) {
 // the primary is corrupt or missing. A vault that has never enabled sync
 // returns ErrNotEnabled; when both files are unusable it returns ErrCorrupt.
 func Load(root string) (*Store, error) {
+	return loadWithIO(root, osIndexIO{})
+}
+
+// loadWithIO is Load with an explicit indexIO (the durability fault-injection
+// seam used by tests).
+func loadWithIO(root string, io indexIO) (*Store, error) {
 	if err := checkMetadataSafe(root); err != nil {
 		return nil, err
 	}
@@ -266,7 +282,7 @@ func Load(root string) (*Store, error) {
 
 	idx, err := readIndex(primary)
 	if err == nil {
-		return &Store{root: root, Index: idx}, nil
+		return newStore(root, io, idx), nil
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		// No primary: maybe only a backup survived (crash between renames).
@@ -288,14 +304,19 @@ func Load(root string) (*Store, error) {
 			}
 			return nil, fmt.Errorf("%w: backup: %v", ErrCorrupt, err2)
 		}
-		return &Store{root: root, Index: idx}, nil
+		return newStore(root, io, idx), nil
 	}
 	// Primary is corrupt: try the backup.
 	idx, err2 := readIndex(backup)
 	if err2 != nil {
 		return nil, fmt.Errorf("%w (primary: %v; backup: %v)", ErrCorrupt, err, err2)
 	}
-	return &Store{root: root, Index: idx}, nil
+	return newStore(root, io, idx), nil
+}
+
+// newStore constructs a store with an explicit io.
+func newStore(root string, io indexIO, idx *Index) *Store {
+	return &Store{root: root, io: io, Index: idx}
 }
 
 func readIndex(path string) (*Index, error) {
@@ -306,26 +327,83 @@ func readIndex(path string) (*Index, error) {
 	return parseIndex(data)
 }
 
-// Save rewrites the index durably if any structural change is pending. A
-// content-only save (dirty == false) is a no-op and never touches the file.
-// The index is validated first so a buggy mutation can never persist an index
-// that a later Load would reject.
-func (s *Store) Save() error {
-	if s == nil || !s.dirty {
-		return nil
+// writeIndex validates and durably writes idx WITHOUT changing the store's
+// in-memory index. A validation failure is a caller error and leaves the store
+// untouched. A durable-write failure is indeterminate — the primary, the
+// backup, or the directory sync may or may not have landed — so the store is
+// poisoned (ErrPoisoned) and the caller must Reload.
+func (s *Store) writeIndex(idx *Index) error {
+	if s.poisoned {
+		return ErrPoisoned
 	}
-	if err := s.Index.validate(); err != nil {
+	if err := idx.validate(); err != nil {
 		return err
 	}
-	data, err := s.Index.Serialize()
+	data, err := idx.Serialize()
 	if err != nil {
 		return err
 	}
-	if err := writeDurable(s.root, data); err != nil {
+	if err := writeDurableWith(s.io, s.root, data); err != nil {
+		s.poisoned = true
+		return fmt.Errorf("%w: %v", ErrPoisoned, err)
+	}
+	return nil
+}
+
+// Save rewrites the index durably if any structural change is pending. A
+// content-only save (dirty == false) is a no-op and never touches the file.
+// The index is validated first so a buggy mutation can never persist an index
+// that a later Load would reject. A failed durable write poisons the store;
+// once poisoned, Save returns ErrPoisoned even when clean, so a caller can
+// never mistake the poisoned state for normalcy.
+func (s *Store) Save() error {
+	if s == nil {
+		return nil
+	}
+	if s.poisoned {
+		return ErrPoisoned
+	}
+	if !s.dirty {
+		return nil
+	}
+	if err := s.writeIndex(s.Index); err != nil {
 		return err
 	}
 	s.writes++
 	s.dirty = false
+	return nil
+}
+
+// ReplaceIndex atomically swaps the store's index for a fully-built one. The
+// new index is committed durably BEFORE the in-memory swap: a validation
+// failure leaves the store untouched (not even in memory), and a durable-write
+// failure poisons the store (the on-disk result is indeterminate) without
+// changing the in-memory index. It is the commit point for batch identity
+// mutations (offline renames plus fresh Sync IDs) that must never leave a
+// half-applied state.
+func (s *Store) ReplaceIndex(idx *Index) error {
+	if s.poisoned {
+		return ErrPoisoned
+	}
+	if err := s.writeIndex(idx); err != nil {
+		return err
+	}
+	s.Index = idx
+	s.writes++
+	s.dirty = false
+	return nil
+}
+
+// Reload re-reads the index from disk (through the store's io), clearing any
+// poison left by a failed durable write. It returns the same errors as Load.
+func (s *Store) Reload() error {
+	fresh, err := loadWithIO(s.root, s.io)
+	if err != nil {
+		return err
+	}
+	s.Index = fresh.Index
+	s.dirty = false
+	s.poisoned = false
 	return nil
 }
 
@@ -355,6 +433,9 @@ func (s *Store) FindBySyncID(syncID string) (Entity, bool) {
 // already indexed by a different Sync ID instead of silently displacing it:
 // identity conflicts are reconciliation's decision, never a quiet overwrite.
 func (s *Store) AddEntity(syncID string, e Entity) error {
+	if s.poisoned {
+		return ErrPoisoned
+	}
 	if err := s.validateMutation(syncID, e); err != nil {
 		return err
 	}
@@ -371,6 +452,9 @@ func (s *Store) AddEntity(syncID string, e Entity) error {
 
 // UpdatePath moves an existing Sync ID to a new vault path.
 func (s *Store) UpdatePath(syncID, newPath string) error {
+	if s.poisoned {
+		return ErrPoisoned
+	}
 	if !validVaultPath(newPath) {
 		return fmt.Errorf("unsafe path %q", newPath)
 	}
@@ -390,16 +474,21 @@ func (s *Store) UpdatePath(syncID, newPath string) error {
 	return nil
 }
 
-// RemoveEntity drops a Sync ID from the index.
-func (s *Store) RemoveEntity(syncID string) {
+// RemoveEntity drops a Sync ID from the index. It refuses a poisoned store so a
+// mutation can never diverge memory further from the indeterminate disk state.
+func (s *Store) RemoveEntity(syncID string) error {
+	if s.poisoned {
+		return ErrPoisoned
+	}
 	if s.Index.Entities == nil {
 		s.Index.Entities = make(map[string]Entity)
 	}
 	if _, ok := s.Index.Entities[syncID]; !ok {
-		return
+		return nil
 	}
 	delete(s.Index.Entities, syncID)
 	s.dirty = true
+	return nil
 }
 
 func (s *Store) validateMutation(syncID string, e Entity) error {
@@ -451,7 +540,7 @@ func Rebuild(root, vaultID string) (*Store, error) {
 	if err := writeDurable(root, data); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, Index: idx}, nil
+	return newStore(root, osIndexIO{}, idx), nil
 }
 
 // scanVault returns sorted note and folder slash-relative paths, ignoring
@@ -483,8 +572,10 @@ func scanVault(root string) (notes, folders []string, err error) {
 			return nil
 		}
 		if info.IsDir() {
-			// Do not descend into reserved or hidden directories.
-			if strings.HasPrefix(filepath.Base(path), ".") {
+			// Do not descend into reserved or hidden directories. The predicate
+			// is shared with the Phase 4 scanner so initial enable and the
+			// authoritative scan ignore exactly the same entries.
+			if vaultfs.IsSkippedDir(info.Name()) {
 				return filepath.SkipDir
 			}
 			if rel != "." {
@@ -492,7 +583,10 @@ func scanVault(root string) (notes, folders []string, err error) {
 			}
 			return nil
 		}
-		if strings.HasSuffix(info.Name(), ".md") {
+		// The note predicate is shared with the scanner, so a transient file
+		// (e.g. an office lock) can never gain a Sync ID at enable and then be
+		// ignored by the authoritative scan as if it had disappeared.
+		if vaultfs.IsNoteFile(info.Name()) {
 			notes = append(notes, filepath.ToSlash(rel))
 		}
 		return nil
@@ -507,13 +601,20 @@ func scanVault(root string) (notes, folders []string, err error) {
 
 // writeDurable persists data to <root>/.memodump/sync-index.json following the
 // portable-index durability sequence: unique temp file, flush, preserve the
-// last known-good as .bak, atomic rename, directory sync where supported.
+// last known-good as .bak, atomic rename, directory sync where supported. It
+// is the production (os) entry point; Save and ReplaceIndex use
+// writeDurableWith so tests can inject failures at each numbered step.
+func writeDurable(root string, data []byte) error {
+	return writeDurableWith(osIndexIO{}, root, data)
+}
+
+// writeDurableWith is writeDurable over an explicit indexIO.
 //
 // The .bak file is written from the last VALID index (primary, else backup,
 // else the new bytes), never from the current primary blindly: a corrupt
 // primary (e.g. loaded-from-backup or post-crash state) must not clobber a
 // good backup. Both files therefore always hold a parseable index.
-func writeDurable(root string, data []byte) error {
+func writeDurableWith(io indexIO, root string, data []byte) error {
 	if err := checkMetadataSafe(root); err != nil {
 		return err
 	}
@@ -521,30 +622,30 @@ func writeDurable(root string, data []byte) error {
 	target := filepath.Join(dir, IndexName)
 	backup := filepath.Join(dir, BackupName)
 
-	backupBytes := knownGoodBytes(target, backup, data)
-	if err := writeFileAtomic(dir, IndexName, data); err != nil {
+	backupBytes := knownGoodBytes(io, target, backup, data)
+	if err := io.WriteFileAtomic(dir, IndexName, data); err != nil {
 		return err
 	}
 	// Skip rewriting .bak when it already holds the known-good bytes so a
 	// steady-state structural save is one rename, not two.
-	if b, err := os.ReadFile(backup); err != nil || !bytes.Equal(b, backupBytes) {
-		if err := writeFileAtomic(dir, BackupName, backupBytes); err != nil {
+	if b, err := io.ReadFile(backup); err != nil || !bytes.Equal(b, backupBytes) {
+		if err := io.WriteFileAtomic(dir, BackupName, backupBytes); err != nil {
 			return err
 		}
 	}
-	return syncDir(dir)
+	return io.SyncDir(dir)
 }
 
 // knownGoodBytes returns the last parseable index bytes: the current primary if
 // valid, else the current backup if valid, else fallback (the bytes being
 // written — the only known-good state, e.g. first enable or rebuild).
-func knownGoodBytes(primary, backup string, fallback []byte) []byte {
-	if b, err := os.ReadFile(primary); err == nil {
+func knownGoodBytes(io indexIO, primary, backup string, fallback []byte) []byte {
+	if b, err := io.ReadFile(primary); err == nil {
 		if _, perr := parseIndex(b); perr == nil {
 			return b
 		}
 	}
-	if b, err := os.ReadFile(backup); err == nil {
+	if b, err := io.ReadFile(backup); err == nil {
 		if _, perr := parseIndex(b); perr == nil {
 			return b
 		}
