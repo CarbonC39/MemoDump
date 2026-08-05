@@ -389,6 +389,32 @@ func (s *Store) LastAppliedSeq() int64 {
 	return s.lastApplied
 }
 
+// Len reports how many keys of durable state this replica holds. It is a plain
+// count, not a statement about baseline knowledge — cursors and config keys
+// count too. Use HasAnyBaseline for baseline-unknown detection.
+func (s *Store) Len() int {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return len(s.state)
+}
+
+// HasAnyBaseline reports whether the durable state holds at least one per-entity
+// baseline. A replica with none has no baseline knowledge — either it has never
+// synced or its AppData was lost — and every indexed entity must be treated as
+// baseline-unknown and probed before any action. Non-baseline durable state
+// (cursors, config) never counts, so a replica that has only ever stored a
+// cursor is still baseline-unknown.
+func (s *Store) HasAnyBaseline() bool {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	for k := range s.state {
+		if strings.HasPrefix(k, baselineKeyPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // Metrics returns a copy of the cumulative counters.
 func (s *Store) Metrics() Metrics {
 	s.metricsMu.Lock()
