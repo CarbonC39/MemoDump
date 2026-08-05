@@ -4,6 +4,7 @@
       :is="editorComponent"
       :document-version="documentVersion"
       :initial-content="initialContent"
+      :active="active"
       @update="$emit('update', $event)"
       @document-ready="$emit('document-ready', $event)"
       @error="handleInitError"
@@ -54,6 +55,7 @@ import { preloadMilkdownEditor } from './milkdownLoader'
 defineProps({
   documentVersion: { type: Number, required: true },
   initialContent: { type: String, default: '' },
+  active: { type: Boolean, default: true },
 })
 defineEmits(['update', 'document-ready', 'fallback-raw'])
 

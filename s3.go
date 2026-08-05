@@ -41,9 +41,20 @@ type imageS3Config struct {
 	PublicBaseURL  string              `json:"publicBaseUrl,omitempty"`
 	AccessKey      string              `json:"accessKey,omitempty"`
 	SecretKey      string              `json:"secretKey,omitempty"`
-	ForcePathStyle bool                `json:"forcePathStyle,omitempty"`
+	ForcePathStyle bool                `json:"forcePathStyle"`
 	Cleanup        *imageCleanupConfig `json:"cleanup,omitempty"`
 }
+
+// imageTransferError preserves the actionable failure category across the Go
+// proxy boundary. The frontend must not have to infer S3 auth/config failures
+// from a generic 502 response.
+type imageTransferError struct {
+	Code string
+	Err  error
+}
+
+func (e *imageTransferError) Error() string { return e.Err.Error() }
+func (e *imageTransferError) Unwrap() error { return e.Err }
 
 // CLI flag overrides (bound in main_cli.go). They have the highest priority.
 var (
@@ -67,6 +78,15 @@ func loadImageConfigFile() (imageS3Config, bool) {
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return cfg, false
+	}
+	// Older config files omitted false-valued booleans. Missing means the
+	// documented/default path-style behavior; newly written files always carry
+	// the field so an explicit false survives reloads.
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(data, &fields) == nil {
+		if _, present := fields["forcePathStyle"]; !present {
+			cfg.ForcePathStyle = true
+		}
 	}
 	return cfg, true
 }
@@ -138,7 +158,10 @@ func overlayImageConfigValue(cfg *imageS3Config, key, val string) {
 // flags → env → .env → data-dir file, so changing the persisted file applies
 // immediately without a restart.
 func effectiveImageS3Config() imageS3Config {
-	cfg, _ := loadImageConfigFile()
+	cfg, hasFile := loadImageConfigFile()
+	if !hasFile {
+		cfg.ForcePathStyle = true
+	}
 	for _, key := range []string{
 		"ENDPOINT", "REGION", "BUCKET", "PREFIX", "PUBLIC_URL", "ACCESS_KEY",
 		"SECRET_KEY", "FORCE_PATH_STYLE",
@@ -152,6 +175,12 @@ func effectiveImageS3Config() imageS3Config {
 	overlayImageConfigValue(&cfg, "PUBLIC_URL", imageS3PublicURL)
 	overlayImageConfigValue(&cfg, "ACCESS_KEY", imageS3AccessKey)
 	overlayImageConfigValue(&cfg, "SECRET_KEY", imageS3SecretKey)
+	// A persisted `provider: local` must not suppress a higher-priority S3
+	// configuration supplied by flags/env/.env.
+	if imageConfigHasHigherOverride() {
+		cfg.Provider = "s3"
+	}
+	_ = normalizeImageURLs(&cfg, true)
 	return cfg
 }
 
@@ -178,6 +207,25 @@ func s3Active(cfg imageS3Config) bool {
 	return cfg.Provider != "local" &&
 		cfg.Endpoint != "" && cfg.Bucket != "" &&
 		cfg.AccessKey != "" && cfg.SecretKey != "" && cfg.PublicBaseURL != ""
+}
+
+// imageTargetID is a secret-free revision of the effective destination. It is
+// persisted in each browser outbox entry and checked again by the upload
+// endpoint, so a retry can never silently use a newly changed server config.
+func imageTargetID(cfg imageS3Config) string {
+	if !s3Active(cfg) {
+		return "local"
+	}
+	region := cfg.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+	identity := strings.Join([]string{
+		strings.TrimRight(cfg.Endpoint, "/"), region, cfg.Bucket, cfg.Prefix,
+		cfg.PublicBaseURL, fmt.Sprintf("%t", cfg.ForcePathStyle),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(identity))
+	return "s3:" + hex.EncodeToString(sum[:])
 }
 
 // cleanupEnabled reports whether the periodic image cleanup is switched on.
@@ -263,7 +311,7 @@ func newMinioClient(cfg imageS3Config) (*minio.Client, error) {
 func s3PutImage(cfg imageS3Config, key, tmpPath string, size int64, contentType string) error {
 	client, err := newMinioClient(cfg)
 	if err != nil {
-		return fmt.Errorf("upload_failed: %w", err)
+		return &imageTransferError{Code: "invalid_config", Err: err}
 	}
 	f, err := os.Open(tmpPath)
 	if err != nil {
@@ -277,12 +325,36 @@ func s3PutImage(cfg imageS3Config, key, tmpPath string, size int64, contentType 
 	if _, err := client.PutObject(ctx, cfg.Bucket, objectName, f, size, minio.PutObjectOptions{
 		ContentType: contentType,
 	}); err != nil {
-		return fmt.Errorf("upload_failed: %w", err)
+		return classifyS3TransferError(err)
 	}
 	if err := verifyPublicImageURL(cfg, key); err != nil {
-		return fmt.Errorf("verify_failed: %w", err)
+		return &imageTransferError{Code: "verify_failed", Err: err}
 	}
 	return nil
+}
+
+func classifyS3TransferError(err error) error {
+	resp := minio.ToErrorResponse(err)
+	code := "server"
+	switch resp.Code {
+	case "InvalidAccessKeyId", "SignatureDoesNotMatch", "InvalidToken", "ExpiredToken":
+		code = "auth"
+	case "AccessDenied", "AllAccessDisabled":
+		code = "permission"
+	case "NoSuchBucket", "InvalidBucketName", "AuthorizationHeaderMalformed",
+		"PermanentRedirect", "InvalidRegion", "InvalidRequest":
+		code = "invalid_config"
+	default:
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			code = "auth"
+		case http.StatusForbidden:
+			code = "permission"
+		case http.StatusBadRequest, http.StatusNotFound, http.StatusConflict:
+			code = "invalid_config"
+		}
+	}
+	return &imageTransferError{Code: code, Err: err}
 }
 
 func objectNameForImage(cfg imageS3Config, key string) string {
@@ -357,6 +429,7 @@ func imageConfigPublic(cfg imageS3Config) map[string]any {
 	if !s3Active(cfg) {
 		return map[string]any{
 			"provider":   "local",
+			"targetId":   "local",
 			"configured": false,
 			"editable":   !imageConfigHasHigherOverride(),
 			"cleanup":    map[string]any{"enabled": cleanupEnabled(cfg)},
@@ -364,6 +437,7 @@ func imageConfigPublic(cfg imageS3Config) map[string]any {
 	}
 	return map[string]any{
 		"provider":      "s3",
+		"targetId":      imageTargetID(cfg),
 		"bucket":        cfg.Bucket,
 		"publicBaseUrl": cfg.PublicBaseURL,
 		"prefix":        cfg.Prefix,
@@ -371,6 +445,24 @@ func imageConfigPublic(cfg imageS3Config) map[string]any {
 		"editable":      !imageConfigHasHigherOverride(),
 		"cleanup":       map[string]any{"enabled": cleanupEnabled(cfg)},
 	}
+}
+
+// imageConfigEditorPublic is returned only from the authenticated image-config
+// endpoint. It includes every non-secret field required to edit and save the
+// config after a reload; secretKey remains server-only.
+func imageConfigEditorPublic(cfg imageS3Config) map[string]any {
+	result := imageConfigPublic(cfg)
+	if s3Active(cfg) {
+		result["endpoint"] = cfg.Endpoint
+		result["region"] = cfg.Region
+		result["accessKey"] = cfg.AccessKey
+		result["forcePathStyle"] = cfg.ForcePathStyle
+	}
+	return result
+}
+
+func handleImageConfigGet(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, imageConfigEditorPublic(effectiveImageS3Config()))
 }
 
 // handleImageConfigSave persists the S3 settings from the panel. Secrets are
@@ -412,34 +504,43 @@ func handleImageConfigSave(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Reverting to the local vault clears all stored S3 settings, but the
 		// cleanup preference is orthogonal and survives a provider switch.
-		req = imageS3Config{Provider: "local", Cleanup: req.Cleanup}
+		req = imageS3Config{Provider: "local", ForcePathStyle: true, Cleanup: req.Cleanup}
 	}
 
 	if err := saveImageConfigFile(req); err != nil {
 		writeImageErrorCode(w, http.StatusInternalServerError, "save_failed", "Failed to save image config")
 		return
 	}
-	writeJSON(w, http.StatusOK, imageConfigPublic(effectiveImageS3Config()))
+	writeJSON(w, http.StatusOK, imageConfigEditorPublic(effectiveImageS3Config()))
 }
 
 // handleImageConfigTest runs the server-side probe against the effective config
 // (or a candidate config from the request body, merged over the effective one).
 func handleImageConfigTest(w http.ResponseWriter, r *http.Request) {
 	cfg := effectiveImageS3Config()
+	original := cfg
 	var req imageS3Config
 	if r.ContentLength != 0 {
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		var raw map[string]json.RawMessage
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil || json.Unmarshal(body, &req) != nil || json.Unmarshal(body, &raw) != nil {
 			writeImageErrorCode(w, http.StatusBadRequest, "invalid_config", "Request format error")
 			return
 		}
-		mergeImageConfig(&cfg, req)
-	}
-	if !s3Active(cfg) {
-		writeImageErrorCode(w, http.StatusBadRequest, "invalid_config", "S3 is not configured")
-		return
+		_, forcePathStylePresent := raw["forcePathStyle"]
+		mergeImageConfig(&cfg, req, forcePathStylePresent)
 	}
 	if err := normalizeImageURLs(&cfg, true); err != nil {
 		writeImageErrorCode(w, http.StatusBadRequest, "invalid_config", err.Error())
+		return
+	}
+	if req.SecretKey == "" && (cfg.Endpoint != original.Endpoint || cfg.Bucket != original.Bucket || cfg.AccessKey != original.AccessKey) {
+		writeImageErrorCode(w, http.StatusBadRequest, "invalid_config",
+			"secretKey is required when changing endpoint, bucket or accessKey")
+		return
+	}
+	if !s3Active(cfg) {
+		writeImageErrorCode(w, http.StatusBadRequest, "invalid_config", "S3 is not configured")
 		return
 	}
 	warnings, err := testImageS3Config(cfg)
@@ -450,7 +551,7 @@ func handleImageConfigTest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "warnings": warnings})
 }
 
-func mergeImageConfig(dst *imageS3Config, src imageS3Config) {
+func mergeImageConfig(dst *imageS3Config, src imageS3Config, forcePathStylePresent bool) {
 	if src.Endpoint != "" {
 		dst.Endpoint = src.Endpoint
 	}
@@ -478,7 +579,7 @@ func mergeImageConfig(dst *imageS3Config, src imageS3Config) {
 	if src.SecretKey != "" {
 		dst.SecretKey = src.SecretKey
 	}
-	if src.ForcePathStyle {
-		dst.ForcePathStyle = true
+	if forcePathStylePresent {
+		dst.ForcePathStyle = src.ForcePathStyle
 	}
 }

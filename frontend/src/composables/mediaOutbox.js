@@ -25,6 +25,7 @@ const FLUSH_INTERVAL_MS = 30_000
 const NOTICE_DURATION_MS = 5000
 const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000 // daily
 const CLEANUP_TTL_MS = 30 * 24 * 60 * 60 * 1000
+const VERIFY_MAX_ATTEMPTS = 5
 
 export const pendingImageCount = ref(0)
 // Non-blocking, calm in-app notice ({ code } or null). Rendered by MainView.
@@ -142,6 +143,8 @@ function classifyError(e) {
   if (code) {
     switch (code) {
       case 'verify_failed': return { kind: 'verify-failed', retryable: true }
+      case 'auth': return { kind: 'auth', retryable: false }
+      case 'permission': return { kind: 'permission', retryable: false }
       case 'invalid_config': return { kind: 'invalid-config', retryable: false }
       case 'invalid_image_key':
       case 'unsupported_format':
@@ -151,6 +154,7 @@ function classifyError(e) {
       default: break
     }
   }
+  if (e?.kind === 'verify-failed') return { kind: 'verify-failed', retryable: true }
   const status = e?.status || e?.response?.status
   if (status) {
     switch (status) {
@@ -173,7 +177,6 @@ function classifyError(e) {
       default: return { kind: 'server', retryable: true }
     }
   }
-  if (e?.kind === 'verify-failed') return { kind: 'verify-failed', retryable: true }
   if (e?.name === 'TypeError' && navigator.onLine) {
     return { kind: 'cors', retryable: false }
   }
@@ -316,6 +319,7 @@ function snapshotTarget(target) {
         bucket: target.bucket,
         prefix: target.prefix,
         publicBaseUrl: target.publicBaseUrl,
+        forcePathStyle: target.forcePathStyle,
       }
     : { id: target.id, provider: 'local' }
 }
@@ -329,7 +333,7 @@ async function uploadPending(entry) {
   if (entry.target.provider === 'local' || entry.target.transport === 'proxy') {
     // Web/Wails: the server proxies to the vault or to S3 and verifies public
     // readability itself; a 2xx means completed.
-    const response = await apiClient.imageUpload(entry.key, entry.blob, entry.contentType)
+    const response = await apiClient.imageUpload(entry.key, entry.blob, entry.contentType, entry.target.id)
     if (response.status >= 400) {
       const error = new Error(`Image upload failed: ${response.status}`)
       error.status = response.status
@@ -349,6 +353,7 @@ async function uploadPending(entry) {
   }, entry.key, entry.blob, entry.contentType)
   entry.state = 'uploaded'
   entry.uploadedAt = Date.now()
+  entry.verifyAttempts = 0
   await putEntry(entry)
   refreshCount().catch(() => {})
 }
@@ -358,6 +363,7 @@ async function verifyUploaded(entry) {
   if (!response.ok) {
     const error = new Error(`Image not readable yet: ${response.status}`)
     error.status = response.status
+    error.kind = 'verify-failed'
     throw error
   }
   await completeEntry(entry)
@@ -404,6 +410,10 @@ async function attemptUploadInner(id) {
   } catch (e) {
     const info = classifyError(e)
     entry.attempts += 1
+    if (info.kind === 'verify-failed') {
+      entry.verifyAttempts = (entry.verifyAttempts || 0) + 1
+      if (entry.verifyAttempts >= VERIFY_MAX_ATTEMPTS) info.retryable = false
+    }
     entry.lastError = { kind: info.kind, retryable: info.retryable, message: e?.message || String(e) }
     if (info.retryable) {
       entry.nextAttemptAt = Date.now() + (info.retryAfter || backoffDelay(entry.attempts))

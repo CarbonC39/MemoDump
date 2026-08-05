@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { objectUrl, normalizePublicBaseUrl, normalizePrefix, s3Probe, sha256Hex } from './s3Client'
+import { objectUrl, normalizePublicBaseUrl, normalizePrefix, s3Probe, s3PutObject, sha256Hex } from './s3Client'
 
 const mocks = vi.hoisted(() => ({ awsFetch: vi.fn(async () => ({ ok: true })) }))
 vi.mock('aws4fetch', () => ({
@@ -75,5 +75,24 @@ describe('s3Probe', () => {
     const result = await s3Probe(target)
     expect(result.ok).toBe(true)
     expect(result.warnings[0]).toContain('could not be removed')
+  })
+})
+
+describe('S3 addressing style', () => {
+  it('uses virtual-host style when forcePathStyle is false', async () => {
+    mocks.awsFetch.mockReset()
+    mocks.awsFetch.mockResolvedValue({ ok: true })
+    await s3PutObject({
+      endpoint: 'https://s3.us-west-2.amazonaws.com',
+      region: 'us-west-2',
+      bucket: 'memo-images',
+      prefix: 'notes',
+      accessKey: 'ak',
+      secretKey: 'sk',
+      forcePathStyle: false,
+    }, 'a.png', new Uint8Array([1]), 'image/png')
+    expect(mocks.awsFetch.mock.calls[0][0]).toBe(
+      'https://memo-images.s3.us-west-2.amazonaws.com/notes/a.png'
+    )
   })
 })

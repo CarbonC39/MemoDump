@@ -146,7 +146,9 @@ func TestR2ImageUploadRoundTrip(t *testing.T) {
 
 	mux := buildAPIMux()
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/images/"+key, bytes.NewReader(body)))
+	req := httptest.NewRequest(http.MethodPut, "/api/images/"+key, bytes.NewReader(body))
+	req.Header.Set("X-MemoDump-Image-Target", imageTargetID(cfg))
+	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("PUT status = %d: %s", rec.Code, redactR2(cfg, rec.Body.String()))
 	}

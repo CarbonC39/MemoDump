@@ -5,6 +5,7 @@
       v-show="mode === 'wysiwyg'"
       :document-version="editorKey"
       :initial-content="initialContent"
+      :active="mode === 'wysiwyg'"
       @update="$emit('update', $event)"
       @document-ready="$emit('document-ready', $event)"
       @fallback-raw="$emit('update:mode', 'raw')"

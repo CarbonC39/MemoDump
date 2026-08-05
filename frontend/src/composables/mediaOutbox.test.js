@@ -6,6 +6,7 @@ vi.mock('../api', () => ({
     imageUpload: vi.fn(),
     imageConfigSave: vi.fn(),
     imageConfigTest: vi.fn(),
+    imageConfigGet: vi.fn().mockResolvedValue({ data: { provider: 'local', targetId: 'local' } }),
     config: vi.fn().mockResolvedValue({ data: { image: { provider: 'local' } } }),
   },
 }))
@@ -58,11 +59,13 @@ beforeEach(async () => {
   settings.provider = 'local'
   settings.configured = false
   settings.endpoint = ''
+  settings.region = 'us-east-1'
   settings.bucket = ''
   settings.prefix = ''
   settings.publicBaseUrl = ''
   settings.accessKey = ''
   settings.secretKey = ''
+  settings.targetId = 'local'
   settings.cleanupEnabled = false
   mediaNotice.value = null
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true })))
@@ -152,6 +155,17 @@ describe('S3 direct path', () => {
     await waitFor(() => pendingImageCount.value === 1)
     expect(resolvePending(url)).toMatch(/^blob:/)
   })
+
+  it('retries read verification a bounded number of times, then stops', async () => {
+    globalThis.fetch = vi.fn(async () => ({ ok: false, status: 404 }))
+    await stageAndUploadImage(pngFile())
+    await waitFor(() => globalThis.fetch.mock.calls.length === 1)
+    for (let i = 0; i < 4; i++) await retryAllPending()
+    expect(globalThis.fetch).toHaveBeenCalledTimes(5)
+    await flushPendingImages()
+    expect(globalThis.fetch).toHaveBeenCalledTimes(5)
+    expect(pendingImageCount.value).toBe(1)
+  })
 })
 
 describe('server S3 proxy path', () => {
@@ -160,6 +174,7 @@ describe('server S3 proxy path', () => {
     settings.bucket = 'memodump'
     settings.prefix = 'img'
     settings.publicBaseUrl = 'https://cdn.example.com'
+    settings.targetId = 's3:server-revision'
     apiClient.imageUpload.mockResolvedValue({ status: 201 })
 
     const url = await stageAndUploadImage(pngFile())
@@ -167,7 +182,22 @@ describe('server S3 proxy path', () => {
     await waitFor(() => apiClient.imageUpload.mock.calls.length === 1)
     await waitFor(() => pendingImageCount.value === 0)
     expect(apiClient.imageUpload).toHaveBeenCalledTimes(1)
+    expect(apiClient.imageUpload.mock.calls[0][3]).toBe('s3:server-revision')
     expect(s3PutObject).not.toHaveBeenCalled()
+  })
+
+  it('does not auto-retry structured proxy permission failures', async () => {
+    settings.provider = 's3'
+    settings.bucket = 'memodump'
+    settings.publicBaseUrl = 'https://cdn.example.com'
+    settings.targetId = 's3:server-revision'
+    apiClient.imageUpload.mockRejectedValue({
+      response: { status: 502, data: { error: { code: 'permission' } } },
+    })
+    await stageAndUploadImage(pngFile())
+    await waitFor(() => apiClient.imageUpload.mock.calls.length === 1)
+    await flushPendingImages()
+    expect(apiClient.imageUpload).toHaveBeenCalledTimes(1)
   })
 })
 

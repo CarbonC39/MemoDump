@@ -129,10 +129,11 @@ editor integration):
 
 - IndexedDB store `memodump-media`, primary key
   `id = targetId + ':' + key`, where `targetId` is a stable identifier of the
-  paste-time destination (`local`, or normalized
-  `s3:<endpoint>|<bucket>|<prefix>`). Records:
-  `{ id, url, key, target, state, blob, attempts, nextAttemptAt, lastError,
-  createdAt, uploadedAt? }`.
+  paste-time destination (`local`; a normalized destination identifier for a
+  direct browser target; or an opaque, secret-free server configuration
+  revision for the Go proxy). Records:
+  `{ id, url, key, target, state, blob, attempts, verifyAttempts,
+  nextAttemptAt, lastError, createdAt, uploadedAt? }`.
 - `target` is an **immutable snapshot** of the destination at paste time:
   `{ provider: 'local' }` or
   `{ provider: 's3', endpoint, bucket, prefix, publicBaseUrl, forcePathStyle }`.
@@ -142,7 +143,8 @@ editor integration):
   destination. Retries use the currently configured credentials for that
   destination; if the destination's configuration is gone (e.g. server no
   longer S3-configured, or S3 settings changed), the entry moves to a
-  `config-required` state: no automatic retries, only a configuration action.
+  permanent `config-required` error: no automatic retries, only a
+  retry/configuration action.
   This is the v1 rule; migration of pending entries to a new bucket is future
   work.
 - Dedupe: same `targetId + key` → reuse the existing entry/blob; a new node
@@ -232,8 +234,10 @@ retries; when offline, classify as `network`.
 Web/wails both edit the same server-side config through the settings panel; the
 UI is read-only only when the effective config comes from a higher-priority
 source (flags/env/`.env`). Secrets transit browser → server once over the
-authenticated API and are never returned to the client; `GET /api/config`
-exposes only provider / bucket / publicBaseUrl / prefix / configured / editable.
+authenticated API and are never returned to the client; public `GET /api/config`
+exposes only display-safe image status. Authenticated `GET /api/config/image`
+also returns the non-secret editable fields and the opaque target revision so
+the form survives reloads and queued uploads can be bound to one destination.
 Allowing any logged-in user to change this is consistent with MemoDump's
 single-account trust model (they can already read and delete every note).
 
@@ -416,10 +420,16 @@ New files: `s3.go`, `s3_test.go`. Edited: `main_cli.go` (flags/env),
   (HEAD or first-bytes GET of the public URL) and reports success only when the
   object is readable; partial failure returns an error with kind
   `verify-failed`.
+- The client sends `X-MemoDump-Image-Target` with the target revision captured
+  at staging time. The server rejects a missing/stale revision with 409 instead
+  of silently applying the current provider configuration.
 - `GET /api/config` extended to
   `image: { provider: 'local' | 's3', bucket?, publicBaseUrl?, prefix?,
   configured: bool, editable: bool }` — no secrets leave the server.
   `editable` is false when the effective config comes from flags/env/`.env`.
+- Authenticated `GET /api/config/image` returns the same status plus all
+  non-secret editable fields (`endpoint`, `region`, `accessKey`, and
+  `forcePathStyle`) and the opaque `targetId`; `secretKey` is never returned.
 - New `PUT /api/config/image` (authMiddleware): persists the S3 settings to
   the build's image-config file and applies them immediately — no restart.
   The path is a per-build package var using the same seam `sessionFile` uses:
@@ -485,11 +495,12 @@ New files: `frontend/src/composables/mediaOutbox.js`,
     (S3).
   - Pure frontend: direct S3 PUT via the chosen signing library; then verify
     via anonymous GET or the rendered image's `load` event before `completed`.
-- Record shape: `{ id, url, key, target, state, blob, attempts, nextAttemptAt,
-  lastError, createdAt, uploadedAt? }` with
+- Record shape: `{ id, url, key, target, state, blob, attempts, verifyAttempts,
+  nextAttemptAt, lastError, createdAt, uploadedAt? }` with
   `id = targetId + ':' + key` and the immutable `target` snapshot (no
   secrets). Provider/config switch → entries keep their destination; missing
-  destination config → `config-required` state with a configuration action.
+  destination config → a permanent `config-required` error with a
+  configuration action.
 - **Object URL lifecycle (no DOM scanning)**: create on first `resolvePending`
   and cache; do **not** eagerly revoke after upload success; revoke all cached
   object URLs on note unload / editor destroy and on page unload (refresh

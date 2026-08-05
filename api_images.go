@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -132,6 +133,15 @@ func handleImagePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// S3 uploads are bound to the destination revision captured when the image
+	// entered the browser outbox. If server config changed in the meantime, fail
+	// closed instead of sending the blob to the new destination.
+	s3Cfg := effectiveImageS3Config()
+	if r.Header.Get("X-MemoDump-Image-Target") != imageTargetID(s3Cfg) {
+		writeImageErrorCode(w, http.StatusConflict, "invalid_config", "Image destination config changed; review settings")
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, imageSizeLimit)
 
 	vaultDir := filepath.Join(dataDir, imageVaultDir)
@@ -203,11 +213,12 @@ func handleImagePut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// S3 mode: the server proxies the upload and verifies public readability.
-	if s3Cfg := effectiveImageS3Config(); s3Active(s3Cfg) {
+	if s3Active(s3Cfg) {
 		if err := s3PutImage(s3Cfg, key, tmpPath, written, format.contentType); err != nil {
-			code := "upload_failed"
-			if strings.HasPrefix(err.Error(), "verify_failed:") {
-				code = "verify_failed"
+			code := "server"
+			var transferErr *imageTransferError
+			if errors.As(err, &transferErr) {
+				code = transferErr.Code
 			}
 			writeImageErrorCode(w, http.StatusBadGateway, code, err.Error())
 			return

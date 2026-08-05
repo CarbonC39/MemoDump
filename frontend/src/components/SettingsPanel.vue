@@ -211,7 +211,7 @@
               <span class="setting-row-label">Region</span>
               <input type="text" class="input input-select" v-model.trim="imageDraft.region"
                      :disabled="!isLocalImageBuild && !imageSettings.editable"
-                     placeholder="auto" />
+                     placeholder="us-east-1" />
             </div>
             <div class="setting-row">
               <span class="setting-row-label">Bucket</span>
@@ -357,7 +357,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useI18n } from '../i18n'
 const { t, locale, setLocale } = useI18n()
 
@@ -431,6 +431,10 @@ function syncImageDraft() {
   imageDraft.forcePathStyle = imageSettings.forcePathStyle
   imageDraft.cleanupEnabled = imageSettings.cleanupEnabled
 }
+
+// MainView initializes image settings after child setup. Keep the editable
+// draft in sync with that async hydration and with successful saves.
+watch(imageSettings, syncImageDraft, { deep: true })
 
 function onCleanupToggle() {
   if (imageDraft.cleanupEnabled) {

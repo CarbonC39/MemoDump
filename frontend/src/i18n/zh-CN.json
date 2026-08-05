@@ -104,7 +104,11 @@
     "imageOff": "图片上传未配置，请先在设置中配置图床。",
     "imageTooLarge": "图片超过 20 MiB 上限。",
     "imageFormat": "不支持的图片格式。",
-    "imageLoadFailed": "图片加载失败"
+    "imageLoadFailed": "图片加载失败",
+    "pendingImages": "张图片待上传",
+    "retry": "重试",
+    "retrying": "重试中…",
+    "openSettings": "设置"
   },
   "modals": {
     "cancel": "取消",

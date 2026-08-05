@@ -1,6 +1,6 @@
 // Image hosting settings. Pure-frontend build (VITE_LOCAL=1) stores the config
 // in localStorage (may contain secrets — the settings UI warns about this).
-// Web/Wails builds read the effective config from /api/config (secrets never
+// Web/Wails builds read the effective config from /api/config/image (secrets never
 // leave the server) and persist edits via PUT /api/config/image.
 import { reactive } from 'vue'
 import apiClient from '../api'
@@ -16,7 +16,7 @@ const state = reactive({
   configured: false,
   editable: true,
   endpoint: '',
-  region: 'auto',
+  region: 'us-east-1',
   bucket: '',
   prefix: '',
   publicBaseUrl: '',
@@ -24,13 +24,14 @@ const state = reactive({
   secretKey: '',
   forcePathStyle: true,
   cleanupEnabled: false,
+  targetId: isLocalBuild ? '' : 'local',
 })
 
 function applyLocal(cfg) {
   state.provider = cfg.provider === 's3' ? 's3' : (isLocalBuild ? 'off' : 'local')
   state.configured = cfg.provider === 's3'
   state.endpoint = cfg.endpoint || ''
-  state.region = cfg.region || 'auto'
+  state.region = cfg.region || 'us-east-1'
   state.bucket = cfg.bucket || ''
   state.prefix = cfg.prefix || ''
   state.publicBaseUrl = cfg.publicBaseUrl || ''
@@ -38,6 +39,7 @@ function applyLocal(cfg) {
   state.secretKey = cfg.secretKey || ''
   state.forcePathStyle = cfg.forcePathStyle !== false
   state.cleanupEnabled = cfg.cleanup?.enabled === true
+  state.targetId = ''
 }
 
 function applyServer(image) {
@@ -47,7 +49,12 @@ function applyServer(image) {
   state.bucket = image.bucket || ''
   state.prefix = image.prefix || ''
   state.publicBaseUrl = image.publicBaseUrl || ''
+  state.endpoint = image.endpoint || ''
+  state.region = image.region || 'us-east-1'
+  state.accessKey = image.accessKey || ''
+  state.forcePathStyle = image.forcePathStyle !== false
   state.cleanupEnabled = image.cleanup?.enabled === true
+  state.targetId = image.targetId || (state.provider === 'local' ? 'local' : '')
   // Secrets are never returned by the server; keep the in-memory form values.
 }
 
@@ -60,13 +67,21 @@ function loadLocal() {
 
 export async function initImageSettings() {
   if (state.initialized) return
+  await refreshImageSettings()
+}
+
+export async function refreshImageSettings() {
   if (isLocalBuild) {
     loadLocal()
   } else {
     try {
-      const resp = await apiClient.config()
-      applyServer(resp.data.image || {})
-    } catch (_) {}
+      const resp = await apiClient.imageConfigGet()
+      applyServer(resp.data || {})
+    } catch (_) {
+      // A pre-login 401 redirects to Login. Leave initialization retryable so
+      // the newly mounted authenticated workspace fetches the real config.
+      return
+    }
   }
   state.initialized = true
 }
@@ -89,7 +104,7 @@ export function currentTarget() {
     const proxy = import.meta.env.VITE_LOCAL !== '1'
     return {
       id: proxy
-        ? `s3-proxy:${state.publicBaseUrl.trim()}|${bucket}|${prefix}`
+        ? state.targetId
         : `s3:${endpoint}|${bucket}|${prefix}`,
       provider: 's3',
       transport: proxy ? 'proxy' : 'direct',
@@ -98,12 +113,13 @@ export function currentTarget() {
       bucket,
       prefix,
       publicBaseUrl: state.publicBaseUrl.trim(),
+      forcePathStyle: state.forcePathStyle,
       accessKey: state.accessKey,
       secretKey: state.secretKey,
     }
   }
   if (state.provider === 'local') {
-    return { id: 'local', provider: 'local' }
+    return { id: state.targetId || 'local', provider: 'local' }
   }
   return null
 }

@@ -32,7 +32,7 @@
       @expand-folder="loadFolderNode"
       @change-data-dir="changeDataDir"
       @logout="doLogout"
-      @toggle-settings="showSettings = !showSettings"
+      @toggle-settings="toggleSettings"
     />
 
     <!-- Main content -->
@@ -150,6 +150,17 @@
       </button>
     </div>
 
+    <div v-if="pendingImageCount > 0" class="draft-banner media-pending" role="status">
+      <span class="material-icons-outlined" style="font-size:18px;flex-shrink:0">cloud_upload</span>
+      <span>{{ pendingImageCount }} {{ t('media.pendingImages') }}</span>
+      <button class="draft-banner-action" :disabled="mediaRetrying" @click="retryPendingImages">
+        {{ mediaRetrying ? t('media.retrying') : t('media.retry') }}
+      </button>
+      <button class="draft-banner-action" @click="openImageSettings">
+        {{ t('media.openSettings') }}
+      </button>
+    </div>
+
     <FolderPickerDialog
       :visible="folderPicker.visible"
       :selected="folderPicker.selected"
@@ -208,8 +219,14 @@ import { useDialogs } from '../composables/useDialogs'
 import { useAutosave } from '../composables/useAutosave'
 import { useFileImport } from '../composables/useFileImport'
 import { useContextMenu } from '../composables/useContextMenu'
-import { initImageSettings } from '../composables/useImageSettings'
-import { initMediaOutbox, startMediaFlushLoop, mediaNotice } from '../composables/mediaOutbox'
+import { initImageSettings, refreshImageSettings } from '../composables/useImageSettings'
+import {
+  initMediaOutbox,
+  startMediaFlushLoop,
+  mediaNotice,
+  pendingImageCount,
+  retryAllPending,
+} from '../composables/mediaOutbox'
 import { outboxAll } from '../composables/outbox.js'
 import { useTheme } from '../composables/useTheme.js'
 import { useNoteEditor } from '../composables/useNoteEditor.js'
@@ -228,10 +245,34 @@ const { themeIcon, setTheme } = useTheme()
 const { isWailsApp, isLocalBuild, wailsDataDir, serverNoAuth, mobileSidebar, openSections, toggleSection, initWails, changeDataDir, doLogout } = useAppInit()
 
 const showSettings = ref(false)
+const mediaRetrying = ref(false)
 const isInitializing = ref(true)
 // Start fetching the editor chunk as soon as the main view is evaluated. This
 // runs in parallel with note/folder and IndexedDB initialization.
 preloadMilkdownEditor().catch(() => {})
+
+async function retryPendingImages() {
+  if (mediaRetrying.value) return
+  mediaRetrying.value = true
+  try {
+    await retryAllPending()
+  } finally {
+    mediaRetrying.value = false
+  }
+}
+
+async function openImageSettings() {
+  showSettings.value = true
+  await refreshImageSettings()
+}
+
+async function toggleSettings() {
+  if (showSettings.value) {
+    showSettings.value = false
+    return
+  }
+  await openImageSettings()
+}
 const layout = useCardLayout()
 provide('layout', layout)
 
@@ -459,6 +500,20 @@ provide('dnd', dnd)
 .draft-banner-close:hover { opacity: 1; }
 
 .media-notice { bottom: 64px; }
+.media-pending { bottom: 64px; }
+.media-notice + .media-pending { bottom: 116px; }
+.draft-banner-action {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.draft-banner-action:disabled { cursor: default; opacity: 0.6; }
 
 @media (max-width: 768px) {
   /* Prevent iOS zoom on input focus by ensuring font-size >= 16px */

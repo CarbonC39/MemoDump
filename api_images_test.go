@@ -71,6 +71,7 @@ func imageTestMux(t *testing.T) http.Handler {
 func putImage(t *testing.T, mux http.Handler, key string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPut, "/api/images/"+key, bytes.NewReader(body))
+	req.Header.Set("X-MemoDump-Image-Target", imageTargetID(effectiveImageS3Config()))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec
@@ -164,6 +165,19 @@ func TestImagePutRejectsHashMismatch(t *testing.T) {
 	key := imageHash([]byte("some other content")) + ".png"
 	if rec := putImage(t, mux, key, pngBody()); rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestImagePutRejectsStaleTargetAfterSwitchToLocal(t *testing.T) {
+	mux := imageTestMux(t)
+	body := pngBody()
+	key := imageHash(body) + ".png"
+	req := httptest.NewRequest(http.MethodPut, "/api/images/"+key, bytes.NewReader(body))
+	req.Header.Set("X-MemoDump-Image-Target", "s3:old-destination")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want stale-target conflict; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

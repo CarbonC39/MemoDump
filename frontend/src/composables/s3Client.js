@@ -45,15 +45,20 @@ function newAwsClient(target) {
   return new AwsClient({
     accessKeyId: target.accessKey,
     secretAccessKey: target.secretKey,
-    region: target.region || 'auto',
+    region: target.region || 'us-east-1',
     service: 's3',
   })
 }
 
 function putBaseUrl(target) {
-  // v1 always signs a path-style URL; it works with AWS, R2, B2, MinIO, OSS
-  // and COS. forcePathStyle remains a server-side (minio) concern.
-  return String(target.endpoint || '').trim().replace(/\/+$/, '') + '/' + target.bucket
+  const endpoint = String(target.endpoint || '').trim().replace(/\/+$/, '')
+  if (target.forcePathStyle !== false) return endpoint + '/' + target.bucket
+
+  // Virtual-host style is required by some AWS deployments. Preserve an
+  // optional endpoint path while moving the bucket into the hostname.
+  const url = new URL(endpoint)
+  url.hostname = `${target.bucket}.${url.hostname}`
+  return url.toString().replace(/\/+$/, '')
 }
 
 export async function s3PutObject(target, key, body, contentType) {

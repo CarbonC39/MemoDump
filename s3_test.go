@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/minio/minio-go/v7"
 )
 
 type imageURLFixture struct {
@@ -167,6 +170,125 @@ func TestImageConfigSaveSecretRotation(t *testing.T) {
 	}
 }
 
+func TestImageConfigDefaultsAndPersistsPathStyle(t *testing.T) {
+	oldFile := imageConfigFile
+	imageConfigFile = filepath.Join(t.TempDir(), ".image-config.json")
+	t.Cleanup(func() { imageConfigFile = oldFile })
+
+	if cfg := effectiveImageS3Config(); !cfg.ForcePathStyle {
+		t.Fatal("config without a file should default forcePathStyle to true")
+	}
+	if err := saveImageConfigFile(imageS3Config{Provider: "s3", ForcePathStyle: false}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, ok := loadImageConfigFile(); !ok || cfg.ForcePathStyle {
+		t.Fatalf("explicit false did not survive reload: %#v ok=%v", cfg, ok)
+	}
+}
+
+func TestImageConfigGetSupportsReloadedEdits(t *testing.T) {
+	oldDataDir, oldFile, oldNoAuth := dataDir, imageConfigFile, noAuth
+	dataDir = t.TempDir()
+	imageConfigFile = filepath.Join(dataDir, ".image-config.json")
+	noAuth = true
+	t.Cleanup(func() { dataDir, imageConfigFile, noAuth = oldDataDir, oldFile, oldNoAuth })
+
+	stored := imageS3Config{
+		Provider: "s3", Endpoint: "https://s3.example.com", Region: "us-west-2",
+		Bucket: "b", Prefix: "images", PublicBaseURL: "https://cdn.example.com",
+		AccessKey: "ak", SecretKey: "sk", ForcePathStyle: false,
+	}
+	if err := saveImageConfigFile(stored); err != nil {
+		t.Fatal(err)
+	}
+	mux := buildAPIMux()
+	req := httptest.NewRequest(http.MethodGet, "/api/config/image", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var editable map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &editable); err != nil {
+		t.Fatal(err)
+	}
+	if editable["endpoint"] != stored.Endpoint || editable["accessKey"] != stored.AccessKey || editable["region"] != stored.Region {
+		t.Fatalf("editable config missing reload fields: %#v", editable)
+	}
+	if _, ok := editable["secretKey"]; ok {
+		t.Fatal("authenticated config response must not expose secretKey")
+	}
+
+	editable["publicBaseUrl"] = "https://new-cdn.example.com"
+	editable["cleanup"] = map[string]any{"enabled": true}
+	body, _ := json.Marshal(editable)
+	req = httptest.NewRequest(http.MethodPut, "/api/config/image", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reload-save status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	got, _ := loadImageConfigFile()
+	if got.SecretKey != "sk" || got.PublicBaseURL != "https://new-cdn.example.com" || !cleanupEnabled(got) {
+		t.Fatalf("saved config = %#v", got)
+	}
+}
+
+func TestHigherPriorityS3OverridesPersistedLocalProvider(t *testing.T) {
+	oldFile := imageConfigFile
+	imageConfigFile = filepath.Join(t.TempDir(), ".image-config.json")
+	t.Cleanup(func() { imageConfigFile = oldFile })
+	if err := saveImageConfigFile(imageS3Config{Provider: "local", ForcePathStyle: true}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MEMODUMP_IMAGE_S3_ENDPOINT", "https://s3.example.com")
+	t.Setenv("MEMODUMP_IMAGE_S3_BUCKET", "b")
+	t.Setenv("MEMODUMP_IMAGE_S3_PUBLIC_URL", "https://cdn.example.com")
+	t.Setenv("MEMODUMP_IMAGE_S3_ACCESS_KEY", "ak")
+	t.Setenv("MEMODUMP_IMAGE_S3_SECRET_KEY", "sk")
+	if cfg := effectiveImageS3Config(); cfg.Provider != "s3" || !s3Active(cfg) {
+		t.Fatalf("higher-priority S3 config did not activate: %#v", cfg)
+	}
+}
+
+func TestMergeImageConfigCanDisablePathStyle(t *testing.T) {
+	dst := imageS3Config{ForcePathStyle: true}
+	mergeImageConfig(&dst, imageS3Config{ForcePathStyle: false}, true)
+	if dst.ForcePathStyle {
+		t.Fatal("explicit false forcePathStyle was not applied")
+	}
+}
+
+func TestClassifyS3TransferErrorPreservesActionableKind(t *testing.T) {
+	cases := []struct {
+		response minio.ErrorResponse
+		want     string
+	}{
+		{minio.ErrorResponse{Code: "InvalidAccessKeyId", StatusCode: http.StatusForbidden}, "auth"},
+		{minio.ErrorResponse{Code: "AccessDenied", StatusCode: http.StatusForbidden}, "permission"},
+		{minio.ErrorResponse{Code: "NoSuchBucket", StatusCode: http.StatusNotFound}, "invalid_config"},
+		{minio.ErrorResponse{Code: "InternalError", StatusCode: http.StatusInternalServerError}, "server"},
+	}
+	for _, tc := range cases {
+		var transferErr *imageTransferError
+		if err := classifyS3TransferError(tc.response); !errors.As(err, &transferErr) || transferErr.Code != tc.want {
+			t.Errorf("%s classified as %#v, want %s", tc.response.Code, transferErr, tc.want)
+		}
+	}
+}
+
+func TestImageTargetIDChangesWithDestination(t *testing.T) {
+	cfg := imageS3Config{
+		Provider: "s3", Endpoint: "https://one.example.com", Region: "us-east-1",
+		Bucket: "b", PublicBaseURL: "https://cdn.example.com", AccessKey: "ak", SecretKey: "sk",
+	}
+	first := imageTargetID(cfg)
+	cfg.Endpoint = "https://two.example.com"
+	if second := imageTargetID(cfg); first == second {
+		t.Fatal("destination revision did not change with endpoint")
+	}
+}
+
 // fakeS3Server accepts unauthenticated S3-shaped requests and records the
 // objects it has seen. HEAD/GET return 200; DELETE can be configured to fail.
 func fakeS3Server(t *testing.T, failDelete bool) (*httptest.Server, *sync.Map) {
@@ -220,6 +342,26 @@ func TestImageConfigTestConnection(t *testing.T) {
 	}
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+}
+
+func TestImageConfigTestRejectsIdentityChangeWithoutSecret(t *testing.T) {
+	oldFile, oldNoAuth := imageConfigFile, noAuth
+	imageConfigFile = filepath.Join(t.TempDir(), ".image-config.json")
+	noAuth = true
+	t.Cleanup(func() { imageConfigFile, noAuth = oldFile, oldNoAuth })
+	if err := saveImageConfigFile(imageS3Config{
+		Provider: "s3", Endpoint: "https://old.example.com", Bucket: "b",
+		PublicBaseURL: "https://cdn.example.com", AccessKey: "ak", SecretKey: "sk",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"provider":"s3","endpoint":"https://new.example.com","bucket":"b","accessKey":"ak"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/image/test", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	buildAPIMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "secretKey") {
+		t.Fatalf("status = %d body=%s, want secret rotation rejection", rec.Code, rec.Body.String())
 	}
 }
 
@@ -318,6 +460,30 @@ func TestImagePutInS3ModeVerifyFailure(t *testing.T) {
 	}
 }
 
+func TestImagePutRejectsStaleS3Target(t *testing.T) {
+	oldDataDir, oldNoAuth := dataDir, noAuth
+	dataDir = t.TempDir()
+	noAuth = true
+	t.Cleanup(func() { dataDir, noAuth = oldDataDir, oldNoAuth })
+	srv, _ := fakeS3Server(t, false)
+	t.Setenv("MEMODUMP_IMAGE_S3_ENDPOINT", srv.URL)
+	t.Setenv("MEMODUMP_IMAGE_S3_BUCKET", "test-bucket")
+	t.Setenv("MEMODUMP_IMAGE_S3_PUBLIC_URL", srv.URL+"/test-bucket")
+	t.Setenv("MEMODUMP_IMAGE_S3_ACCESS_KEY", "ak")
+	t.Setenv("MEMODUMP_IMAGE_S3_SECRET_KEY", "sk")
+	t.Setenv("MEMODUMP_IMAGE_S3_FORCE_PATH_STYLE", "true")
+
+	body := pngBody()
+	key := imageHash(body) + ".png"
+	req := httptest.NewRequest(http.MethodPut, "/api/images/"+key, bytes.NewReader(body))
+	req.Header.Set("X-MemoDump-Image-Target", "s3:stale")
+	rec := httptest.NewRecorder()
+	buildAPIMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "invalid_config") {
+		t.Fatalf("status = %d body=%s, want stale-target conflict", rec.Code, rec.Body.String())
+	}
+}
+
 func TestConfigEndpointReportsS3(t *testing.T) {
 	oldDataDir := dataDir
 	dataDir = t.TempDir()
@@ -347,6 +513,12 @@ func TestConfigEndpointReportsS3(t *testing.T) {
 	}
 	if _, hasSecret := resp.Image["secretKey"]; hasSecret {
 		t.Fatal("config endpoint must not expose secrets")
+	}
+	if _, hasEndpoint := resp.Image["endpoint"]; hasEndpoint {
+		t.Fatal("unauthenticated config endpoint must not expose the S3 endpoint")
+	}
+	if _, hasAccessKey := resp.Image["accessKey"]; hasAccessKey {
+		t.Fatal("unauthenticated config endpoint must not expose the access-key ID")
 	}
 	if resp.Image["editable"] != false {
 		t.Fatalf("editable = %v, want false when env-configured", resp.Image["editable"])

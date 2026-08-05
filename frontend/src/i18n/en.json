@@ -104,7 +104,11 @@
     "imageOff": "Image upload is not configured — set it up in Settings first.",
     "imageTooLarge": "Image exceeds the 20 MiB limit.",
     "imageFormat": "Unsupported image format.",
-    "imageLoadFailed": "Image failed to load"
+    "imageLoadFailed": "Image failed to load",
+    "pendingImages": "image(s) waiting to upload",
+    "retry": "Retry",
+    "retrying": "Retrying…",
+    "openSettings": "Settings"
   },
   "modals": {
     "cancel": "Cancel",
