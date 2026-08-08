@@ -224,18 +224,32 @@ Purpose: prove decisions without filesystem, IndexedDB, HTTP, or providers.
 
 ### Minimum shared scenarios
 
+The pure decision traces cover the reconciliation space:
+
 - first local upload, first remote download, identical onboarding;
-- one-sided edit and rename;
-- simultaneous identical edit;
-- divergent note edits;
+- one-sided edit and rename, simultaneous identical edit;
+- divergent note edits, recreate-from-deleted-baseline (identical and divergent);
 - local delete, remote tombstone, and both directions of edit/delete;
 - deterministic conflict create replay and create-response loss;
 - stale replace CAS followed by remote read;
-- snapshot missing/corrupt and snapshot-write failure;
 - remote object physically missing versus valid tombstone;
-- repository/profile mismatch;
-- path collision, invalid record, parent cycle, folder structural conflict;
-- cursor rejection and a blocked change preventing cursor advancement.
+- path collision, invalid record, parent cycle, folder structural conflict.
+
+Coordinator-boundary scenarios are intentionally NOT per-entity decision
+traces and are verified at their own layer instead:
+
+- **remote faults** (write-response loss, stale precondition, cursor
+  rejection, incomplete listing) are injected into the Go simulator and proven
+  to converge there; the shared traces keep the pure decision space.
+- **snapshot missing/corrupt and snapshot-write failure** are SnapshotStore and
+  coordinator concerns: `SnapshotStore.Load` classifies them (Phase 1), a
+  missing/corrupt snapshot drives the no-baseline decisions already traced, and
+  the write-failure-then-converge-by-L==R behavior is exercised in Phase 3.
+- **repository/profile mismatch** is a setup/`SnapshotStore.Load` outcome that
+  stops or requires confirmation before any engine decision; it is proven by
+  the Phase 1 load-classification tests and the Phase 3 coordinator.
+- **a blocked change preventing cursor advancement** is asserted by the
+  simulator (baseline/cursor do not advance past block/retry/repair).
 
 ### Exit gate
 

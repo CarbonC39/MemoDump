@@ -355,6 +355,49 @@ func TestBlockedChangeDoesNotAdvanceCursor(t *testing.T) {
 	}
 }
 
+// TestRecoveryKeyedByStateHash proves recovery is keyed by (Sync ID, state
+// hash): a second deletion of the same entity does not overwrite the first.
+func TestRecoveryKeyedByStateHash(t *testing.T) {
+	ctx := context.Background()
+	sc := findScenario(t, "remote-tombstone")
+	s, err := NewSim(sc.Initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.RunCycle(ctx, StepDone); err != nil {
+		t.Fatal(err)
+	}
+	first, ok := s.recovery[syncID_S]
+	if !ok {
+		t.Fatal("no recovery after the tombstone was applied")
+	}
+	if len(first) != 1 {
+		t.Fatalf("recovery has %d copies, want 1", len(first))
+	}
+	for h, md := range first {
+		if h != StateHash(tnoteHash(syncID_S, "idea", "", "# v1\n"), false) {
+			t.Errorf("recovery keyed by %s, want the v1 state hash", h)
+		}
+		if md != "# v1\n" {
+			t.Errorf("recovery body = %q, want the v1 markdown", md)
+		}
+	}
+	// The entity is recreated with different content and deleted again: the new
+	// copy is added under its own state hash, never overwriting the first.
+	s.files["idea.md"] = "# v2\n"
+	if err := s.recoverEntity(syncID_S); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.recovery[syncID_S]) != 2 {
+		t.Fatalf("second deletion overwrote the first: %+v", s.recovery[syncID_S])
+	}
+}
+
+func tnoteHash(id, name, parent, markdown string) string {
+	e := tnote(id, name, parent, markdown)
+	return e.ContentHash
+}
+
 func findScenario(t *testing.T, name string) Scenario {
 	t.Helper()
 	for _, sc := range loadScenarios(t) {

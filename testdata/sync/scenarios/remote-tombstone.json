@@ -136,8 +136,7 @@
     },
     "recovery": {
       "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8": {
-        "stateHash": "749bd9f7fd8e762d573ce434cfdd8fe3539dae2273fe693a0862e06331bcbff0",
-        "markdown": "# v1\n"
+        "749bd9f7fd8e762d573ce434cfdd8fe3539dae2273fe693a0862e06331bcbff0": "# v1\n"
       }
     }
   }

@@ -68,18 +68,19 @@ type ScenarioInitial struct {
 	Local           ScenarioLocalFiles `json:"local"`
 	Snapshot        *ScenarioSnapshot  `json:"snapshot"`
 	Remote          ScenarioRemote     `json:"remote"`
-	// Recovery holds recoverable delete copies keyed by Sync ID.
+	// Recovery holds the recoverable delete copies keyed by Sync ID, each
+	// further keyed by the deleted entity's state hash.
 	Recovery map[string]ScenarioRecovery `json:"recovery"`
 	// Blocked lists Sync IDs carrying a pre-computed path/graph conflict
 	// annotation (a path collision, parent cycle, or structural conflict).
 	Blocked []string `json:"blocked,omitempty"`
 }
 
-// ScenarioRecovery is one recoverable delete copy (content, never sync state).
-type ScenarioRecovery struct {
-	StateHash string `json:"stateHash"`
-	Markdown  string `json:"markdown"`
-}
+// ScenarioRecovery is one entity's recoverable-delete area: state hash ->
+// markdown. Keying by state hash keeps a second deletion of the same Sync ID
+// from overwriting the first (spec §3.3 double key), and old copies are never
+// garbage-collected automatically.
+type ScenarioRecovery map[string]string
 
 // ScenarioLocalObs is one entity's derived local input.
 type ScenarioLocalObs struct {
@@ -163,7 +164,7 @@ type Sim struct {
 	remote       *MemoryStore
 	baselines    map[string]ScenarioBaseline // durable snapshot
 	cursor       string
-	recovery     map[string]ScenarioRecovery // syncID -> recoverable delete copy
+	recovery     map[string]ScenarioRecovery // syncID -> stateHash -> markdown
 	revisions    map[string]string           // path -> local CAS token
 	blocked      map[string]bool             // sync IDs with a path/graph conflict annotation
 	failRecovery bool                        // inject a recovery write failure
@@ -822,7 +823,11 @@ func (s *Sim) recoverEntity(syncID string) error {
 		return nil // nothing present to recover
 	}
 	e := s.buildLocalEntity(syncID, entry.Path, entry.Kind)
-	s.recovery[syncID] = ScenarioRecovery{StateHash: StateHash(e.ContentHash, false), Markdown: md}
+	stateHash := StateHash(e.ContentHash, false)
+	if s.recovery[syncID] == nil {
+		s.recovery[syncID] = make(ScenarioRecovery)
+	}
+	s.recovery[syncID][stateHash] = md
 	return nil
 }
 
@@ -955,8 +960,12 @@ func cloneBaselines(m map[string]ScenarioBaseline) map[string]ScenarioBaseline {
 
 func cloneRecovery(m map[string]ScenarioRecovery) map[string]ScenarioRecovery {
 	out := make(map[string]ScenarioRecovery, len(m))
-	for k, v := range m {
-		out[k] = v
+	for k, inner := range m {
+		cp := make(ScenarioRecovery, len(inner))
+		for h, md := range inner {
+			cp[h] = md
+		}
+		out[k] = cp
 	}
 	return out
 }
