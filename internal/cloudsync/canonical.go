@@ -24,7 +24,7 @@ func canonicalBytes(v map[string]any) ([]byte, error) {
 }
 
 // CanonicalBytes is the exported form of canonicalBytes. It is used by the
-// device-state WAL for checksums and record serialization so one canonical JSON
+// disposable device snapshot (internal/syncstate) so one canonical JSON
 // implementation serves both the wire contract and durable local state.
 func CanonicalBytes(v map[string]any) ([]byte, error) { return canonicalBytes(v) }
 
@@ -70,8 +70,7 @@ func writeCanonicalValue(sb *strings.Builder, v any) error {
 		// literal form so integer-valued fields never become float64.
 		sb.WriteString(val.String())
 	case json.RawMessage:
-		// Raw bytes are emitted verbatim; callers pass already-canonical bytes
-		// (the device-state WAL constructs payloads through CanonicalBytes).
+		// Raw bytes are emitted verbatim; callers pass already-canonical bytes.
 		sb.Write(val)
 	case []any:
 		sb.WriteByte('[')

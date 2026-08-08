@@ -14,7 +14,7 @@ type DeviceID string
 
 // ReplicaID identifies one local checkout/copy of a vault on a device. Two
 // paths containing copies of the same Vault ID must never share device state,
-// cursors, or a WAL, so each path-scoped copy gets its own Replica ID.
+// cursors, or a snapshot, so each path-scoped copy gets its own Replica ID.
 type ReplicaID string
 
 func newDeviceID() DeviceID   { return DeviceID(uuid.NewString()) }

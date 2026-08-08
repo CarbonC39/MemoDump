@@ -1,7 +1,9 @@
-// Package syncscan reconciles a vault scan with the portable index and the
-// durable baselines, producing the complete deterministic local inputs for the
-// sync engine. It performs no cloud I/O and schedules no destructive action; it
-// only describes what the engine must account for.
+// Package syncscan derives deterministic local observations for the sync
+// engine from a vault scan and the portable index: which indexed entities are
+// present, missing, blocked, or unstable, which unindexed observations need a
+// Sync ID, and which unique rename/repair candidates exist. It performs no
+// remote, snapshot, or baseline decision — the engine compares these
+// observations against remote and snapshot state.
 package syncscan
 
 import (
@@ -11,73 +13,49 @@ import (
 
 	"memodump/internal/cloudsync"
 	"memodump/internal/syncindex"
-	"memodump/internal/syncstate"
 	"memodump/internal/vaultfs"
 )
 
-// State classifies one indexed entity against its durable baseline.
+// State classifies one indexed entity as a local observation. None of these
+// imply a deletion, a modification, or a baseline — they describe what the
+// filesystem shows, nothing more.
 type State int
 
 const (
-	// StateUnchanged: present and its content matches the baseline.
-	StateUnchanged State = iota
-	// StateModified: present but its content differs from the baseline.
-	StateModified
-	// StateLocalOnly: present with no baseline (the replica knows other
-	// baselines); the engine conditionally creates it remotely.
-	StateLocalOnly
-	// StateLocallyDeleted: the path is gone and a baseline existed; the engine
-	// may publish a tombstone.
-	StateLocallyDeleted
-	// StateRenamed: the path is gone and exactly one new unindexed note has the
-	// same content; the old Sync ID moves to it.
-	StateRenamed
-	// StateAmbiguous: the path is gone with no baseline; probe the remote and
-	// require an explicit deletion/recovery decision — never auto-delete.
-	StateAmbiguous
-	// StateBlocked: the path is a symlink or its kind flipped; never touched.
+	// StatePresent: the indexed path exists with the indexed kind and is
+	// readable; notes carry their current LocalHash.
+	StatePresent State = iota
+	// StateMissing: the indexed path is absent. Absence is an observation, not
+	// a deletion, until a usable baseline proves the entity existed remotely.
+	StateMissing
+	// StateBlocked: the path is a symlink, sits under a symlinked directory, or
+	// its kind flipped; it is never reported absent.
 	StateBlocked
 	// StateUnstable: present but still being written; defer to the next scan.
 	StateUnstable
-	// StateBaselineUnknown: the replica has no durable baseline knowledge
-	// (missing AppData, or never synced); probe before any action.
-	StateBaselineUnknown
 )
 
 func (s State) String() string {
 	switch s {
-	case StateUnchanged:
-		return "unchanged"
-	case StateModified:
-		return "modified"
-	case StateLocalOnly:
-		return "local-only"
-	case StateLocallyDeleted:
-		return "locally-deleted"
-	case StateRenamed:
-		return "renamed"
-	case StateAmbiguous:
-		return "ambiguous"
+	case StatePresent:
+		return "present"
+	case StateMissing:
+		return "missing"
 	case StateBlocked:
 		return "blocked"
 	case StateUnstable:
 		return "unstable"
-	case StateBaselineUnknown:
-		return "baseline-unknown"
 	}
 	return "unknown"
 }
 
-// Entity is one indexed entity's reconciled local state — the deterministic
-// local input the engine diffs against the remote.
+// Entity is one indexed entity's local observation.
 type Entity struct {
 	SyncID    string
 	Kind      string
-	Path      string // indexed path (for Renamed: the old path)
+	Path      string // indexed path
 	State     State
-	LocalHash string // current local digest when the note is readable
-	NewPath   string // StateRenamed: the observed destination path
-	Probe     bool   // requires a remote probe before any action
+	LocalHash string // current local digest when the note is present and readable
 }
 
 // NewEntity is an observed path with no Sync ID yet; it needs identity.
@@ -87,20 +65,31 @@ type NewEntity struct {
 	LocalHash string
 }
 
-// Reconciliation is the complete deterministic local input for the engine: the
-// current scan reconciled with indexed identity and durable baselines. It
-// schedules nothing — it only describes.
-type Reconciliation struct {
-	Entities        []Entity
-	New             []NewEntity
-	BaselineUnknown bool // the replica has no durable baseline knowledge
+// RepairHint is a unique crash/rename repair candidate: a missing indexed note
+// whose last-known content digest matches exactly one unindexed note. The
+// engine decides whether to apply it; anything ambiguous stays separate.
+type RepairHint struct {
+	SyncID    string // missing indexed note
+	Path      string // old indexed path
+	NewPath   string // the unique unindexed note with identical content
+	LocalHash string // the shared content digest
 }
 
-// Reconcile derives per-entity local state from a scan, the portable index,
-// and the durable baselines. It is read-only: ordinary note changes are
-// inferred from Markdown bytes and never append dirty WAL rows, and no index
-// mutation happens here (ApplyIdentity applies the identity decisions).
-func Reconcile(res *vaultfs.ScanResult, idx *syncindex.Store, st *syncstate.Store) (*Reconciliation, error) {
+// Reconciliation is the complete local input for the engine. It schedules
+// nothing — it only describes observations and repair candidates.
+type Reconciliation struct {
+	Entities []Entity
+	New      []NewEntity
+	Repairs  []RepairHint
+}
+
+// Reconcile derives per-entity local observations from a scan and the portable
+// index. lastKnown maps a Sync ID to its last-known local content digest
+// (vaultfs.LocalHash) and is used only to produce unique rename/repair hints;
+// when nil or empty, missing notes are plain missing observations and the
+// engine applies a lossless delete-plus-create interpretation or reports a
+// path conflict. It is read-only: no index mutation happens here.
+func Reconcile(res *vaultfs.ScanResult, idx *syncindex.Store, lastKnown map[string]string) (*Reconciliation, error) {
 	notes := make(map[string]vaultfs.Observation, len(res.Notes))
 	for _, n := range res.Notes {
 		notes[n.Path] = n
@@ -122,20 +111,12 @@ func Reconcile(res *vaultfs.ScanResult, idx *syncindex.Store, st *syncstate.Stor
 		indexed[e.Path] = true
 	}
 
-	// A replica with no durable baselines has no baseline knowledge: either it
-	// has never synced or its AppData was lost. Every indexed entity must be
-	// probed before any action (spec §5.4); nothing is ever auto-uploaded,
-	// deleted, or tombstoned in this state. Non-baseline durable state (a
-	// cursor or config key) does not count as baseline knowledge.
-	baselineUnknown := !st.HasAnyBaseline()
-	r := &Reconciliation{BaselineUnknown: baselineUnknown}
+	r := &Reconciliation{}
 
 	type missingRef struct {
-		syncID  string
-		kind    string
-		path    string
-		hasBase bool
-		hash    string // baseline local hash ("" when none)
+		syncID string
+		kind   string
+		path   string
 	}
 	var missing []missingRef
 
@@ -161,18 +142,7 @@ func Reconcile(res *vaultfs.ScanResult, idx *syncindex.Store, st *syncstate.Stor
 				r.Entities = append(r.Entities, Entity{SyncID: syncID, Kind: ent.Kind, Path: ent.Path, State: StateUnstable})
 				continue
 			}
-			m := missingRef{syncID: syncID, kind: ent.Kind, path: ent.Path}
-			if !baselineUnknown {
-				base, has, err := syncstate.GetBaseline(st, syncID)
-				if err != nil {
-					return nil, err
-				}
-				m.hasBase = has
-				if has {
-					m.hash = base.LocalHash
-				}
-			}
-			missing = append(missing, m)
+			missing = append(missing, missingRef{syncID: syncID, kind: ent.Kind, path: ent.Path})
 			continue
 		}
 		if obs.Kind != ent.Kind {
@@ -180,37 +150,19 @@ func Reconcile(res *vaultfs.ScanResult, idx *syncindex.Store, st *syncstate.Stor
 			r.Entities = append(r.Entities, Entity{SyncID: syncID, Kind: ent.Kind, Path: ent.Path, State: StateBlocked})
 			continue
 		}
-		e := Entity{SyncID: syncID, Kind: ent.Kind, Path: ent.Path}
+		e := Entity{SyncID: syncID, Kind: ent.Kind, Path: ent.Path, State: StatePresent}
 		if obs.Kind == cloudsync.KindNote {
 			e.LocalHash = obs.LocalHash
-		}
-		if baselineUnknown {
-			e.State = StateBaselineUnknown
-			e.Probe = true
-			r.Entities = append(r.Entities, e)
-			continue
-		}
-		base, has, err := syncstate.GetBaseline(st, syncID)
-		if err != nil {
-			return nil, err
-		}
-		switch {
-		case !has:
-			e.State = StateLocalOnly
-		case obs.Kind == cloudsync.KindNote && obs.LocalHash != base.LocalHash:
-			e.State = StateModified
-		default:
-			e.State = StateUnchanged
 		}
 		r.Entities = append(r.Entities, e)
 	}
 
-	// Offline rename inference: after downtime, a missing note whose baseline
-	// content hash matches EXACTLY ONE new unindexed note may be a move. Any
-	// ambiguity — two missing entities with the same hash, or two identical
-	// new files — is not used for rename inference; those new files are copies
-	// (new Sync IDs) and the missing originals are plain deletions.
-	renameTo := make(map[string]string)
+	// Unique rename/repair inference: a missing indexed note whose last-known
+	// content digest matches EXACTLY ONE new unindexed note may be a move. Any
+	// ambiguity — two missing entities with the same last-known hash, or two
+	// identical new files — is not used for repair inference; those new files
+	// are copies (new Sync IDs) and the missing originals remain missing.
+	repairTo := make(map[string]string)
 	if len(missing) > 0 {
 		newByHash := make(map[string][]string)
 		for _, n := range res.Notes {
@@ -221,54 +173,32 @@ func Reconcile(res *vaultfs.ScanResult, idx *syncindex.Store, st *syncstate.Stor
 		missingByHash := make(map[string]missingRef)
 		missingCountByHash := make(map[string]int)
 		for _, m := range missing {
-			if m.hasBase && m.hash != "" {
-				missingCountByHash[m.hash]++
-				missingByHash[m.hash] = m
+			if hash, ok := lastKnown[m.syncID]; ok && hash != "" {
+				missingCountByHash[hash]++
+				missingByHash[hash] = m
 			}
 		}
 		for hash, paths := range newByHash {
 			if len(paths) != 1 || missingCountByHash[hash] != 1 {
 				continue
 			}
-			renameTo[missingByHash[hash].syncID] = paths[0]
+			repairTo[missingByHash[hash].syncID] = paths[0]
 		}
 	}
-
 	for _, m := range missing {
-		switch {
-		case baselineUnknown:
-			r.Entities = append(r.Entities, Entity{
-				SyncID: m.syncID, Kind: m.kind, Path: m.path,
-				State: StateBaselineUnknown, Probe: true,
+		r.Entities = append(r.Entities, Entity{SyncID: m.syncID, Kind: m.kind, Path: m.path, State: StateMissing})
+		if newPath, ok := repairTo[m.syncID]; ok {
+			r.Repairs = append(r.Repairs, RepairHint{
+				SyncID: m.syncID, Path: m.path, NewPath: newPath, LocalHash: lastKnown[m.syncID],
 			})
-		case !m.hasBase:
-			// Index entry present but local path absent and no baseline is
-			// ambiguous (spec §5.4): probe remote, require an explicit
-			// deletion/recovery decision. A folder's baseline has an empty
-			// LocalHash by nature, so baseline presence is judged by hasBase
-			// alone; the hash only participates in note rename inference.
-			r.Entities = append(r.Entities, Entity{
-				SyncID: m.syncID, Kind: m.kind, Path: m.path,
-				State: StateAmbiguous, Probe: true,
-			})
-		default:
-			e := Entity{SyncID: m.syncID, Kind: m.kind, Path: m.path, State: StateLocallyDeleted}
-			if newPath, ok := renameTo[m.syncID]; ok {
-				e.State = StateRenamed
-				e.NewPath = newPath
-				e.LocalHash = m.hash // the new file's digest equals the baseline
-			}
-			r.Entities = append(r.Entities, e)
 		}
 	}
 
 	// New entities: unindexed observations that need Sync IDs. Paths claimed by
-	// an inferred rename take the old Sync ID and are not new.
+	// a repair candidate take the old Sync ID and are not new.
 	claimed := make(map[string]bool)
-	for _, e := range r.Entities {
-		if e.State == StateRenamed {
-			claimed[e.NewPath] = true
-		}
+	for _, h := range r.Repairs {
+		claimed[h.NewPath] = true
 	}
 	// res.Notes and res.Folders are path-sorted, so r.New is deterministic.
 	for _, n := range res.Notes {
@@ -286,11 +216,11 @@ func Reconcile(res *vaultfs.ScanResult, idx *syncindex.Store, st *syncstate.Stor
 }
 
 // ApplyIdentity applies the index-only identity decisions of a reconciliation:
-// inferred renames move the old Sync ID to the new path, and every unindexed
-// observation receives a fresh Sync ID. It never touches the WAL or the remote
-// and never deletes anything. The whole batch is built on a clone and committed
-// through ReplaceIndex only when every change validates, so a failing batch
-// leaves the store's index untouched — never a half-applied identity.
+// repair candidates move the old Sync ID to the new path, and every unindexed
+// observation receives a fresh Sync ID. It never touches the remote and never
+// deletes anything. The whole batch is built on a clone and committed through
+// ReplaceIndex only when every change validates, so a failing batch leaves the
+// store's index untouched — never a half-applied identity.
 func ApplyIdentity(r *Reconciliation, idx *syncindex.Store) error {
 	next := syncindex.New(idx.Index.VaultID)
 	for id, e := range idx.Index.Entities {
@@ -302,22 +232,19 @@ func ApplyIdentity(r *Reconciliation, idx *syncindex.Store) error {
 	}
 
 	claimed := make(map[string]bool)
-	for _, e := range r.Entities {
-		if e.State != StateRenamed {
-			continue
-		}
-		ent, ok := next.Entities[e.SyncID]
+	for _, hint := range r.Repairs {
+		ent, ok := next.Entities[hint.SyncID]
 		if !ok {
-			return fmt.Errorf("unknown syncId %s", e.SyncID)
+			return fmt.Errorf("unknown syncId %s", hint.SyncID)
 		}
-		if prev, ok := byPath[e.NewPath]; ok && prev != e.SyncID {
-			return fmt.Errorf("path %q already indexed as %s", e.NewPath, prev)
+		if prev, ok := byPath[hint.NewPath]; ok && prev != hint.SyncID {
+			return fmt.Errorf("path %q already indexed as %s", hint.NewPath, prev)
 		}
 		delete(byPath, ent.Path)
-		ent.Path = e.NewPath
-		next.Entities[e.SyncID] = ent
-		byPath[e.NewPath] = e.SyncID
-		claimed[e.NewPath] = true
+		ent.Path = hint.NewPath
+		next.Entities[hint.SyncID] = ent
+		byPath[hint.NewPath] = hint.SyncID
+		claimed[hint.NewPath] = true
 	}
 	for _, ne := range r.New {
 		if claimed[ne.Path] {

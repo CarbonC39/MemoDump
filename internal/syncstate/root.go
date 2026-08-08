@@ -1,5 +1,6 @@
-// Package syncstate holds one replica's durable device identity: the Device
-// ID, the path-scoped Replica registry, and the OS-level replica lock. Device
+// Package syncstate holds one replica's durable device identity and the single
+// disposable device snapshot: the Device ID, the path-scoped Replica registry,
+// the OS-level replica lock, and the atomic state.json snapshot store. Device
 // state lives outside the vault, under a configurable state root; nothing is
 // created there until sync is enabled.
 package syncstate
