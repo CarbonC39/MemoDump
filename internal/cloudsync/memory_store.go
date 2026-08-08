@@ -37,9 +37,19 @@ type logEntry struct {
 
 // Fault fails the next matching operation with err. Op is one of
 // "create", "replace", "remove", "read", "list". Faults are consumed in order.
+// The mode flags shape the failure:
+//   - UncertainWrite: the create/replace SUCCEEDS but returns Error, so the
+//     caller cannot know whether the write landed and must re-read;
+//   - CursorReject: List ignores even a valid cursor and returns a full
+//     baseline (as if the cursor were rejected by the provider);
+//   - IncompleteSkip: List omits the last N keys from an otherwise complete
+//     listing, simulating an incomplete scan.
 type Fault struct {
-	Op    string
-	Error *StoreError
+	Op             string
+	Error          *StoreError
+	UncertainWrite bool
+	CursorReject   bool
+	IncompleteSkip int
 }
 
 // NewMemoryStore creates an empty in-memory store.
@@ -54,13 +64,36 @@ func (s *MemoryStore) ArmFault(op string, err *StoreError) {
 	s.faults = append(s.faults, Fault{Op: op, Error: err})
 }
 
-func (s *MemoryStore) takeFault(op string) error {
+// ArmUncertainWrite queues a fault where the next create/replace performs the
+// write but returns err, so the caller must re-read to learn the outcome.
+func (s *MemoryStore) ArmUncertainWrite(op string, err *StoreError) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.faults = append(s.faults, Fault{Op: op, Error: err, UncertainWrite: true})
+}
+
+// ArmCursorReject queues a list fault that ignores a valid cursor and returns
+// a full baseline.
+func (s *MemoryStore) ArmCursorReject() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.faults = append(s.faults, Fault{Op: "list", CursorReject: true})
+}
+
+// ArmIncompleteList queues a list fault that omits the last skip keys.
+func (s *MemoryStore) ArmIncompleteList(skip int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.faults = append(s.faults, Fault{Op: "list", IncompleteSkip: skip})
+}
+
+func (s *MemoryStore) takeFault(op string) *Fault {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, f := range s.faults {
 		if f.Op == op {
 			s.faults = append(s.faults[:i], s.faults[i+1:]...)
-			return f.Error
+			return &f
 		}
 	}
 	return nil
@@ -92,18 +125,25 @@ func (s *MemoryStore) Create(ctx context.Context, key string, data []byte) (stri
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if err := s.takeFault("create"); err != nil {
-		return "", err
+	fault := s.takeFault("create")
+	if fault != nil && !fault.UncertainWrite {
+		return "", fault.Error
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, ok := s.objects[key]; ok {
+		s.mu.Unlock()
 		return "", &StoreError{Kind: ErrPreconditionFailed, Message: fmt.Sprintf("key %q exists", key)}
 	}
 	seq := s.nextSeq()
 	s.objects[key] = &memoryObject{data: append([]byte(nil), data...), version: s.versionString(seq)}
 	s.log = append(s.log, logEntry{seq: seq, key: key, typ: ChangeCreated, version: s.versionString(seq)})
-	return s.versionString(seq), nil
+	version := s.versionString(seq)
+	s.mu.Unlock()
+	if fault != nil {
+		// The write landed but the response was lost: the caller re-reads.
+		return "", fault.Error
+	}
+	return version, nil
 }
 
 // Replace stores data only when expectedVersion matches the current version.
@@ -111,23 +151,31 @@ func (s *MemoryStore) Replace(ctx context.Context, key string, data []byte, expe
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if err := s.takeFault("replace"); err != nil {
-		return "", err
+	fault := s.takeFault("replace")
+	if fault != nil && !fault.UncertainWrite {
+		return "", fault.Error
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	obj, ok := s.objects[key]
 	if !ok {
+		s.mu.Unlock()
 		return "", &StoreError{Kind: ErrNotFound, Message: fmt.Sprintf("key %q missing", key)}
 	}
 	if obj.version != expectedVersion {
+		s.mu.Unlock()
 		return "", &StoreError{Kind: ErrPreconditionFailed, Message: "stale expected version"}
 	}
 	seq := s.nextSeq()
 	obj.data = append([]byte(nil), data...)
 	obj.version = s.versionString(seq)
 	s.log = append(s.log, logEntry{seq: seq, key: key, typ: ChangeUpdated, version: s.versionString(seq)})
-	return s.versionString(seq), nil
+	version := s.versionString(seq)
+	s.mu.Unlock()
+	if fault != nil {
+		// The write landed but the response was lost: the caller re-reads.
+		return "", fault.Error
+	}
+	return version, nil
 }
 
 // Remove physically deletes a key, recording a ChangeDeleted in the log. This
@@ -154,8 +202,8 @@ func (s *MemoryStore) Read(ctx context.Context, key string) ([]byte, string, err
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}
-	if err := s.takeFault("read"); err != nil {
-		return nil, "", err
+	if f := s.takeFault("read"); f != nil {
+		return nil, "", f.Error
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -164,6 +212,27 @@ func (s *MemoryStore) Read(ctx context.Context, key string) ([]byte, string, err
 		return nil, "", &StoreError{Kind: ErrNotFound, Message: fmt.Sprintf("key %q missing", key)}
 	}
 	return append([]byte(nil), obj.data...), obj.version, nil
+}
+
+// Seed installs an object at an explicit version, used by the scenario runner
+// to rebuild durable remote state across restarts with stable versions. It is
+// not part of the RemoteStore contract.
+func (s *MemoryStore) Seed(key string, data []byte, version string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.objects[key]; ok {
+		return &StoreError{Kind: ErrPreconditionFailed, Message: fmt.Sprintf("key %q exists", key)}
+	}
+	seq, err := strconv.ParseInt(version, 10, 64)
+	if err != nil || seq <= 0 {
+		return fmt.Errorf("seed: bad version %q", version)
+	}
+	s.objects[key] = &memoryObject{data: append([]byte(nil), data...), version: version}
+	s.log = append(s.log, logEntry{seq: seq, key: key, typ: ChangeCreated, version: version})
+	if seq > s.seq {
+		s.seq = seq
+	}
+	return nil
 }
 
 // pendingChange carries the change plus the log seq used for delta pagination.
@@ -227,13 +296,21 @@ func (s *MemoryStore) resetBaseline(prefix string) ([]pendingChange, int64) {
 // A baseline scan pins a watermark (its SyncCursor) for ALL its pages, so a key
 // modified while pagination is in flight stays out of the baseline and is
 // reported by the next delta round. NextCursor continues the current scan;
-// SyncCursor is the position to persist and pass to the next List.
+// SyncCursor is the position to persist and pass to the next List. A full
+// listing enumerates the complete key set; a faulted incomplete listing is
+// damage the caller must detect.
 func (s *MemoryStore) List(ctx context.Context, prefix, cursor string) (ChangePage, error) {
 	if err := ctx.Err(); err != nil {
 		return ChangePage{}, err
 	}
-	if err := s.takeFault("list"); err != nil {
-		return ChangePage{}, err
+	fault := s.takeFault("list")
+	if fault != nil && fault.Error != nil {
+		return ChangePage{}, fault.Error
+	}
+	if fault != nil && fault.CursorReject {
+		// The provider rejects even a valid cursor: fall back to a full
+		// baseline scan so no event is ever skipped.
+		cursor = ""
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -294,6 +371,17 @@ func (s *MemoryStore) List(ctx context.Context, prefix, cursor string) (ChangePa
 	default:
 		// Empty cursor: full baseline scan at the current position.
 		pending, syncCursor = s.resetBaseline(prefix)
+	}
+
+	if fault != nil && fault.IncompleteSkip > 0 && !delta {
+		// Damage: the listing silently omits the last keys. Never report this
+		// as "everything is fine" — the caller treats an incomplete full list
+		// as suspect and re-lists.
+		if len(pending) > fault.IncompleteSkip {
+			pending = pending[:len(pending)-fault.IncompleteSkip]
+		} else {
+			pending = nil
+		}
 	}
 
 	const pageSize = 100

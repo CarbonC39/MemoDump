@@ -20,11 +20,21 @@ interface LogEntry {
   version: string
 }
 
-/** Deterministic fault: fails the next matching operation. Op is one of
- * "create", "replace", "remove", "read", "list". Faults are consumed in order. */
+/**
+ * Deterministic fault: fails the next matching operation. Op is one of
+ * "create", "replace", "remove", "read", "list". Faults are consumed in order.
+ * The mode flags shape the failure:
+ *  - uncertainWrite: the create/replace SUCCEEDS but throws error, so the
+ *    caller cannot know whether the write landed and must re-read;
+ *  - cursorReject: list ignores even a valid cursor (full baseline);
+ *  - incompleteSkip: list omits the last N keys (an incomplete scan).
+ */
 export interface Fault {
   op: string
   error: StoreError
+  uncertainWrite?: boolean
+  cursorReject?: boolean
+  incompleteSkip?: number
 }
 
 export class MemoryStore implements RemoteStore {
@@ -42,10 +52,27 @@ export class MemoryStore implements RemoteStore {
     this.faults.push({ op, error })
   }
 
-  private takeFault(op: string): StoreError | null {
+  /** Queues a fault where the next create/replace performs the write but
+   * throws error, so the caller must re-read to learn the outcome. */
+  armUncertainWrite(op: string, error: StoreError): void {
+    this.faults.push({ op, error, uncertainWrite: true })
+  }
+
+  /** Queues a list fault that ignores a valid cursor and returns a full
+   * baseline. */
+  armCursorReject(): void {
+    this.faults.push({ op: 'list', error: new StoreError('retryable-transport', 'cursor rejected'), cursorReject: true })
+  }
+
+  /** Queues a list fault that omits the last skip keys. */
+  armIncompleteList(skip: number): void {
+    this.faults.push({ op: 'list', error: new StoreError('retryable-transport', 'incomplete listing'), incompleteSkip: skip })
+  }
+
+  private takeFault(op: string): Fault | null {
     const idx = this.faults.findIndex(f => f.op === op)
     if (idx < 0) return null
-    return this.faults.splice(idx, 1)[0].error
+    return this.faults.splice(idx, 1)[0]
   }
 
   private nextSeq(): number {
@@ -59,19 +86,20 @@ export class MemoryStore implements RemoteStore {
 
   async create(key: string, bytes: Uint8Array): Promise<{ version: string }> {
     const fault = this.takeFault('create')
-    if (fault) throw fault
+    if (fault && !fault.uncertainWrite) throw fault.error
     if (this.objects.has(key)) {
       throw new StoreError('precondition-failed', `key ${key} exists`)
     }
     const seq = this.nextSeq()
     this.objects.set(key, { data: new Uint8Array(bytes), version: this.versionOf(seq) })
     this.log.push({ seq, key, type: 'created', version: this.versionOf(seq) })
+    if (fault) throw fault.error // write landed but the response was lost
     return { version: this.versionOf(seq) }
   }
 
   async replace(key: string, bytes: Uint8Array, expectedVersion: string): Promise<{ version: string }> {
     const fault = this.takeFault('replace')
-    if (fault) throw fault
+    if (fault && !fault.uncertainWrite) throw fault.error
     const obj = this.objects.get(key)
     if (!obj) throw new StoreError('not-found', `key ${key} missing`)
     if (obj.version !== expectedVersion) {
@@ -81,6 +109,7 @@ export class MemoryStore implements RemoteStore {
     obj.data = new Uint8Array(bytes)
     obj.version = this.versionOf(seq)
     this.log.push({ seq, key, type: 'updated', version: this.versionOf(seq) })
+    if (fault) throw fault.error // write landed but the response was lost
     return { version: this.versionOf(seq) }
   }
 
@@ -96,7 +125,7 @@ export class MemoryStore implements RemoteStore {
 
   async read(key: string): Promise<{ bytes: Uint8Array; version: string }> {
     const fault = this.takeFault('read')
-    if (fault) throw fault
+    if (fault) throw fault.error
     const obj = this.objects.get(key)
     if (!obj) throw new StoreError('not-found', `key ${key} missing`)
     return { bytes: new Uint8Array(obj.data), version: obj.version }
@@ -104,7 +133,12 @@ export class MemoryStore implements RemoteStore {
 
   async list(prefix: string, syncCursor?: string): Promise<ChangePage> {
     const fault = this.takeFault('list')
-    if (fault) throw fault
+    if (fault && fault.error && !fault.cursorReject && !fault.incompleteSkip) throw fault.error
+    if (fault?.cursorReject) {
+      // The provider rejects even a valid cursor: fall back to a full baseline
+      // scan so no event is ever skipped.
+      syncCursor = ''
+    }
 
     // Reconstruct the set of keys and versions present at a given log position.
     // The log is append-only, so this is deterministic across baseline pages.
@@ -121,7 +155,7 @@ export class MemoryStore implements RemoteStore {
       [...state.keys()].filter(k => k.startsWith(prefix)).sort()
 
     interface Pending { seq: number; change: Change }
-    const pending: Pending[] = []
+    let pending: Pending[] = []
     let lastSync = 0
     let delta = false
 
@@ -193,6 +227,11 @@ export class MemoryStore implements RemoteStore {
       const reset = resetBaseline()
       pending.push(...reset.changes)
       lastSync = reset.syncCursor
+    }
+
+    if (fault?.incompleteSkip && !delta) {
+      // Damage: the listing silently omits the last keys.
+      pending = pending.length > fault.incompleteSkip ? pending.slice(0, -fault.incompleteSkip) : []
     }
 
     const pageSize = 100

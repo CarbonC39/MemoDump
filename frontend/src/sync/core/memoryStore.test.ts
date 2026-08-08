@@ -83,6 +83,38 @@ describe('MemoryStore fault injection', () => {
     await expect(s.create('k2', enc.encode('v'))).rejects.toMatchObject({ kind: 'rate-limit' })
     await expect(s.create('k2', enc.encode('v'))).resolves.toBeTruthy()
   })
+
+  it('an uncertain write lands but throws, so the caller must re-read', async () => {
+    const s = new MemoryStore()
+    s.armUncertainWrite('create', new StoreError('retryable-transport', 'response lost'))
+    await expect(s.create('k', enc.encode('v'))).rejects.toMatchObject({ kind: 'retryable-transport' })
+    const { bytes, version } = await s.read('k')
+    expect(dec.decode(bytes)).toBe('v')
+
+    s.armUncertainWrite('replace', new StoreError('retryable-transport', 'response lost'))
+    await expect(s.replace('k', enc.encode('v2'), version)).rejects.toMatchObject({ kind: 'retryable-transport' })
+    const after = await s.read('k')
+    expect(dec.decode(after.bytes)).toBe('v2')
+  })
+
+  it('a rejected cursor falls back to a full baseline; an incomplete listing omits keys', async () => {
+    const s = new MemoryStore()
+    await s.create('a/1', enc.encode('1'))
+    await s.create('a/2', enc.encode('2'))
+    const full = await s.list('a')
+    await s.replace('a/1', enc.encode('1b'), full.changes[0].version)
+
+    s.armCursorReject()
+    const page = await s.list('a', full.syncCursor)
+    expect(page.changes).toHaveLength(2)
+    expect(page.changes.every(c => c.type === 'created')).toBe(true)
+
+    s.armIncompleteList(1)
+    const incomplete = await s.list('a')
+    expect(incomplete.changes).toHaveLength(1)
+    const complete = await s.list('a')
+    expect(complete.changes).toHaveLength(2)
+  })
 })
 
 describe('MemoryStore test()', () => {

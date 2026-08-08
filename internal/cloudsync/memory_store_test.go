@@ -179,6 +179,75 @@ func TestMemoryStoreFaultInjection(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreUncertainWriteFault(t *testing.T) {
+	s := NewMemoryStore()
+	// A create that lands but whose response is lost: the caller must re-read.
+	s.ArmUncertainWrite("create", &StoreError{Kind: ErrRetryableTransport, Message: "response lost"})
+	if _, err := s.Create(testCtx, "k", []byte("v")); !IsStoreError(err, ErrRetryableTransport) {
+		t.Fatalf("uncertain create err = %v", err)
+	}
+	data, version, err := s.Read(testCtx, "k")
+	if err != nil || string(data) != "v" {
+		t.Fatalf("uncertain write did not land: %s, %v", data, err)
+	}
+	_ = version
+
+	// A replace that lands but whose response is lost.
+	s.ArmUncertainWrite("replace", &StoreError{Kind: ErrRetryableTransport, Message: "response lost"})
+	if _, err := s.Replace(testCtx, "k", []byte("v2"), version); !IsStoreError(err, ErrRetryableTransport) {
+		t.Fatalf("uncertain replace err = %v", err)
+	}
+	data, _, err = s.Read(testCtx, "k")
+	if err != nil || string(data) != "v2" {
+		t.Fatalf("uncertain replace did not land: %s, %v", data, err)
+	}
+}
+
+func TestMemoryStoreCursorRejectAndIncompleteListFaults(t *testing.T) {
+	s := NewMemoryStore()
+	for _, k := range []string{"a/1", "a/2", "a/3"} {
+		if _, err := s.Create(testCtx, k, []byte(k)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A cursor-reject fault makes List ignore a valid delta cursor and return a
+	// full baseline, so no later event is ever skipped.
+	seq, err := s.List(testCtx, "a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Replace(testCtx, "a/1", []byte("v1b"), seq.Changes[0].Version); err != nil {
+		t.Fatal(err)
+	}
+	s.ArmCursorReject()
+	page, err := s.List(testCtx, "a", seq.SyncCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Changes) != 3 || page.Changes[0].Type != ChangeCreated {
+		t.Fatalf("cursor-reject did not fall back to a full baseline: %+v", page.Changes)
+	}
+
+	// An incomplete-list fault silently omits keys: the caller must detect the
+	// incomplete full listing and re-list.
+	s.ArmIncompleteList(1)
+	page, err = s.List(testCtx, "a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Changes) != 2 {
+		t.Fatalf("incomplete listing returned %d changes, want 2", len(page.Changes))
+	}
+	// Without the fault the full listing is complete.
+	page, err = s.List(testCtx, "a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Changes) != 3 {
+		t.Fatalf("complete listing returned %d changes, want 3", len(page.Changes))
+	}
+}
+
 func TestMemoryStoreBaselinePaginationWatermark(t *testing.T) {
 	s := NewMemoryStore()
 	// 105 keys so the baseline paginates (pageSize 100).
