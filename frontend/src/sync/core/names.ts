@@ -1,5 +1,7 @@
-// Portable path keys and conflict-copy names, mirroring
+// Portable path keys and deterministic conflict-copy identity, mirroring
 // internal/cloudsync/names.go.
+
+import { uuidv5 } from './uuid'
 
 export const CASE_FOLD: Record<string, string> = {
   "A": "a",
@@ -1549,18 +1551,31 @@ export function portablePathKey(path: string): string {
   return out
 }
 
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
+/**
+ * ConflictNamespace is the fixed MemoDump namespace used to derive
+ * deterministic conflict Sync IDs. It is pinned verbatim by
+ * testdata/sync/state-hashes.json and must stay identical in Go and TypeScript.
+ */
+export const conflictNamespace = '7f139d22-a0f6-50fe-855c-c416516180f0'
+
+/**
+ * Derives the deterministic UUID v5 conflict identity for a divergence on
+ * source Sync ID S, hashing the fixed-role state hashes in the order local,
+ * then remote. Without an operation journal the derivation itself must be
+ * idempotent, and the ordering matters: swapping the local and remote state
+ * hashes changes the result whenever the two sides' semantics differ.
+ */
+export function deriveConflictSyncId(sourceSyncId: string, localStateHash: string, remoteStateHash: string): string {
+  return uuidv5(conflictNamespace, `${sourceSyncId}\u0000${localStateHash}\u0000${remoteStateHash}`)
 }
 
 /**
- * Builds the synchronized conflict-copy filename in the canonical form
- * "<stem> (conflict <device> <YYYYMMDD-HHmmss>).md". The caller passes a stem
- * that already went through the portable filename rules.
+ * Returns the deterministic conflict-copy filename for a derived conflict Sync
+ * ID: "<stem> (conflict <first 12 hex digits of the ID without hyphens>).md".
+ * It contains no clock and no device label, so a crash or lost response repeats
+ * the same conflict copy instead of producing a second one.
  */
-export function conflictName(stem: string, deviceId: string, ts: Date): string {
-  const stamp =
-    `${ts.getUTCFullYear()}${pad(ts.getUTCMonth() + 1)}${pad(ts.getUTCDate())}` +
-    `-${pad(ts.getUTCHours())}${pad(ts.getUTCMinutes())}${pad(ts.getUTCSeconds())}`
-  return `${stem} (conflict ${deviceId} ${stamp}).md`
+export function conflictFilename(stem: string, conflictSyncId: string): string {
+  const digits = conflictSyncId.replace(/-/g, '').slice(0, 12)
+  return `${stem} (conflict ${digits}).md`
 }

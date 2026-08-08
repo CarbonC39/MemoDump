@@ -1,10 +1,19 @@
 import { describe, it, expect } from 'vitest'
 import pathKeys from '../../../../testdata/sync/portable-path-keys.json'
 import conflictNames from '../../../../testdata/sync/conflict-names.json'
+import stateHashes from '../../../../testdata/sync/state-hashes.json'
 import retryClasses from '../../../../testdata/sync/retry-classes.json'
 import markdownCases from '../../../../testdata/sync/canonical-markdown.json'
 import caseFoldFixture from '../../../../testdata/sync/case-fold.json'
-import { portablePathKey, conflictName, CASE_FOLD } from './names'
+import {
+  portablePathKey,
+  conflictFilename,
+  conflictNamespace,
+  deriveConflictSyncId,
+  CASE_FOLD,
+} from './names'
+import { isSyncId, isUuidV4 } from './entity'
+import { stateHash } from './canonical'
 import { normalizeMarkdown } from './markdown'
 import { classifyRetry } from './retry'
 import { StoreError, type StoreErrorKind } from './remoteStore'
@@ -17,12 +26,50 @@ describe('portable path keys', () => {
   }
 })
 
-describe('conflict names', () => {
+describe('conflict filenames', () => {
   for (const tc of conflictNames.cases) {
     it(tc.name, () => {
-      expect(conflictName(tc.stem, tc.device, new Date(tc.timestamp))).toBe(tc.expected)
+      expect(conflictFilename(tc.stem, tc.conflictSyncId)).toBe(tc.expected)
+      // The derived name is deterministic: repeating the call is identical.
+      expect(conflictFilename(tc.stem, tc.conflictSyncId)).toBe(tc.expected)
     })
   }
+})
+
+describe('state hashes', () => {
+  it('the namespace matches the shared fixture', () => {
+    expect(conflictNamespace).toBe(stateHashes.namespace)
+  })
+  for (const tc of stateHashes.stateHashes) {
+    it(tc.name, () => {
+      expect(stateHash(tc.contentHash, tc.deleted)).toBe(tc.expected)
+    })
+  }
+})
+
+describe('derived conflict identities', () => {
+  for (const tc of stateHashes.conflictIds) {
+    it(tc.name, () => {
+      expect(deriveConflictSyncId(tc.sourceSyncId, tc.localStateHash, tc.remoteStateHash)).toBe(tc.expected)
+      // Repeating a derivation produces the same result.
+      expect(deriveConflictSyncId(tc.sourceSyncId, tc.localStateHash, tc.remoteStateHash)).toBe(tc.expected)
+    })
+  }
+})
+
+describe('sync id validation', () => {
+  const ids = stateHashes.syncIds
+  it('accepts v4 and v5 as Sync IDs', () => {
+    for (const s of ids.validV4) expect(isSyncId(s)).toBe(true)
+    for (const s of ids.validV5) expect(isSyncId(s)).toBe(true)
+  })
+  it('v5 Sync IDs never pass the v4-only validators', () => {
+    for (const s of ids.validV5) expect(isUuidV4(s)).toBe(false)
+    for (const s of ids.invalidV5AsRepositoryOrDevice) expect(isUuidV4(s)).toBe(false)
+  })
+  it('rejects invalid IDs', () => {
+    for (const s of ids.invalid) expect(isSyncId(s)).toBe(false)
+  })
 })
 
 describe('retry classes', () => {

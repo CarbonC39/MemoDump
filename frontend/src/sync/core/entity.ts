@@ -82,9 +82,20 @@ export function serializeEntity(e: Entity): string {
 
 const uuidV4Re = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
+const uuidV5Re = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
 /** Reports whether s is a syntactically valid version-4 UUID. */
 export function isUuidV4(s: string): boolean {
   return uuidV4Re.test(s)
+}
+
+/**
+ * Reports whether s is a valid entity Sync ID: UUID v4 for ordinary entities or
+ * UUID v5 for deterministic conflict copies. Vault, Replica, Device, and
+ * Repository IDs must remain version-4 only (isUuidV4).
+ */
+export function isSyncId(s: string): boolean {
+  return uuidV4Re.test(s) || uuidV5Re.test(s)
 }
 
 /** Reports whether name is safe to materialize as a path segment. */
@@ -150,8 +161,8 @@ export function validateEntity(e: Entity): void {
   if (e.kind === KIND_FOLDER && e.markdown) {
     throw new InvalidEntityError('folder carries markdown')
   }
-  if (!isUuidV4(e.syncId)) throw new InvalidEntityError(`bad syncId: ${e.syncId}`)
-  if (e.parentId && !isUuidV4(e.parentId)) throw new InvalidEntityError(`bad parentId: ${e.parentId}`)
+  if (!isSyncId(e.syncId)) throw new InvalidEntityError(`bad syncId: ${e.syncId}`)
+  if (e.parentId && !isSyncId(e.parentId)) throw new InvalidEntityError(`bad parentId: ${e.parentId}`)
   if (!isUuidV4(e.updatedBy)) throw new InvalidEntityError(`bad updatedBy: ${e.updatedBy}`)
   if (!validEntityName(e.name)) throw new InvalidEntityError(`bad name: ${e.name}`)
   if (!contentHashRe.test(e.contentHash)) {

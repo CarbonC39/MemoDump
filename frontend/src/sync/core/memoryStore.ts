@@ -85,7 +85,9 @@ export class MemoryStore implements RemoteStore {
   }
 
   /** Physically deletes a key, recording a deleted change. Not part of the
-   * RemoteStore contract (V1 propagates deletions as entity tombstones). */
+   * RemoteStore contract (V1 propagates deletions as entity tombstones): a key
+   * reported physically removed after a known baseline is repository damage,
+   * never a deletion. */
   async remove(key: string): Promise<void> {
     if (!this.objects.has(key)) throw new StoreError('not-found', `key ${key} missing`)
     this.objects.delete(key)

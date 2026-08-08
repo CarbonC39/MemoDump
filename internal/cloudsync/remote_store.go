@@ -95,7 +95,9 @@ const (
 	// ChangeUpdated: a key's version advanced.
 	ChangeUpdated
 	// ChangeDeleted: a key was physically removed (not a V1 tombstone, which is
-	// an entity record with deleted=true).
+	// an entity record with deleted=true). Physical removal observed through a
+	// DELTA listing is repository damage, not a deletion signal: only a valid
+	// tombstone propagates a deletion.
 	ChangeDeleted
 )
 
@@ -145,6 +147,10 @@ type RemoteStore interface {
 	Read(ctx context.Context, key string) ([]byte, string, error)
 	// List returns changes under prefix since the sync cursor (or a full
 	// baseline when the cursor is empty or rejected), paged via NextCursor.
+	// A full listing must enumerate the complete key set. Only a delta listing
+	// may report physical removal (ChangeDeleted), and a physically removed key
+	// is repository damage, never a tombstone — the engine must not treat it as
+	// a deletion.
 	List(ctx context.Context, prefix, syncCursor string) (ChangePage, error)
 	// Create stores bytes under a key that must not already exist.
 	Create(ctx context.Context, key string, data []byte) (string, error)

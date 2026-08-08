@@ -220,25 +220,161 @@ func TestPortablePathKeysFixture(t *testing.T) {
 func TestConflictNamesFixture(t *testing.T) {
 	var fixture struct {
 		Cases []struct {
-			Name      string `json:"name"`
-			Stem      string `json:"stem"`
-			Device    string `json:"device"`
-			Timestamp string `json:"timestamp"`
-			Expected  string `json:"expected"`
+			Name           string `json:"name"`
+			Stem           string `json:"stem"`
+			ConflictSyncID string `json:"conflictSyncId"`
+			Expected       string `json:"expected"`
 		} `json:"cases"`
 	}
 	if err := json.Unmarshal(loadFixture(t, "conflict-names.json"), &fixture); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range fixture.Cases {
-		ts, err := time.Parse(time.RFC3339, tc.Timestamp)
+		if got := ConflictFilename(tc.Stem, tc.ConflictSyncID); got != tc.Expected {
+			t.Errorf("ConflictFilename(%q, %q) = %q, want %q", tc.Stem, tc.ConflictSyncID, got, tc.Expected)
+		}
+		// The derived name is deterministic: repeating the call is identical.
+		if again := ConflictFilename(tc.Stem, tc.ConflictSyncID); again != tc.Expected {
+			t.Errorf("conflict name not deterministic: %q", again)
+		}
+	}
+}
+
+func TestStateHashesFixture(t *testing.T) {
+	var fixture struct {
+		Namespace string `json:"namespace"`
+		StateHashes []struct {
+			Name        string `json:"name"`
+			ContentHash string `json:"contentHash"`
+			Deleted     bool   `json:"deleted"`
+			Expected    string `json:"expected"`
+		} `json:"stateHashes"`
+	}
+	if err := json.Unmarshal(loadFixture(t, "state-hashes.json"), &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.Namespace != ConflictNamespace {
+		t.Fatalf("namespace = %q, want %q", fixture.Namespace, ConflictNamespace)
+	}
+	for _, tc := range fixture.StateHashes {
+		if got := StateHash(tc.ContentHash, tc.Deleted); got != tc.Expected {
+			t.Errorf("%s: StateHash = %q, want %q", tc.Name, got, tc.Expected)
+		}
+	}
+}
+
+func TestConflictIDsFixture(t *testing.T) {
+	var fixture struct {
+		Namespace string `json:"namespace"`
+		ConflictIDs []struct {
+			Name          string `json:"name"`
+			SourceSyncID  string `json:"sourceSyncId"`
+			LocalState    string `json:"localStateHash"`
+			RemoteState   string `json:"remoteStateHash"`
+			Expected      string `json:"expected"`
+		} `json:"conflictIds"`
+	}
+	if err := json.Unmarshal(loadFixture(t, "state-hashes.json"), &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range fixture.ConflictIDs {
+		got, err := DeriveConflictSyncID(tc.SourceSyncID, tc.LocalState, tc.RemoteState)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := ConflictName(tc.Stem, tc.Device, ts); got != tc.Expected {
-			t.Errorf("ConflictName = %q, want %q", got, tc.Expected)
+		if got != tc.Expected {
+			t.Errorf("%s: conflictId = %q, want %q", tc.Name, got, tc.Expected)
+		}
+		// Repeating a derivation produces the same result.
+		if again, _ := DeriveConflictSyncID(tc.SourceSyncID, tc.LocalState, tc.RemoteState); again != got {
+			t.Errorf("%s: conflict derivation not deterministic", tc.Name)
 		}
 	}
+}
+
+func TestSyncIDValidationFixture(t *testing.T) {
+	var fixture struct {
+		Namespace string `json:"namespace"`
+		SyncIDs   struct {
+			ValidV4                   []string `json:"validV4"`
+			ValidV5                   []string `json:"validV5"`
+			InvalidV5AsRepoOrDevice   []string `json:"invalidV5AsRepositoryOrDevice"`
+			Invalid                   []string `json:"invalid"`
+		} `json:"syncIds"`
+	}
+	if err := json.Unmarshal(loadFixture(t, "state-hashes.json"), &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range fixture.SyncIDs.ValidV4 {
+		if !IsSyncID(s) || !IsUUIDv4(s) {
+			t.Errorf("validV4 %q rejected by IsSyncID/IsUUIDv4", s)
+		}
+	}
+	for _, s := range fixture.SyncIDs.ValidV5 {
+		if !IsSyncID(s) {
+			t.Errorf("validV5 %q rejected by IsSyncID", s)
+		}
+		if IsUUIDv4(s) {
+			t.Errorf("validV5 %q accepted as UUID v4", s)
+		}
+	}
+	// v5 Sync IDs must never pass the v4-only validators used for Vault,
+	// Replica, Device, and Repository IDs.
+	for _, s := range fixture.SyncIDs.InvalidV5AsRepoOrDevice {
+		if IsUUIDv4(s) {
+			t.Errorf("v5 %q accepted where only v4 is allowed", s)
+		}
+	}
+	for _, s := range fixture.SyncIDs.Invalid {
+		if IsSyncID(s) {
+			t.Errorf("invalid %q accepted as a Sync ID", s)
+		}
+	}
+}
+
+func TestV5EntityAcceptedAndV5UpdatedByRejected(t *testing.T) {
+	by := "1a2b3c4d-1111-4222-8333-444455556666"
+	mk := func(syncID, parentID string) *Entity {
+		e := &Entity{
+			SchemaVersion: 1, SyncID: syncID, Kind: KindNote, ParentID: parentID, Name: "conflict",
+			Markdown: "# Local version\n", UpdatedBy: by, UpdatedAt: 1,
+		}
+		e.ContentHash = e.ComputeContentHash()
+		return e
+	}
+	// A conflict record may use a v5 Sync ID and a v5 folder parent.
+	conflictID, err := DeriveConflictSyncID("5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+		StateHash("a", false), StateHash("b", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseEntity(mustSerialize(t, mk(conflictID, ConflictNamespace))); err != nil {
+		t.Errorf("v5 entity rejected: %v", err)
+	}
+	// updatedBy must stay version-4 only, even on a conflict record.
+	bad := mk(conflictID, "")
+	bad.UpdatedBy = conflictID
+	if err := bad.Validate(); err == nil {
+		t.Errorf("v5 updatedBy accepted")
+	}
+	// Repository IDs stay version-4 only.
+	desc := RepositoryDescriptor{FormatVersion: 1, RepositoryID: conflictID, CreatedAt: 1, MinimumClientVersion: "2.0.0"}
+	data, err := desc.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseRepositoryDescriptor(data); err == nil {
+		t.Errorf("v5 repositoryId accepted")
+	}
+}
+
+func mustSerialize(t *testing.T, e *Entity) []byte {
+	t.Helper()
+	data, err := e.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestRetryClassesFixture(t *testing.T) {

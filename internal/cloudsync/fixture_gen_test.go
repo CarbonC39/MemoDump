@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -102,6 +101,9 @@ func TestGenerateFixtures(t *testing.T) {
 			UpdatedAt: 1785800600000,
 		},
 	}
+	// Compute content hashes for every base entity first; the conflict identity
+	// below is derived from those pinned hashes so entities.json and
+	// state-hashes.json stay consistent.
 	var entityCases []entityCase
 	for _, e := range entities {
 		e.ContentHash = e.ComputeContentHash()
@@ -113,6 +115,35 @@ func TestGenerateFixtures(t *testing.T) {
 			Name: e.Name, Entity: *e, ContentHash: e.ContentHash, CanonicalJSON: string(ser),
 		})
 	}
+
+	// A deterministic conflict copy carries a UUID v5 Sync ID. It is derived
+	// from the same source/state hashes pinned in state-hashes.json, so the
+	// wire contract exercises the full conflict identity end to end.
+	ideaHash := entities[0].ContentHash
+	nestedHash := entities[1].ContentHash
+	deletedHash := entities[3].ContentHash
+	sourceID := entities[0].SyncID
+	localDivergent := StateHash(nestedHash, false)
+	remoteDivergent := StateHash(ideaHash, false)
+	conflictID, err := DeriveConflictSyncID(sourceID, localDivergent, remoteDivergent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictEntity := &Entity{
+		SchemaVersion: 1, SyncID: conflictID, Kind: KindNote, ParentID: "", Name: strings.TrimSuffix(ConflictFilename("idea", conflictID), ".md"),
+		Markdown:  "# Local version\n",
+		Deleted:   false,
+		UpdatedBy: "1a2b3c4d-1111-4222-8333-444455556666",
+		UpdatedAt: 1785800700000,
+	}
+	conflictEntity.ContentHash = conflictEntity.ComputeContentHash()
+	ser, err := conflictEntity.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entityCases = append(entityCases, entityCase{
+		Name: conflictEntity.Name, Entity: *conflictEntity, ContentHash: conflictEntity.ContentHash, CanonicalJSON: string(ser),
+	})
 	writeJSON("entities.json", map[string]any{"entities": entityCases})
 
 	// ---- repository descriptors ----
@@ -125,7 +156,7 @@ func TestGenerateFixtures(t *testing.T) {
 		FormatVersion: 1, RepositoryID: "bdbd4162-faf1-418e-895e-4221bbbb5cc5",
 		CreatedAt: 1785800000000, MinimumClientVersion: "2.0.0",
 	}
-	ser, _ := desc.Serialize()
+	ser, _ = desc.Serialize()
 	repoCases := []repoCase{{Name: "standard", Descriptor: desc, CanonicalJSON: string(ser)}}
 	invalidRepo := []map[string]any{
 		{"name": "newer format", "json": `{"formatVersion":2,"repositoryId":"bdbd4162-faf1-418e-895e-4221bbbb5cc5","createdAt":1785800000000,"minimumClientVersion":"2.0.0"}`},
@@ -183,16 +214,57 @@ func TestGenerateFixtures(t *testing.T) {
 		{"name": "cherokee small letter matches its uppercase fold", "path": "ꭰ.md", "key": PortablePathKey("ꭰ.md")},
 	}})
 
-	// ---- conflict names ----
-	ts := time.Date(2026, 8, 5, 10, 30, 0, 0, time.UTC)
-	deviceID := "1a2b3c4d-1111-4222-8333-444455556666"
+	// ---- conflict names (deterministic, no clock or device label) ----
 	writeJSON("conflict-names.json", map[string]any{"cases": []map[string]string{
-		{
-			"name": "basic", "stem": "idea", "device": deviceID,
-			"timestamp": "2026-08-05T10:30:00Z",
-			"expected":  ConflictName("idea", deviceID, ts),
-		},
+		{"name": "basic", "stem": "idea", "conflictSyncId": conflictID, "expected": ConflictFilename("idea", conflictID)},
+		{"name": "unicode stem", "stem": "你好", "conflictSyncId": conflictID, "expected": ConflictFilename("你好", conflictID)},
+		{"name": "long id", "stem": "note", "conflictSyncId": "aaaaaaaa-aaaa-5aaa-8aaa-aaaaaaaaaaaa", "expected": ConflictFilename("note", "aaaaaaaa-aaaa-5aaa-8aaa-aaaaaaaaaaaa")},
 	}})
+
+	// ---- state hashes and deterministic conflict identities ----
+	tombstoneDivergent := StateHash(ideaHash, true)
+	conflictTombstoneID, err := DeriveConflictSyncID(sourceID, localDivergent, tombstoneDivergent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	swappedID, err := DeriveConflictSyncID(sourceID, remoteDivergent, localDivergent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroHash := strings.Repeat("0", 64)
+	stateCases := []map[string]any{
+		{"name": "live idea", "contentHash": ideaHash, "deleted": false, "expected": StateHash(ideaHash, false)},
+		{"name": "tombstone idea", "contentHash": ideaHash, "deleted": true, "expected": StateHash(ideaHash, true)},
+		{"name": "live nested", "contentHash": nestedHash, "deleted": false, "expected": StateHash(nestedHash, false)},
+		{"name": "tombstone deleted", "contentHash": deletedHash, "deleted": true, "expected": StateHash(deletedHash, true)},
+		{"name": "zero content", "contentHash": zeroHash, "deleted": false, "expected": StateHash(zeroHash, false)},
+	}
+	conflictCases := []map[string]string{
+		{"name": "divergent note", "sourceSyncId": sourceID, "localStateHash": localDivergent, "remoteStateHash": remoteDivergent, "expected": conflictID},
+		{"name": "edit vs tombstone", "sourceSyncId": sourceID, "localStateHash": localDivergent, "remoteStateHash": tombstoneDivergent, "expected": conflictTombstoneID},
+		{"name": "swapped roles differ", "sourceSyncId": sourceID, "localStateHash": remoteDivergent, "remoteStateHash": localDivergent, "expected": swappedID},
+	}
+	writeJSON("state-hashes.json", map[string]any{
+		"namespace": ConflictNamespace,
+		"stateHashes": stateCases,
+		"conflictIds": conflictCases,
+		"syncIds": map[string]any{
+			"validV4": []string{
+				"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+				"1a2b3c4d-1111-4222-8333-444455556666",
+				"00000000-0000-4000-8000-000000000000",
+			},
+			"validV5": []string{ConflictNamespace, conflictID, conflictTombstoneID},
+			"invalidV5AsRepositoryOrDevice": []string{ConflictNamespace, conflictID},
+			"invalid": []string{
+				"",
+				"not-a-uuid",
+				"c8f28d1c-85c6-11e6-9d9d-0242ac130002",
+				"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8-extra",
+				"zzzzzzzz-zzzz-4zzz-8zzz-zzzzzzzzzzzz",
+			},
+		},
+	})
 
 	// ---- malformed input ----
 	invalidEnt := []map[string]any{

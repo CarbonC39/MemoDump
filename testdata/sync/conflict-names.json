@@ -1,11 +1,22 @@
 {
   "cases": [
     {
-      "device": "1a2b3c4d-1111-4222-8333-444455556666",
-      "expected": "idea (conflict 1a2b3c4d-1111-4222-8333-444455556666 20260805-103000).md",
+      "conflictSyncId": "04b2cbe6-19cf-584f-bad4-55fa03d9c05a",
+      "expected": "idea (conflict 04b2cbe619cf).md",
       "name": "basic",
-      "stem": "idea",
-      "timestamp": "2026-08-05T10:30:00Z"
+      "stem": "idea"
+    },
+    {
+      "conflictSyncId": "04b2cbe6-19cf-584f-bad4-55fa03d9c05a",
+      "expected": "你好 (conflict 04b2cbe619cf).md",
+      "name": "unicode stem",
+      "stem": "你好"
+    },
+    {
+      "conflictSyncId": "aaaaaaaa-aaaa-5aaa-8aaa-aaaaaaaaaaaa",
+      "expected": "note (conflict aaaaaaaaaaaa).md",
+      "name": "long id",
+      "stem": "note"
     }
   ]
 }

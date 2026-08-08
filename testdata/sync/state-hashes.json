@@ -1,0 +1,81 @@
+{
+  "conflictIds": [
+    {
+      "expected": "04b2cbe6-19cf-584f-bad4-55fa03d9c05a",
+      "localStateHash": "7aadc1fb841ce2704f71f02e72c7b9b947892d9f820e7fd7c990361534bcb4a4",
+      "name": "divergent note",
+      "remoteStateHash": "5049fc11930e2cb62fdf2b8d615a5dd92476064b284a0391d5c7abe4e0636dae",
+      "sourceSyncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+    },
+    {
+      "expected": "f4a414ee-aeba-5003-a061-8a383215343f",
+      "localStateHash": "7aadc1fb841ce2704f71f02e72c7b9b947892d9f820e7fd7c990361534bcb4a4",
+      "name": "edit vs tombstone",
+      "remoteStateHash": "2dc76bea7c431f6cd9d7c97e9a4ca72b358f48d56b7f5ffa7a982062b89d7b9e",
+      "sourceSyncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+    },
+    {
+      "expected": "e9d315a5-2b09-5190-ba0c-c3b0233bf39b",
+      "localStateHash": "5049fc11930e2cb62fdf2b8d615a5dd92476064b284a0391d5c7abe4e0636dae",
+      "name": "swapped roles differ",
+      "remoteStateHash": "7aadc1fb841ce2704f71f02e72c7b9b947892d9f820e7fd7c990361534bcb4a4",
+      "sourceSyncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+    }
+  ],
+  "namespace": "7f139d22-a0f6-50fe-855c-c416516180f0",
+  "stateHashes": [
+    {
+      "contentHash": "a8c3ecb05369ef3ee1ed8909eb42e327c9071b546fe952c2e82f7233da2a1935",
+      "deleted": false,
+      "expected": "5049fc11930e2cb62fdf2b8d615a5dd92476064b284a0391d5c7abe4e0636dae",
+      "name": "live idea"
+    },
+    {
+      "contentHash": "a8c3ecb05369ef3ee1ed8909eb42e327c9071b546fe952c2e82f7233da2a1935",
+      "deleted": true,
+      "expected": "2dc76bea7c431f6cd9d7c97e9a4ca72b358f48d56b7f5ffa7a982062b89d7b9e",
+      "name": "tombstone idea"
+    },
+    {
+      "contentHash": "98aa3bdc8f48dc0bb8622c2aecb7573b7ac018090a1f9ef54ccf63b897842d7c",
+      "deleted": false,
+      "expected": "7aadc1fb841ce2704f71f02e72c7b9b947892d9f820e7fd7c990361534bcb4a4",
+      "name": "live nested"
+    },
+    {
+      "contentHash": "7991c57823feb93dde28a8376236b8caf85daddb3630fe4103e6e2d339d61543",
+      "deleted": true,
+      "expected": "62a00979bb8296268cc1c412721cbddf35d30d2516e90260ecd55475e1b73c8d",
+      "name": "tombstone deleted"
+    },
+    {
+      "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "deleted": false,
+      "expected": "b31c6f7f63618268d5c9c72f045feb0b7fe2e3fcca7764e9a1984f5b3a688e2b",
+      "name": "zero content"
+    }
+  ],
+  "syncIds": {
+    "invalid": [
+      "",
+      "not-a-uuid",
+      "c8f28d1c-85c6-11e6-9d9d-0242ac130002",
+      "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8-extra",
+      "zzzzzzzz-zzzz-4zzz-8zzz-zzzzzzzzzzzz"
+    ],
+    "invalidV5AsRepositoryOrDevice": [
+      "7f139d22-a0f6-50fe-855c-c416516180f0",
+      "04b2cbe6-19cf-584f-bad4-55fa03d9c05a"
+    ],
+    "validV4": [
+      "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+      "1a2b3c4d-1111-4222-8333-444455556666",
+      "00000000-0000-4000-8000-000000000000"
+    ],
+    "validV5": [
+      "7f139d22-a0f6-50fe-855c-c416516180f0",
+      "04b2cbe6-19cf-584f-bad4-55fa03d9c05a",
+      "f4a414ee-aeba-5003-a061-8a383215343f"
+    ]
+  }
+}

@@ -3,7 +3,8 @@ package cloudsync
 import (
 	"fmt"
 	"strings"
-	"time"
+
+	"github.com/google/uuid"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -23,9 +24,34 @@ func PortablePathKey(path string) string {
 	return strings.ToLower(cases.Fold().String(norm.NFC.String(path)))
 }
 
-// ConflictName builds the synchronized conflict-copy filename in the canonical
-// form "<stem> (conflict <device> <YYYYMMDD-HHmmss>).md". The caller passes a
-// stem that already went through the portable filename rules.
-func ConflictName(stem, deviceID string, ts time.Time) string {
-	return fmt.Sprintf("%s (conflict %s %s).md", stem, deviceID, ts.UTC().Format("20060102-150405"))
+// ConflictNamespace is the fixed MemoDump namespace used to derive
+// deterministic conflict Sync IDs. It is pinned verbatim by
+// testdata/sync/state-hashes.json and must stay identical in Go and TypeScript.
+const ConflictNamespace = "7f139d22-a0f6-50fe-855c-c416516180f0"
+
+// DeriveConflictSyncID returns the deterministic UUID v5 conflict identity for
+// a divergence on source Sync ID S, hashing the fixed-role state hashes in the
+// order local, then remote. Without an operation journal the derivation itself
+// must be idempotent, and the ordering matters: swapping the local and remote
+// state hashes changes the result whenever the two sides' semantics differ.
+func DeriveConflictSyncID(sourceSyncID, localStateHash, remoteStateHash string) (string, error) {
+	ns, err := uuid.Parse(ConflictNamespace)
+	if err != nil {
+		return "", err
+	}
+	name := sourceSyncID + "\x00" + localStateHash + "\x00" + remoteStateHash
+	return uuid.NewSHA1(ns, []byte(name)).String(), nil
+}
+
+// ConflictFilename returns the deterministic conflict-copy filename for a
+// derived conflict Sync ID: "<stem> (conflict <first 12 hex digits of the ID
+// without hyphens>).md". It contains no clock and no device label, so a crash
+// or lost response repeats the same conflict copy instead of producing a second
+// one.
+func ConflictFilename(stem, conflictSyncID string) string {
+	digits := strings.ReplaceAll(conflictSyncID, "-", "")
+	if len(digits) > 12 {
+		digits = digits[:12]
+	}
+	return fmt.Sprintf("%s (conflict %s).md", stem, digits)
 }

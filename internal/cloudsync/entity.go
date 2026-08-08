@@ -87,10 +87,10 @@ func (e *Entity) Validate() error {
 	if e.Kind == KindFolder && e.Markdown != "" {
 		return fmt.Errorf("%w: folder carries markdown", ErrInvalidEntity)
 	}
-	if !IsUUIDv4(e.SyncID) {
+	if !IsSyncID(e.SyncID) {
 		return fmt.Errorf("%w: bad syncId %q", ErrInvalidEntity, e.SyncID)
 	}
-	if e.ParentID != "" && !IsUUIDv4(e.ParentID) {
+	if e.ParentID != "" && !IsSyncID(e.ParentID) {
 		return fmt.Errorf("%w: bad parentId %q", ErrInvalidEntity, e.ParentID)
 	}
 	if !IsUUIDv4(e.UpdatedBy) {
@@ -287,9 +287,18 @@ func ValidateEntities(entities map[string]*Entity) error {
 
 var uuidV4Re = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
+var uuidV5Re = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
 // IsUUIDv4 reports whether s is a syntactically valid version-4 UUID.
 func IsUUIDv4(s string) bool {
 	return uuidV4Re.MatchString(s)
+}
+
+// IsSyncID reports whether s is a valid entity Sync ID: UUID v4 for ordinary
+// entities or UUID v5 for deterministic conflict copies. Vault, Replica,
+// Device, and Repository IDs must remain version-4 only (IsUUIDv4).
+func IsSyncID(s string) bool {
+	return uuidV4Re.MatchString(s) || uuidV5Re.MatchString(s)
 }
 
 // ValidEntityName reports whether name is safe to materialize as a path

@@ -7,6 +7,8 @@ import {
   serializeEntity,
   parseEntity,
   validateEntities,
+  isSyncId,
+  isUuidV4,
   type Entity,
   OversizedError,
   InvalidEntityError,
@@ -15,6 +17,7 @@ import {
   KIND_FOLDER,
 } from './entity'
 import { parseRepositoryDescriptor, serializeRepositoryDescriptor } from './repo'
+import stateHashes from '../../../../testdata/sync/state-hashes.json'
 
 describe('shared entity contract (Go + TS)', () => {
   for (const tc of entitiesFixture.entities) {
@@ -108,5 +111,70 @@ describe('parent graph validation', () => {
       [a]: entity(a, KIND_NOTE, ''),
       [n]: entity(n, KIND_FOLDER, a),
     })).toThrow(InvalidEntityError)
+  })
+})
+
+describe('sync id validation', () => {
+  it('a conflict record with a v5 Sync ID parses', () => {
+    const v5 = stateHashes.conflictIds[0].expected
+    expect(isSyncId(v5)).toBe(true)
+    expect(isUuidV4(v5)).toBe(false)
+    const e: Entity = {
+      schemaVersion: 1,
+      syncId: v5,
+      kind: KIND_NOTE,
+      parentId: '',
+      name: 'conflict copy',
+      markdown: '# Local version\n',
+      contentHash: '',
+      deleted: false,
+      updatedBy: '1a2b3c4d-1111-4222-8333-444455556666',
+      updatedAt: 1,
+    }
+    e.contentHash = computeContentHash(e)
+    expect(parseEntity(serializeEntity(e)).syncId).toBe(v5)
+  })
+
+  it('a v5 parentId is accepted for conflict entities', () => {
+    const v5 = stateHashes.conflictIds[0].expected
+    const e: Entity = {
+      schemaVersion: 1,
+      syncId: '5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8',
+      kind: KIND_FOLDER,
+      parentId: v5,
+      name: 'folder',
+      contentHash: '',
+      deleted: false,
+      updatedBy: '1a2b3c4d-1111-4222-8333-444455556666',
+      updatedAt: 1,
+    }
+    e.contentHash = computeContentHash(e)
+    expect(parseEntity(serializeEntity(e)).parentId).toBe(v5)
+  })
+
+  it('v5 is rejected for updatedBy and repositoryId', () => {
+    const v5 = stateHashes.conflictIds[0].expected
+    const e: Entity = {
+      schemaVersion: 1,
+      syncId: '5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8',
+      kind: KIND_NOTE,
+      parentId: '',
+      name: 'idea',
+      markdown: 'x',
+      contentHash: '',
+      deleted: false,
+      updatedBy: v5,
+      updatedAt: 1,
+    }
+    e.contentHash = computeContentHash(e)
+    expect(() => parseEntity(serializeEntity(e))).toThrow(InvalidEntityError)
+
+    const repo = {
+      formatVersion: 1,
+      repositoryId: v5,
+      createdAt: 1,
+      minimumClientVersion: '2.0.0',
+    }
+    expect(() => parseRepositoryDescriptor(JSON.stringify(repo))).toThrow(InvalidEntityError)
   })
 })

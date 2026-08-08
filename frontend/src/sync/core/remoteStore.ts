@@ -43,14 +43,17 @@ export interface Capabilities {
 /** Classifies one observed change. */
 export type ChangeType = 'created' | 'updated' | 'deleted'
 
-/** One object observed by List. version is '' for a deleted change. */
+/**
+ * One object observed by List. version is '' for a 'deleted' change, which
+ * means the key was PHYSICALLY removed by the provider — repository damage,
+ * not a tombstone. Only a valid entity record with deleted:true propagates a
+ * deletion.
+ */
 export interface Change {
   key: string
   type: ChangeType
   version: string
-}
-
-/**
+}/**
  * One page of List output.
  *
  * nextCursor is the pagination continuation for the CURRENT scan: pass it back
@@ -74,7 +77,10 @@ export interface RemoteStore {
   /** Returns the bytes and opaque version of a key. */
   read(key: string): Promise<{ bytes: Uint8Array; version: string }>
   /** Returns changes under prefix since the sync cursor (or a full baseline
-   * when the cursor is empty or rejected), paged via nextCursor. */
+   * when the cursor is empty or rejected), paged via nextCursor. A full listing
+   * must enumerate the complete key set. Only a delta listing may report a
+   * physical removal ('deleted'), and that is damage, not a tombstone — never
+   * treat it as a deletion. */
   list(prefix: string, syncCursor?: string): Promise<ChangePage>
   /** Stores bytes under a key that must not already exist. */
   create(key: string, bytes: Uint8Array): Promise<{ version: string }>

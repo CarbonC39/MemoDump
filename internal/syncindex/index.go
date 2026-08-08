@@ -69,7 +69,7 @@ func (idx *Index) validate() error {
 	}
 	seenPaths := make(map[string]string, len(idx.Entities))
 	for syncID, e := range idx.Entities {
-		if !cloudsync.IsUUIDv4(syncID) {
+		if !cloudsync.IsSyncID(syncID) {
 			return fmt.Errorf("invalid syncId %q", syncID)
 		}
 		if e.Kind != cloudsync.KindNote && e.Kind != cloudsync.KindFolder {

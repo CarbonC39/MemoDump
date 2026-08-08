@@ -132,7 +132,9 @@ func (s *MemoryStore) Replace(ctx context.Context, key string, data []byte, expe
 
 // Remove physically deletes a key, recording a ChangeDeleted in the log. This
 // is not part of the RemoteStore contract (V1 propagates deletions as entity
-// tombstones) but exists so the change log can express physical removals.
+// tombstones) but exists so the change log can express physical removals — the
+// engine treats a key reported physically removed after a known baseline as
+// repository damage, never as a deletion.
 func (s *MemoryStore) Remove(ctx context.Context, key string) error {
 	if err := ctx.Err(); err != nil {
 		return err

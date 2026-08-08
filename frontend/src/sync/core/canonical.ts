@@ -56,3 +56,14 @@ export function canonicalBytes(v: { [key: string]: CanonicalValue }): string {
 export function contentHash(kind: string, parentId: string, name: string, markdown: string): string {
   return sha256Hex(canonicalBytes({ kind, parentId, name, markdown }))
 }
+
+/**
+ * StateHash is the canonical digest of an entity's complete state: the tuple
+ * (contentHash, deleted). Two states are equal only when both the content hash
+ * and the deleted bit match, and this is the digest used for the disposable
+ * device snapshot and for deterministic conflict derivation. It reuses the same
+ * canonical JSON writer so Go and TypeScript produce byte-identical output.
+ */
+export function stateHash(contentHash: string, deleted: boolean): string {
+  return sha256Hex(canonicalBytes({ contentHash, deleted }))
+}

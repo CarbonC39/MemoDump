@@ -117,6 +117,23 @@
       },
       "contentHash": "6a0d7b6114ee44bca2f2270d9f260ca6e08134c53da2ad9d8149d9cf45136d43",
       "canonicalJson": "{\"contentHash\":\"6a0d7b6114ee44bca2f2270d9f260ca6e08134c53da2ad9d8149d9cf45136d43\",\"deleted\":false,\"kind\":\"note\",\"markdown\":\"![alt](memodump-media:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png)\",\"name\":\"media\",\"parentId\":\"\",\"schemaVersion\":1,\"syncId\":\"bdad4162-faf1-418e-895e-4221bbbb5cc5\",\"updatedAt\":1785800600000,\"updatedBy\":\"1a2b3c4d-1111-4222-8333-444455556666\"}\n"
+    },
+    {
+      "name": "idea (conflict 04b2cbe619cf)",
+      "entity": {
+        "schemaVersion": 1,
+        "syncId": "04b2cbe6-19cf-584f-bad4-55fa03d9c05a",
+        "kind": "note",
+        "parentId": "",
+        "name": "idea (conflict 04b2cbe619cf)",
+        "markdown": "# Local version\n",
+        "contentHash": "ac9888b723c5e43387eedb6a4e1fdab73ac2fbfb4538253c8f7f406d5a0ddce5",
+        "deleted": false,
+        "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666",
+        "updatedAt": 1785800700000
+      },
+      "contentHash": "ac9888b723c5e43387eedb6a4e1fdab73ac2fbfb4538253c8f7f406d5a0ddce5",
+      "canonicalJson": "{\"contentHash\":\"ac9888b723c5e43387eedb6a4e1fdab73ac2fbfb4538253c8f7f406d5a0ddce5\",\"deleted\":false,\"kind\":\"note\",\"markdown\":\"# Local version\\n\",\"name\":\"idea (conflict 04b2cbe619cf)\",\"parentId\":\"\",\"schemaVersion\":1,\"syncId\":\"04b2cbe6-19cf-584f-bad4-55fa03d9c05a\",\"updatedAt\":1785800700000,\"updatedBy\":\"1a2b3c4d-1111-4222-8333-444455556666\"}\n"
     }
   ]
 }

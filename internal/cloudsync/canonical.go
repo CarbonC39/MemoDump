@@ -133,3 +133,20 @@ func ContentHash(kind, parentId, name, markdown string) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
+
+// StateHash is the canonical digest of an entity's complete state: the tuple
+// (contentHash, deleted). Two states are equal only when both the content hash
+// and the deleted bit match, and this is the digest used for the disposable
+// device snapshot and for deterministic conflict derivation. It reuses the same
+// canonical JSON writer so Go and TypeScript produce byte-identical output.
+func StateHash(contentHash string, deleted bool) string {
+	data, err := canonicalBytes(map[string]any{
+		"contentHash": contentHash,
+		"deleted":     deleted,
+	})
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
