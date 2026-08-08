@@ -245,7 +245,7 @@ func TestGenerateFixtures(t *testing.T) {
 		{"name": "swapped roles differ", "sourceSyncId": sourceID, "localStateHash": remoteDivergent, "remoteStateHash": localDivergent, "expected": swappedID},
 	}
 	writeJSON("state-hashes.json", map[string]any{
-		"namespace": ConflictNamespace,
+		"namespace":   ConflictNamespace,
 		"stateHashes": stateCases,
 		"conflictIds": conflictCases,
 		"syncIds": map[string]any{
@@ -254,7 +254,7 @@ func TestGenerateFixtures(t *testing.T) {
 				"1a2b3c4d-1111-4222-8333-444455556666",
 				"00000000-0000-4000-8000-000000000000",
 			},
-			"validV5": []string{ConflictNamespace, conflictID, conflictTombstoneID},
+			"validV5":                       []string{ConflictNamespace, conflictID, conflictTombstoneID},
 			"invalidV5AsRepositoryOrDevice": []string{ConflictNamespace, conflictID},
 			"invalid": []string{
 				"",

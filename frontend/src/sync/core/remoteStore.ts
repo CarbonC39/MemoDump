@@ -53,7 +53,9 @@ export interface Change {
   key: string
   type: ChangeType
   version: string
-}/**
+}
+
+/**
  * One page of List output.
  *
  * nextCursor is the pagination continuation for the CURRENT scan: pass it back

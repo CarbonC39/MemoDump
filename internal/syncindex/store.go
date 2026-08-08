@@ -492,7 +492,7 @@ func (s *Store) RemoveEntity(syncID string) error {
 }
 
 func (s *Store) validateMutation(syncID string, e Entity) error {
-	if !cloudsync.IsUUIDv4(syncID) {
+	if !cloudsync.IsSyncID(syncID) {
 		return fmt.Errorf("invalid syncId %q", syncID)
 	}
 	if e.Kind != cloudsync.KindNote && e.Kind != cloudsync.KindFolder {

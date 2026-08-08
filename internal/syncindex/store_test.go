@@ -571,6 +571,47 @@ func TestAddUpdateRemoveEntity(t *testing.T) {
 	}
 }
 
+func TestAddEntityAcceptsV5SyncIDRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	s, err := Create(root, uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A deterministic conflict copy carries a UUID v5 Sync ID; it must be
+	// writable through the normal API and survive a Save/Load cycle exactly.
+	v5, err := cloudsync.DeriveConflictSyncID(
+		"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+		cloudsync.StateHash("a", false),
+		cloudsync.StateHash("b", false),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cloudsync.IsUUIDv4(v5) || !cloudsync.IsSyncID(v5) {
+		t.Fatalf("test setup: %q is not a v5-only Sync ID", v5)
+	}
+	ent := Entity{Kind: "note", Path: "idea (conflict copy).md"}
+	if err := s.AddEntity(v5, ent); err != nil {
+		t.Fatalf("AddEntity(v5) = %v", err)
+	}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load after v5 add: %v", err)
+	}
+	got, ok := s2.FindBySyncID(v5)
+	if !ok {
+		t.Fatal("v5 Sync ID missing after reload")
+	}
+	if got != ent {
+		t.Errorf("v5 entity after reload = %+v, want %+v", got, ent)
+	}
+	assertIndexFilesParse(t, root)
+}
+
 func TestAddEntityRejectsUnsafeMutations(t *testing.T) {
 	root := t.TempDir()
 	s, err := Create(root, uuid.NewString())

@@ -2,6 +2,9 @@
 // internal/cloudsync/names.go.
 
 import { uuidv5 } from './uuid'
+import { isSyncId } from './entity'
+
+const stateHashRe = /^[0-9a-f]{64}$/
 
 export const CASE_FOLD: Record<string, string> = {
   "A": "a",
@@ -1563,9 +1566,15 @@ export const conflictNamespace = '7f139d22-a0f6-50fe-855c-c416516180f0'
  * source Sync ID S, hashing the fixed-role state hashes in the order local,
  * then remote. Without an operation journal the derivation itself must be
  * idempotent, and the ordering matters: swapping the local and remote state
- * hashes changes the result whenever the two sides' semantics differ.
+ * hashes changes the result whenever the two sides' semantics differ. The
+ * caller must already hold validated values; malformed input is rejected
+ * rather than silently deriving an unusable identity.
  */
 export function deriveConflictSyncId(sourceSyncId: string, localStateHash: string, remoteStateHash: string): string {
+  if (!isSyncId(sourceSyncId)) throw new Error(`invalid source syncId: ${sourceSyncId}`)
+  if (!stateHashRe.test(localStateHash) || !stateHashRe.test(remoteStateHash)) {
+    throw new Error('invalid state hash')
+  }
   return uuidv5(conflictNamespace, `${sourceSyncId}\u0000${localStateHash}\u0000${remoteStateHash}`)
 }
 

@@ -242,7 +242,7 @@ func TestConflictNamesFixture(t *testing.T) {
 
 func TestStateHashesFixture(t *testing.T) {
 	var fixture struct {
-		Namespace string `json:"namespace"`
+		Namespace   string `json:"namespace"`
 		StateHashes []struct {
 			Name        string `json:"name"`
 			ContentHash string `json:"contentHash"`
@@ -265,13 +265,13 @@ func TestStateHashesFixture(t *testing.T) {
 
 func TestConflictIDsFixture(t *testing.T) {
 	var fixture struct {
-		Namespace string `json:"namespace"`
+		Namespace   string `json:"namespace"`
 		ConflictIDs []struct {
-			Name          string `json:"name"`
-			SourceSyncID  string `json:"sourceSyncId"`
-			LocalState    string `json:"localStateHash"`
-			RemoteState   string `json:"remoteStateHash"`
-			Expected      string `json:"expected"`
+			Name         string `json:"name"`
+			SourceSyncID string `json:"sourceSyncId"`
+			LocalState   string `json:"localStateHash"`
+			RemoteState  string `json:"remoteStateHash"`
+			Expected     string `json:"expected"`
 		} `json:"conflictIds"`
 	}
 	if err := json.Unmarshal(loadFixture(t, "state-hashes.json"), &fixture); err != nil {
@@ -292,14 +292,37 @@ func TestConflictIDsFixture(t *testing.T) {
 	}
 }
 
+func TestDeriveConflictSyncIDValidatesInputs(t *testing.T) {
+	goodHash := StateHash("a", false)
+	if goodHash == "" || !contentHashRe.MatchString(goodHash) {
+		t.Fatalf("test setup: StateHash produced %q", goodHash)
+	}
+	validID := "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+	badSource := []string{"", "not-a-uuid", "c8f28d1c-85c6-11e6-9d9d-0242ac130002", "5d5d8b2c94f74a3883188cd4cb53dfa8"}
+	for _, s := range badSource {
+		if _, err := DeriveConflictSyncID(s, goodHash, goodHash); err == nil {
+			t.Errorf("DeriveConflictSyncID(%q, ...) accepted", s)
+		}
+	}
+	badHash := []string{"", "ABC", strings.Repeat("0", 63), strings.ToUpper(goodHash)}
+	for _, h := range badHash {
+		if _, err := DeriveConflictSyncID(validID, h, goodHash); err == nil {
+			t.Errorf("DeriveConflictSyncID(_, %q, _) accepted", h)
+		}
+		if _, err := DeriveConflictSyncID(validID, goodHash, h); err == nil {
+			t.Errorf("DeriveConflictSyncID(_, _, %q) accepted", h)
+		}
+	}
+}
+
 func TestSyncIDValidationFixture(t *testing.T) {
 	var fixture struct {
 		Namespace string `json:"namespace"`
 		SyncIDs   struct {
-			ValidV4                   []string `json:"validV4"`
-			ValidV5                   []string `json:"validV5"`
-			InvalidV5AsRepoOrDevice   []string `json:"invalidV5AsRepositoryOrDevice"`
-			Invalid                   []string `json:"invalid"`
+			ValidV4                 []string `json:"validV4"`
+			ValidV5                 []string `json:"validV5"`
+			InvalidV5AsRepoOrDevice []string `json:"invalidV5AsRepositoryOrDevice"`
+			Invalid                 []string `json:"invalid"`
 		} `json:"syncIds"`
 	}
 	if err := json.Unmarshal(loadFixture(t, "state-hashes.json"), &fixture); err != nil {

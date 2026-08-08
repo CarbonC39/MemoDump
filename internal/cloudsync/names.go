@@ -34,7 +34,17 @@ const ConflictNamespace = "7f139d22-a0f6-50fe-855c-c416516180f0"
 // order local, then remote. Without an operation journal the derivation itself
 // must be idempotent, and the ordering matters: swapping the local and remote
 // state hashes changes the result whenever the two sides' semantics differ.
+// The caller must already hold validated values; this rejects malformed input
+// rather than silently deriving an unusable identity.
 func DeriveConflictSyncID(sourceSyncID, localStateHash, remoteStateHash string) (string, error) {
+	if !IsSyncID(sourceSyncID) {
+		return "", fmt.Errorf("conflict derivation: invalid source syncId %q", sourceSyncID)
+	}
+	for _, h := range []string{localStateHash, remoteStateHash} {
+		if !contentHashRe.MatchString(h) {
+			return "", fmt.Errorf("conflict derivation: invalid state hash %q", h)
+		}
+	}
 	ns, err := uuid.Parse(ConflictNamespace)
 	if err != nil {
 		return "", err

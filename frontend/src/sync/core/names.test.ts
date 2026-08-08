@@ -55,6 +55,16 @@ describe('derived conflict identities', () => {
       expect(deriveConflictSyncId(tc.sourceSyncId, tc.localStateHash, tc.remoteStateHash)).toBe(tc.expected)
     })
   }
+
+  it('rejects a malformed source Sync ID or state hash', () => {
+    const good = stateHashes.stateHashes[0].expected
+    const source = stateHashes.syncIds.validV4[0]
+    expect(() => deriveConflictSyncId('not-a-uuid', good, good)).toThrow()
+    expect(() => deriveConflictSyncId(source, '', good)).toThrow()
+    expect(() => deriveConflictSyncId(source, 'ABC', good)).toThrow()
+    expect(() => deriveConflictSyncId(source, good, '0'.repeat(63))).toThrow()
+    expect(() => deriveConflictSyncId(source, good, good.toUpperCase())).toThrow()
+  })
 })
 
 describe('sync id validation', () => {
