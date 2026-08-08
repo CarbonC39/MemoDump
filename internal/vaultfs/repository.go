@@ -679,8 +679,8 @@ func (r *Repository) Duplicate(rel string) (*Note, error) {
 
 // Apply materializes a note from its canonical Markdown, replacing content only
 // when expectedRevision matches the current durable revision. expectedRevision
-// "" means create-if-absent. This is the boundary the future sync worker and
-// external scans will use; nothing in Phase 0 calls it yet.
+// "" means create-if-absent. This is the boundary the sync coordinator uses:
+// exact-path create and CAS replace, never a timestamp de-collision.
 func (r *Repository) Apply(rel, markdown, expectedRevision string) (*Note, error) {
 	if err := rejectReserved(rel); err != nil {
 		return nil, err
@@ -719,6 +719,63 @@ func (r *Repository) Apply(rel, markdown, expectedRevision string) (*Note, error
 		return nil, err
 	}
 	return r.Get(rel, true)
+}
+
+// ReadVerbatim returns the full raw Markdown bytes and their revision for a
+// note, read fresh under the path lock (bypassing the cache), so the sync
+// coordinator never hashes or pushes bytes observed earlier in a cycle.
+func (r *Repository) ReadVerbatim(rel string) (markdown, revision string, err error) {
+	if err := rejectReserved(rel); err != nil {
+		return "", "", err
+	}
+	abs, err := r.resolve(rel)
+	if err != nil {
+		return "", "", err
+	}
+	err = r.locks.withLock([]string{rel}, func() error {
+		data, rerr := os.ReadFile(abs)
+		if rerr != nil {
+			if os.IsNotExist(rerr) {
+				return ErrNotFound
+			}
+			return rerr
+		}
+		markdown = string(data)
+		revision = RevisionOfBytes(data)
+		return nil
+	})
+	if err != nil {
+		return "", "", err
+	}
+	return markdown, revision, nil
+}
+
+// CreateFolderIfAbsent creates the folder at rel only if it does not exist,
+// returning ErrNameConflict when a non-directory occupies the path. An existing
+// directory is an idempotent success (created=false). This is the exact-path
+// folder create the sync coordinator uses for pulls.
+func (r *Repository) CreateFolderIfAbsent(rel string) (bool, error) {
+	if err := rejectReserved(rel); err != nil {
+		return false, ErrInvalidPath
+	}
+	abs, err := r.resolve(rel)
+	if err != nil {
+		return false, err
+	}
+	release := r.locks.acquire(rel)
+	defer release()
+	if info, serr := os.Stat(abs); serr == nil {
+		if info.IsDir() {
+			return false, nil
+		}
+		return false, ErrNameConflict
+	} else if !os.IsNotExist(serr) {
+		return false, serr
+	}
+	if err := os.MkdirAll(abs, 0755); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // --- folders ----------------------------------------------------------------
