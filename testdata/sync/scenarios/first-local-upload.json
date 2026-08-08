@@ -19,7 +19,8 @@
     "snapshot": null,
     "remote": {
       "entities": {}
-    }
+    },
+    "recovery": {}
   },
   "observations": [
     {
@@ -85,6 +86,7 @@
     "snapshot": {
       "entities": {},
       "cursor": "c1"
-    }
+    },
+    "recovery": {}
   }
 }

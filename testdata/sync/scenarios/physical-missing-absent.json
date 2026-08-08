@@ -26,7 +26,8 @@
     },
     "remote": {
       "entities": {}
-    }
+    },
+    "recovery": {}
   },
   "observations": [
     {
@@ -71,7 +72,8 @@
           "deleted": false
         }
       },
-      "cursor": "c1"
-    }
+      "cursor": ""
+    },
+    "recovery": {}
   }
 }

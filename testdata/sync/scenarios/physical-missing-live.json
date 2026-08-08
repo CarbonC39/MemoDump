@@ -28,7 +28,8 @@
     },
     "remote": {
       "entities": {}
-    }
+    },
+    "recovery": {}
   },
   "observations": [
     {
@@ -105,6 +106,7 @@
         }
       },
       "cursor": "c1"
-    }
+    },
+    "recovery": {}
   }
 }

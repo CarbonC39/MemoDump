@@ -44,7 +44,8 @@
           }
         }
       }
-    }
+    },
+    "recovery": {}
   },
   "observations": [
     {
@@ -173,6 +174,12 @@
         }
       },
       "cursor": "c1"
+    },
+    "recovery": {
+      "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8": {
+        "stateHash": "3a605d509d10db2b3997a85d437023fec419321ac3f75b7d49019003e5507981",
+        "markdown": "# local edit\n"
+      }
     }
   }
 }

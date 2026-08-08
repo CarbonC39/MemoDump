@@ -124,6 +124,33 @@ func scenarioSeeds() []scenarioSeed {
 			remote: map[string]*Entity{syncID_S: mkNote(syncID_S, "idea", "", "# v1\n")},
 		},
 		{
+			name:  "one-sided-rename",
+			files: map[string]string{"b.md": "# x\n"},
+			index: indexNote(syncID_S, "b.md"),
+			baselines: map[string]ScenarioBaseline{
+				syncID_S: {ContentHash: mkNote(syncID_S, "a", "", "# x\n").ContentHash, Deleted: false},
+			},
+			remote: map[string]*Entity{syncID_S: mkNote(syncID_S, "a", "", "# x\n")},
+		},
+		{
+			name:  "recreate-from-deleted-baseline",
+			files: map[string]string{"idea.md": "# x\n"},
+			index: indexNote(syncID_S, "idea.md"),
+			baselines: map[string]ScenarioBaseline{
+				syncID_S: {ContentHash: mkNote(syncID_S, "idea", "", "# x\n").ContentHash, Deleted: true},
+			},
+			remote: map[string]*Entity{syncID_S: mkNote(syncID_S, "idea", "", "# x\n")},
+		},
+		{
+			name:  "recreate-divergent-from-deleted-baseline",
+			files: map[string]string{"idea.md": "# a\n"},
+			index: indexNote(syncID_S, "idea.md"),
+			baselines: map[string]ScenarioBaseline{
+				syncID_S: {ContentHash: mkNote(syncID_S, "idea", "", "# x\n").ContentHash, Deleted: true},
+			},
+			remote: map[string]*Entity{syncID_S: mkNote(syncID_S, "idea", "", "# b\n")},
+		},
+		{
 			name:  "remote-edit",
 			files: map[string]string{"idea.md": "# v1\n"},
 			index: indexNote(syncID_S, "idea.md"),
@@ -258,6 +285,23 @@ func scenarioSeeds() []scenarioSeed {
 			remote: map[string]*Entity{
 				syncID_F: mkFolder(syncID_F, "Projects", ""),
 				syncID_A: mkNote(syncID_A, "a", syncID_F, "# child\n"),
+			},
+			blocked: map[string]bool{syncID_F: true, syncID_A: true},
+		},
+		{
+			name:  "parent-cycle",
+			files: nil,
+			index: map[string]IndexEntry{
+				syncID_F: {Kind: KindFolder, Path: "F"},
+				syncID_A: {Kind: KindFolder, Path: "A"},
+			},
+			baselines: map[string]ScenarioBaseline{
+				syncID_F: {ContentHash: mkFolder(syncID_F, "F", syncID_A).ContentHash, Deleted: false},
+				syncID_A: {ContentHash: mkFolder(syncID_A, "A", syncID_F).ContentHash, Deleted: false},
+			},
+			remote: map[string]*Entity{
+				syncID_F: mkFolder(syncID_F, "F", syncID_A),
+				syncID_A: mkFolder(syncID_A, "A", syncID_F),
 			},
 			blocked: map[string]bool{syncID_F: true, syncID_A: true},
 		},

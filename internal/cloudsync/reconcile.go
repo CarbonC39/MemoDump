@@ -332,16 +332,20 @@ func decideWithBaseline(l LocalObservation, r RemoteObservation, b *Baseline, ki
 				}
 				return d.establishBaseline(lHash, false, r.Version)
 			case b.Deleted:
-				// Baseline deleted but local is live: the user recreated the
-				// entity. If the remote tombstone equals the baseline, push the
-				// recreation (R == B); otherwise keep-both.
-				if rHash == b.ContentHash {
-					return d.pushLive(l.Entity, b.RemoteVersion, l.Revision)
+				// Baseline deleted but local is live: the entity was recreated
+				// locally. The baseline state is (bHash, deleted=true), so a
+				// remote LIVE record never equals it regardless of the hash.
+				if lHash == rHash {
+					// L == R (both live with the same content): establish a
+					// live baseline.
+					return d.establishBaseline(lHash, false, r.Version)
 				}
+				// Divergent: keep both; the remote live entity stays on the
+				// original Sync ID.
 				if kind == KindNote {
-					return d.createConflict(l, r, true, "")
+					return d.createConflict(l, r, false, "")
 				}
-				return d.block("folder recreated over a divergent tombstone")
+				return d.block("folder structural conflict over a deleted baseline")
 			case lHash == b.ContentHash:
 				// L == B and R != B: pull the remote change with the local
 				// revision CAS.
@@ -625,41 +629,50 @@ func DecideRepository(decisions []Decision) []Decision {
 	return order
 }
 
-// stableParentsFirst orders a slice so parents precede their children. It is
-// not a full topo sort: it is a stable grouping that moves every node whose
-// parent appears in the slice before it, iterating until no progress is made.
-// Deterministic because ties keep their input order (the caller's slice is
-// already deterministically ordered).
+// stableParentsFirst orders a slice so parents precede their children. It is a
+// deterministic Kahn-style topological sort: each round emits the earliest
+// remaining node (by original position) whose parent is not still pending. A
+// cycle (or a self-parent) cannot hang planning — the remaining nodes are
+// emitted in their original order and the engine surfaces the cycle as a block.
 func stableParentsFirst(in []Decision) []Decision {
 	if len(in) < 2 {
 		return in
 	}
-	out := append([]Decision(nil), in...)
-	byID := make(map[string]int, len(out))
-	for i, d := range out {
-		byID[d.SyncID] = i
+	pos := make(map[string]int, len(in))
+	remaining := make(map[string]Decision, len(in))
+	for i, d := range in {
+		pos[d.SyncID] = i
+		remaining[d.SyncID] = d
 	}
-	for changed := true; changed; {
-		changed = false
-		for i := 0; i < len(out); i++ {
-			pid := out[i].ParentID
-			if pid == "" {
+	out := make([]Decision, 0, len(in))
+	for len(remaining) > 0 {
+		bestPos, best := -1, ""
+		for _, d := range in {
+			if _, ok := remaining[d.SyncID]; !ok {
 				continue
 			}
-			j, ok := byID[pid]
-			if !ok || j < i {
-				continue
+			if d.ParentID != "" {
+				if _, ok := remaining[d.ParentID]; ok {
+					continue // parent not yet emitted
+				}
 			}
-			// Move out[i] before its parent at j (stable: shift the run).
-			v := out[i]
-			out = append(out[:i], out[i+1:]...)
-			out = append(out[:j], append([]Decision{v}, out[j:]...)...)
-			for k := j; k <= i; k++ {
-				byID[out[k].SyncID] = k
+			if bestPos == -1 || pos[d.SyncID] < bestPos {
+				bestPos, best = pos[d.SyncID], d.SyncID
 			}
-			changed = true
+		}
+		if best == "" {
+			// Cycle: emit the remainder in original order so planning never
+			// hangs; the affected cycle is surfaced separately as a block.
+			for _, d := range in {
+				if _, ok := remaining[d.SyncID]; ok {
+					out = append(out, d)
+					delete(remaining, d.SyncID)
+				}
+			}
 			break
 		}
+		out = append(out, remaining[best])
+		delete(remaining, best)
 	}
 	return out
 }

@@ -117,7 +117,7 @@ func TestScenariosAgreeWithStoredObservations(t *testing.T) {
 // without duplicate conflict identities.
 func TestScenariosConvergeUnderRestart(t *testing.T) {
 	ctx := context.Background()
-	boundaries := []Step{StepNone, StepIndex, StepLocal, StepRemote, StepRecovery}
+	boundaries := []Step{StepNone, StepIndex, StepConflict, StepRecovery, StepLocal, StepRemote}
 	for _, sc := range loadScenarios(t) {
 		// Reference: run fully to quiescence.
 		ref, err := NewSim(sc.Initial)
@@ -198,6 +198,172 @@ func keysOf(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestSimulatorInjectedRemoteFaultsConverge proves the engine converges under
+// the memory store's write-response-loss, stale-CAS, cursor-rejection, and
+// incomplete-listing faults, not just in isolated unit tests.
+func TestSimulatorInjectedRemoteFaultsConverge(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name     string
+		scenario string
+		arm      func(*MemoryStore)
+	}{
+		{
+			// A conflict create whose response is lost: the write lands, the
+			// engine re-reads, confirms the canonical state, and converges to a
+			// single deterministic conflict copy.
+			"conflict-create-response-loss",
+			"divergent-edits",
+			func(s *MemoryStore) {
+				s.ArmUncertainWrite("create", &StoreError{Kind: ErrRetryableTransport, Message: "response lost"})
+			},
+		},
+		{
+			// A push whose replace response is lost: idempotent success after
+			// re-read; the next cycle establishes the baseline.
+			"push-replace-response-loss",
+			"one-sided-edit",
+			func(s *MemoryStore) {
+				s.ArmUncertainWrite("replace", &StoreError{Kind: ErrRetryableTransport, Message: "response lost"})
+			},
+		},
+		{
+			// A stale precondition on the push: no unconditional write; the
+			// next cycle re-reads and re-decides.
+			"stale-replace-cas",
+			"one-sided-edit",
+			func(s *MemoryStore) {
+				s.ArmFault("replace", &StoreError{Kind: ErrPreconditionFailed, Message: "stale"})
+			},
+		},
+		{
+			// A rejected cursor falls back to a full listing.
+			"cursor-rejection",
+			"one-sided-edit",
+			func(s *MemoryStore) { s.ArmCursorReject() },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sc := findScenario(t, tc.scenario)
+			s, err := NewSim(sc.Initial)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.arm(s.remote)
+			if _, err := s.RunUntilQuiescent(ctx); err != nil {
+				t.Fatalf("did not converge under %s: %v", tc.name, err)
+			}
+			assertNoDuplicateConflictIDs(t, tc.scenario, s)
+		})
+	}
+}
+
+// TestSimulatorIncompleteListNeverDeletes proves an incomplete full listing
+// (an entity observed missing after a known baseline) surfaces as damage and
+// never deletes local data: the local note is re-created idempotently once the
+// object is rediscovered, and the cycle converges.
+func TestSimulatorIncompleteListNeverDeletes(t *testing.T) {
+	ctx := context.Background()
+	sc := findScenario(t, "one-sided-edit")
+	s, err := NewSim(sc.Initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.remote.ArmIncompleteList(1) // hide the entity from the first listing
+	if _, err := s.RunUntilQuiescent(ctx); err != nil {
+		t.Fatalf("did not converge after an incomplete listing: %v", err)
+	}
+	// The entity must never be deleted locally.
+	if _, ok := s.files["idea.md"]; !ok {
+		t.Fatal("incomplete listing deleted the local note")
+	}
+}
+
+// TestSimulatorRecoveryFailurePreventsDelete proves a recovery write failure
+// aborts the cycle before the deletion.
+func TestSimulatorRecoveryFailurePreventsDelete(t *testing.T) {
+	ctx := context.Background()
+	sc := findScenario(t, "remote-tombstone")
+	s, err := NewSim(sc.Initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.failRecovery = true
+	if _, _, err := s.RunCycle(ctx, StepDone); err == nil {
+		t.Fatal("cycle succeeded despite a recovery failure")
+	}
+	if _, ok := s.files["idea.md"]; !ok {
+		t.Fatal("the local note was deleted despite the recovery failure")
+	}
+}
+
+// TestSimulatorConflictCollisionBlocks proves an unrelated collision at the
+// derived conflict path blocks instead of deriving a second conflict copy.
+func TestSimulatorConflictCollisionBlocks(t *testing.T) {
+	ctx := context.Background()
+	sc := findScenario(t, "divergent-edits")
+	s, err := NewSim(sc.Initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A user file already occupies the deterministic conflict path.
+	plan, _, err := s.RunCycle(ctx, StepIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var conflictPath string
+	for _, d := range plan {
+		if d.Kind == DecisionCreateConflict {
+			conflictPath = s.pathForEntity(d.Conflict.ConflictEntity)
+		}
+	}
+	if conflictPath == "" {
+		t.Fatal("no conflict decision in the plan")
+	}
+	s.writeLocal(conflictPath, "# unrelated user content\n")
+	if _, _, err := s.RunCycle(ctx, StepDone); err == nil {
+		t.Fatal("conflict collision was not blocked")
+	}
+	// The original is untouched (no second conflict, no original modification).
+	if _, ok := s.files["idea.md"]; !ok {
+		t.Fatal("the original note was modified despite the collision")
+	}
+}
+
+// TestBlockedChangeDoesNotAdvanceCursor proves a blocked entity keeps its old
+// baseline and the snapshot cursor is not advanced past the unhandled change.
+func TestBlockedChangeDoesNotAdvanceCursor(t *testing.T) {
+	ctx := context.Background()
+	sc := findScenario(t, "blocked-path-conflict")
+	s, err := NewSim(sc.Initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := cloneBaselines(s.baselines)
+	cursorBefore := s.cursor
+	if _, _, err := s.RunCycle(ctx, StepDone); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, s.baselines) {
+		t.Fatalf("blocked entity baseline changed: %+v -> %+v", before, s.baselines)
+	}
+	if s.cursor != cursorBefore {
+		t.Fatalf("cursor advanced past a blocked change: %q -> %q", cursorBefore, s.cursor)
+	}
+}
+
+func findScenario(t *testing.T, name string) Scenario {
+	t.Helper()
+	for _, sc := range loadScenarios(t) {
+		if sc.Name == name {
+			return sc
+		}
+	}
+	t.Fatalf("scenario %q not found", name)
+	return Scenario{}
 }
 
 func kindOf(entities ...*Entity) string {

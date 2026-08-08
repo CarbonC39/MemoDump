@@ -68,9 +68,17 @@ type ScenarioInitial struct {
 	Local           ScenarioLocalFiles `json:"local"`
 	Snapshot        *ScenarioSnapshot  `json:"snapshot"`
 	Remote          ScenarioRemote     `json:"remote"`
+	// Recovery holds recoverable delete copies keyed by Sync ID.
+	Recovery map[string]ScenarioRecovery `json:"recovery"`
 	// Blocked lists Sync IDs carrying a pre-computed path/graph conflict
 	// annotation (a path collision, parent cycle, or structural conflict).
 	Blocked []string `json:"blocked,omitempty"`
+}
+
+// ScenarioRecovery is one recoverable delete copy (content, never sync state).
+type ScenarioRecovery struct {
+	StateHash string `json:"stateHash"`
+	Markdown  string `json:"markdown"`
 }
 
 // ScenarioLocalObs is one entity's derived local input.
@@ -128,6 +136,7 @@ type ScenarioFinal struct {
 	Local    ScenarioLocalFiles              `json:"local"`
 	Remote   map[string]ScenarioRemoteEntity `json:"remote"`
 	Snapshot *ScenarioSnapshot               `json:"snapshot"`
+	Recovery map[string]ScenarioRecovery     `json:"recovery"`
 }
 
 // Scenario is one full shared trace.
@@ -148,15 +157,17 @@ type Sim struct {
 	RepositoryID string
 	Profile      string
 
-	files     map[string]string     // path -> markdown
-	index     map[string]IndexEntry // syncID -> entry
-	remote    *MemoryStore
-	baselines map[string]ScenarioBaseline // durable snapshot
-	cursor    string
-	recovery  map[string]string // syncID -> recovered markdown
-	revisions map[string]string // path -> local CAS token
-	blocked   map[string]bool   // sync IDs with a path/graph conflict annotation
-	seq       int
+	files        map[string]string     // path -> markdown
+	index        map[string]IndexEntry // syncID -> entry
+	dirs         map[string]bool       // vault directories (folder paths)
+	remote       *MemoryStore
+	baselines    map[string]ScenarioBaseline // durable snapshot
+	cursor       string
+	recovery     map[string]ScenarioRecovery // syncID -> recoverable delete copy
+	revisions    map[string]string           // path -> local CAS token
+	blocked      map[string]bool             // sync IDs with a path/graph conflict annotation
+	failRecovery bool                        // inject a recovery write failure
+	seq          int
 }
 
 // NewSim builds a simulator from the scenario's initial durable state. Remote
@@ -170,9 +181,10 @@ func NewSim(init ScenarioInitial) (*Sim, error) {
 		Profile:      init.ProviderProfile,
 		files:        make(map[string]string, len(init.Local.Files)),
 		index:        make(map[string]IndexEntry, len(init.Local.Index)),
+		dirs:         make(map[string]bool),
 		remote:       NewMemoryStore(),
 		baselines:    make(map[string]ScenarioBaseline),
-		recovery:     make(map[string]string),
+		recovery:     make(map[string]ScenarioRecovery, len(init.Recovery)),
 		revisions:    make(map[string]string),
 		blocked:      make(map[string]bool, len(init.Blocked)),
 	}
@@ -181,6 +193,26 @@ func NewSim(init ScenarioInitial) (*Sim, error) {
 	}
 	for id, e := range init.Local.Index {
 		s.index[id] = e
+		if e.Kind == KindFolder {
+			s.dirs[e.Path] = true
+		}
+	}
+	for p := range init.Local.Files {
+		dir := p
+		for {
+			i := strings.LastIndex(dir, "/")
+			if i < 0 {
+				break
+			}
+			dir = dir[:i]
+			if dir == "" {
+				break
+			}
+			s.dirs[dir] = true
+		}
+	}
+	for id, rec := range init.Recovery {
+		s.recovery[id] = rec
 	}
 	for _, id := range init.Blocked {
 		s.blocked[id] = true
@@ -235,6 +267,7 @@ func (s *Sim) state() (ScenarioInitial, ScenarioFinal) {
 		ProviderProfile: s.Profile,
 		Local:           ScenarioLocalFiles{Files: cloneMap(s.files), Index: cloneIndex(s.index)},
 		Remote:          ScenarioRemote{Entities: s.remoteEntities()},
+		Recovery:        cloneRecovery(s.recovery),
 		Blocked:         blocked,
 	}
 	snap := &ScenarioSnapshot{Entities: cloneBaselines(s.baselines), Cursor: s.cursor}
@@ -246,6 +279,7 @@ func (s *Sim) state() (ScenarioInitial, ScenarioFinal) {
 		Local:    ScenarioLocalFiles{Files: cloneMap(s.files), Index: cloneIndex(s.index)},
 		Remote:   s.remoteEntities(),
 		Snapshot: snap,
+		Recovery: cloneRecovery(s.recovery),
 	}
 	return init, final
 }
@@ -346,6 +380,18 @@ func (s *Sim) observeLocal() map[string]LocalObservation {
 		entry, indexed := s.index[id]
 		if !indexed {
 			obs[id] = LocalObservation{SyncID: id, State: LocalAbsent}
+			continue
+		}
+		if entry.Kind == KindFolder {
+			if s.dirs[entry.Path] {
+				e := s.buildLocalEntity(id, entry.Path, entry.Kind)
+				obs[id] = LocalObservation{
+					SyncID: id, Kind: entry.Kind, State: LocalLive, Entity: e,
+					Revision: s.revisions[entry.Path],
+				}
+			} else {
+				obs[id] = LocalObservation{SyncID: id, Kind: entry.Kind, State: LocalAbsent}
+			}
 			continue
 		}
 		if _, ok := s.files[entry.Path]; ok {
@@ -455,12 +501,15 @@ const (
 	StepNone Step = iota
 	// StepIndex: stop after conflict/identity reservation in the index.
 	StepIndex
+	// StepConflict: stop after the conflict copies are created and verified
+	// locally and remotely, before the original is touched.
+	StepConflict
+	// StepRecovery: stop after recovery copies for deletions.
+	StepRecovery
 	// StepLocal: stop after local file mutations.
 	StepLocal
 	// StepRemote: stop after remote writes.
 	StepRemote
-	// StepRecovery: stop after recovery copies for deletions.
-	StepRecovery
 	// StepSnapshot: stop after the snapshot baseline commit (cycle complete).
 	StepSnapshot
 	// StepDone: run every step.
@@ -483,31 +532,41 @@ func (s *Sim) RunCycle(ctx context.Context, stop Step) ([]Decision, int, error) 
 		return plan, 0, nil
 	}
 
-	// 1. Index reservations (conflict identities) before destructive actions.
+	// 1. Index reservations (conflict identities) before the original changes.
 	if err := s.applyIndex(plan); err != nil {
 		return plan, actions, err
 	}
 	if stop == StepIndex {
 		return plan, actions, nil
 	}
-	// 2. Local mutations.
+	// 2. Conflict copies: create and verify local and remote, never touching
+	//    the original until both conflict copies are settled.
+	if err := s.applyConflicts(plan); err != nil {
+		return plan, actions, err
+	}
+	if stop == StepConflict {
+		return plan, actions, nil
+	}
+	// 3. Recovery copies must succeed before the deletions they guard.
+	if err := s.applyRecovery(plan); err != nil {
+		return plan, actions, err
+	}
+	if stop == StepRecovery {
+		return plan, actions, nil
+	}
+	// 4. Local mutations (pull, original handling, apply-tombstone deletes).
 	s.applyLocal(plan)
 	if stop == StepLocal {
 		return plan, actions, nil
 	}
-	// 3. Remote writes.
+	// 5. Remote writes (pushes, tombstones, original remote tombstones).
 	if err := s.applyRemote(plan); err != nil {
 		return plan, actions, err
 	}
 	if stop == StepRemote {
 		return plan, actions, nil
 	}
-	// 4. Recovery copies (before the deletions they guard).
-	s.applyRecovery(plan)
-	if stop == StepRecovery {
-		return plan, actions, nil
-	}
-	// 5. Snapshot baseline commit.
+	// 6. Snapshot baseline commit.
 	s.applyBaselines(plan)
 	return plan, actions, nil
 }
@@ -528,6 +587,41 @@ func (s *Sim) applyIndex(plan []Decision) error {
 			return fmt.Errorf("conflict path collision: %s", path)
 		}
 		s.index[c.ConflictSyncID] = IndexEntry{Kind: KindNote, Path: path}
+	}
+	return nil
+}
+
+// applyConflicts creates and VERIFIES the deterministic conflict copies locally
+// and remotely before the original is modified. An existing object is
+// idempotent success only when its Sync ID and canonical state match; any
+// unrelated collision blocks instead of deriving a second conflict copy.
+func (s *Sim) applyConflicts(plan []Decision) error {
+	for _, d := range plan {
+		if d.Kind != DecisionCreateConflict {
+			continue
+		}
+		c := d.Conflict
+		if c == nil {
+			continue
+		}
+		// Local conflict copy: create-if-absent, verify identical content.
+		path := s.pathForEntity(c.ConflictEntity)
+		if md, ok := s.files[path]; ok {
+			if md != c.ConflictEntity.Markdown {
+				return fmt.Errorf("conflict local path collision: %s", path)
+			}
+		} else {
+			s.writeLocal(path, c.ConflictEntity.Markdown)
+		}
+		// Remote conflict copy: create-if-absent; verify on existence or an
+		// uncertain response.
+		data, err := c.ConflictEntity.Serialize()
+		if err != nil {
+			return err
+		}
+		if err := s.createRemoteVerified(entityKey(c.ConflictSyncID), data, c.ConflictEntity); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -560,7 +654,52 @@ func (s *Sim) pathForEntity(e *Entity) string {
 	return dir + "/" + name
 }
 
-// applyLocal applies local file mutations from pull/apply/conflict decisions.
+// createRemoteVerified creates key with data, then re-reads to confirm the
+// intended canonical state on any error: a precondition failure means an
+// unrelated collision (never idempotent unless the state matches), and a
+// lost/uncertain response is idempotent success when the write landed.
+func (s *Sim) createRemoteVerified(key string, data []byte, expected *Entity) error {
+	ctx := context.Background()
+	if _, err := s.remote.Create(ctx, key, data); err == nil {
+		return nil
+	}
+	existing, _, rerr := s.remote.Read(ctx, key)
+	if rerr != nil {
+		return rerr
+	}
+	parsed, perr := ParseEntity(existing)
+	if perr != nil || parsed.SyncID != expected.SyncID ||
+		parsed.ContentHash != expected.ContentHash || parsed.Deleted != expected.Deleted {
+		return fmt.Errorf("remote create collision at %s", key)
+	}
+	return nil // idempotent success: identical canonical state already present
+}
+
+// replaceRemoteVerified replaces key with data at version, re-reading on any
+// failure. A write that landed with the intended state is idempotent success; a
+// stale precondition (or unrelated remote state) is left to the next cycle to
+// re-read and re-decide — never an unconditional write.
+func (s *Sim) replaceRemoteVerified(key string, data []byte, expected *Entity, version string) error {
+	ctx := context.Background()
+	if _, err := s.remote.Replace(ctx, key, data, version); err == nil {
+		return nil
+	}
+	existing, _, rerr := s.remote.Read(ctx, key)
+	if rerr != nil {
+		return rerr
+	}
+	parsed, perr := ParseEntity(existing)
+	if perr == nil && parsed.SyncID == expected.SyncID &&
+		parsed.ContentHash == expected.ContentHash && parsed.Deleted == expected.Deleted {
+		return nil // uncertain write landed idempotently
+	}
+	return nil // stale CAS or divergence: the next cycle re-reads and re-decides
+}
+
+// applyLocal applies local file mutations from pull and deletion decisions.
+// Conflict copies were already created and verified in applyConflicts; here the
+// ORIGINAL of a conflict is resolved (accept the remote live entity, or delete
+// the local original), and apply-tombstone deletes run after recovery.
 func (s *Sim) applyLocal(plan []Decision) {
 	for _, d := range plan {
 		switch d.Kind {
@@ -579,9 +718,6 @@ func (s *Sim) applyLocal(plan []Decision) {
 			if c == nil {
 				continue
 			}
-			path := s.pathForEntity(c.ConflictEntity)
-			s.writeLocal(path, c.ConflictEntity.Markdown)
-			s.index[c.ConflictSyncID] = IndexEntry{Kind: KindNote, Path: path}
 			if c.AcceptRemoteOriginal && c.OriginalEntity != nil {
 				opath := s.pathForEntity(c.OriginalEntity)
 				s.writeLocal(opath, c.OriginalEntity.Markdown)
@@ -605,9 +741,11 @@ func (s *Sim) applyLocal(plan []Decision) {
 	}
 }
 
-// applyRemote applies remote create/replace/tombstone/conflict writes with CAS.
+// applyRemote applies remote create/replace/tombstone writes with CAS. Conflict
+// copies were created and verified in applyConflicts; here only the original
+// remote tombstone of a conflict (when the original is not already a tombstone)
+// is written.
 func (s *Sim) applyRemote(plan []Decision) error {
-	ctx := context.Background()
 	for _, d := range plan {
 		switch d.Kind {
 		case DecisionPushLive:
@@ -616,50 +754,32 @@ func (s *Sim) applyRemote(plan []Decision) error {
 				return err
 			}
 			if d.Version == "" {
-				if _, err := s.remote.Create(ctx, entityKey(d.SyncID), data); err != nil && !IsStoreError(err, ErrPreconditionFailed) {
+				if err := s.createRemoteVerified(entityKey(d.SyncID), data, d.Entity); err != nil {
 					return err
 				}
-			} else if _, err := s.remote.Replace(ctx, entityKey(d.SyncID), data, d.Version); err != nil {
-				if !IsStoreError(err, ErrPreconditionFailed) && !IsStoreError(err, ErrNotFound) {
-					return err
-				}
-				// Stale CAS: the coordinator re-reads and re-decides next cycle.
+			} else if err := s.replaceRemoteVerified(entityKey(d.SyncID), data, d.Entity, d.Version); err != nil {
+				return err
 			}
 		case DecisionPushTombstone:
 			data, err := d.Entity.Serialize()
 			if err != nil {
 				return err
 			}
-			if _, err := s.remote.Replace(ctx, entityKey(d.SyncID), data, d.Version); err != nil {
-				if !IsStoreError(err, ErrPreconditionFailed) && !IsStoreError(err, ErrNotFound) {
-					return err
-				}
+			if err := s.replaceRemoteVerified(entityKey(d.SyncID), data, d.Entity, d.Version); err != nil {
+				return err
 			}
 		case DecisionCreateConflict:
 			c := d.Conflict
 			if c == nil {
 				continue
 			}
-			data, err := c.ConflictEntity.Serialize()
-			if err != nil {
-				return err
-			}
-			if _, err := s.remote.Create(ctx, entityKey(c.ConflictSyncID), data); err != nil {
-				if !IsStoreError(err, ErrPreconditionFailed) {
-					return err
-				}
-				// Already exists: idempotent when the content matches; an
-				// unrelated collision is surfaced on the next read.
-			}
 			if c.OriginalTombstone && c.OriginalVersion != "" && c.OriginalTombstoneEntity != nil {
-				data2, err := c.OriginalTombstoneEntity.Serialize()
+				data, err := c.OriginalTombstoneEntity.Serialize()
 				if err != nil {
 					return err
 				}
-				if _, err := s.remote.Replace(ctx, entityKey(d.SyncID), data2, c.OriginalVersion); err != nil {
-					if !IsStoreError(err, ErrPreconditionFailed) && !IsStoreError(err, ErrNotFound) {
-						return err
-					}
+				if err := s.replaceRemoteVerified(entityKey(d.SyncID), data, c.OriginalTombstoneEntity, c.OriginalVersion); err != nil {
+					return err
 				}
 			}
 		}
@@ -667,30 +787,56 @@ func (s *Sim) applyRemote(plan []Decision) error {
 	return nil
 }
 
-// applyRecovery writes recovery copies before the deletions they guard.
-func (s *Sim) applyRecovery(plan []Decision) {
+// applyRecovery writes recovery copies for every entity that will be deleted
+// locally (apply-tombstone and conflict originals). It runs BEFORE applyLocal
+// and returns an error on failure, so a failed recovery write prevents the
+// deletion. Writing the same (stateHash, markdown) again is idempotent.
+func (s *Sim) applyRecovery(plan []Decision) error {
+	if s.failRecovery {
+		return fmt.Errorf("injected recovery failure")
+	}
 	for _, d := range plan {
 		switch d.Kind {
 		case DecisionApplyTombstone:
-			if entry, ok := s.index[d.SyncID]; ok {
-				if md, ok := s.files[entry.Path]; ok {
-					s.recovery[d.SyncID] = md
-				}
+			if err := s.recoverEntity(d.SyncID); err != nil {
+				return err
 			}
 		case DecisionCreateConflict:
 			if c := d.Conflict; c != nil && c.OriginalTombstone {
-				if entry, ok := s.index[d.SyncID]; ok {
-					if md, ok := s.files[entry.Path]; ok {
-						s.recovery[d.SyncID] = md
-					}
+				if err := s.recoverEntity(d.SyncID); err != nil {
+					return err
 				}
 			}
 		}
 	}
+	return nil
 }
 
-// applyBaselines commits the established baselines to the durable snapshot.
+func (s *Sim) recoverEntity(syncID string) error {
+	entry, ok := s.index[syncID]
+	if !ok {
+		return nil
+	}
+	md, ok := s.files[entry.Path]
+	if !ok {
+		return nil // nothing present to recover
+	}
+	e := s.buildLocalEntity(syncID, entry.Path, entry.Kind)
+	s.recovery[syncID] = ScenarioRecovery{StateHash: StateHash(e.ContentHash, false), Markdown: md}
+	return nil
+}
+
+// applyBaselines commits the established baselines to the durable snapshot and
+// advances the cursor only when every planned change reached a safe terminal
+// state (no blocks, retries, or pending repairs).
 func (s *Sim) applyBaselines(plan []Decision) {
+	advanced := true
+	for _, d := range plan {
+		switch d.Kind {
+		case DecisionBlock, DecisionRetry, DecisionRepairIndex:
+			advanced = false
+		}
+	}
 	for _, d := range plan {
 		if d.Kind != DecisionEstablishBaseline {
 			continue
@@ -699,7 +845,7 @@ func (s *Sim) applyBaselines(plan []Decision) {
 			ContentHash: d.ContentHash, Deleted: d.Deleted, RemoteVersion: d.Version,
 		}
 	}
-	if s.cursor == "" {
+	if advanced && s.cursor == "" {
 		s.cursor = "c1"
 	}
 }
@@ -801,6 +947,14 @@ func cloneIndex(m map[string]IndexEntry) map[string]IndexEntry {
 
 func cloneBaselines(m map[string]ScenarioBaseline) map[string]ScenarioBaseline {
 	out := make(map[string]ScenarioBaseline, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneRecovery(m map[string]ScenarioRecovery) map[string]ScenarioRecovery {
+	out := make(map[string]ScenarioRecovery, len(m))
 	for k, v := range m {
 		out[k] = v
 	}

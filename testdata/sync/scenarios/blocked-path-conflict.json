@@ -45,6 +45,7 @@
         }
       }
     },
+    "recovery": {},
     "blocked": [
       "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
     ]
@@ -136,7 +137,8 @@
           "deleted": false
         }
       },
-      "cursor": "c1"
-    }
+      "cursor": ""
+    },
+    "recovery": {}
   }
 }

@@ -42,7 +42,8 @@
           }
         }
       }
-    }
+    },
+    "recovery": {}
   },
   "observations": [
     {
@@ -172,6 +173,7 @@
         }
       },
       "cursor": "c1"
-    }
+    },
+    "recovery": {}
   }
 }

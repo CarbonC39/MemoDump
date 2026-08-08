@@ -33,7 +33,8 @@
           "rawBase64": "eyJzY2hlbWFWZXJzaW9uIjoxLCJub3QiOiJhbiBlbnRpdHkifQ=="
         }
       }
-    }
+    },
+    "recovery": {}
   },
   "observations": [
     {
@@ -97,7 +98,8 @@
           "deleted": false
         }
       },
-      "cursor": "c1"
-    }
+      "cursor": ""
+    },
+    "recovery": {}
   }
 }

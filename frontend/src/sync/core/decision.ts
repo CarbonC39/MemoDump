@@ -217,12 +217,18 @@ function decideWithBaseline(
             return establishBaseline(d, lHash, false, r.version ?? '')
           }
           if (b.deleted) {
-            // Baseline deleted but local is live: the user recreated the
-            // entity. If the remote tombstone equals the baseline, push the
-            // recreation (R == B); otherwise keep-both.
-            if (rHash === b.contentHash) return pushLive(d, l.entity!, b.remoteVersion, l.revision ?? '')
-            if (kind === 'note') return createConflict(d, l, r, true, '')
-            return block(d, 'folder recreated over a divergent tombstone')
+            // Baseline deleted but local is live: the entity was recreated
+            // locally. The baseline state is (bHash, deleted=true), so a
+            // remote LIVE record never equals it regardless of the hash.
+            if (lHash === rHash) {
+              // L == R (both live with the same content): establish a live
+              // baseline.
+              return establishBaseline(d, lHash, false, r.version ?? '')
+            }
+            // Divergent: keep both; the remote live entity stays on the
+            // original Sync ID.
+            if (kind === 'note') return createConflict(d, l, r, false, '')
+            return block(d, 'folder structural conflict over a deleted baseline')
           }
           if (lHash === b.contentHash) {
             // L == B and R != B: pull the remote change with the local
@@ -486,26 +492,45 @@ export function decideRepository(decisions: Decision[]): Decision[] {
   return out
 }
 
-/** Moves every node whose parent appears in the slice before it (stable). */
+/**
+ * Orders a slice so parents precede their children. A deterministic Kahn-style
+ * topological sort: each round emits the earliest remaining node (by original
+ * position) whose parent is not still pending. A cycle cannot hang planning —
+ * the remaining nodes are emitted in their original order.
+ */
 function stableParentsFirst(inp: Decision[]): Decision[] {
   if (inp.length < 2) return inp
-  const out = [...inp]
-  const byId = new Map<string, number>()
-  out.forEach((d, i) => byId.set(d.syncId, i))
-  let changed = true
-  while (changed) {
-    changed = false
-    for (let i = 0; i < out.length; i++) {
-      const pid = out[i].parentId
-      if (!pid) continue
-      const j = byId.get(pid)
-      if (j === undefined || j < i) continue
-      const v = out.splice(i, 1)[0]
-      out.splice(j, 0, v)
-      for (let k = j; k <= i; k++) byId.set(out[k].syncId, k)
-      changed = true
+  const pos = new Map<string, number>()
+  const remaining = new Map<string, Decision>()
+  inp.forEach((d, i) => {
+    pos.set(d.syncId, i)
+    remaining.set(d.syncId, d)
+  })
+  const out: Decision[] = []
+  while (remaining.size > 0) {
+    let bestPos = -1
+    let bestId = ''
+    for (const d of inp) {
+      if (!remaining.has(d.syncId)) continue
+      if (d.parentId && remaining.has(d.parentId)) continue
+      const p = pos.get(d.syncId)!
+      if (bestPos === -1 || p < bestPos) {
+        bestPos = p
+        bestId = d.syncId
+      }
+    }
+    if (!bestId) {
+      // Cycle: emit the remainder in original order so planning never hangs.
+      for (const d of inp) {
+        if (remaining.has(d.syncId)) {
+          out.push(d)
+          remaining.delete(d.syncId)
+        }
+      }
       break
     }
+    out.push(remaining.get(bestId)!)
+    remaining.delete(bestId)
   }
   return out
 }
