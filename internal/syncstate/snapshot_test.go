@@ -8,12 +8,18 @@ import (
 	"testing"
 )
 
+const (
+	testVaultID   = "11111111-1111-4111-8111-111111111111"
+	testReplicaID = "22222222-2222-4222-8222-222222222222"
+	testRepoID    = "33333333-3333-4333-8333-333333333333"
+)
+
 func validSnapshot() *Snapshot {
 	return &Snapshot{
 		SchemaVersion:   SnapshotSchemaVersion,
-		VaultID:         "11111111-1111-4111-8111-111111111111",
-		ReplicaID:       "22222222-2222-4222-8222-222222222222",
-		RepositoryID:    "33333333-3333-4333-8333-333333333333",
+		VaultID:         testVaultID,
+		ReplicaID:       testReplicaID,
+		RepositoryID:    testRepoID,
 		ProviderProfile: strings.Repeat("a", 64),
 		Entities: map[string]SnapshotEntity{
 			"44444444-4444-4444-8444-444444444444": {
@@ -38,7 +44,7 @@ func identityFor(s *Snapshot) ExpectedIdentity {
 }
 
 func newStore(dir string, io fsIO) *SnapshotStore {
-	return &SnapshotStore{dir: dir, io: io}
+	return &SnapshotStore{dir: dir, vaultID: testVaultID, replicaID: testReplicaID, io: io}
 }
 
 func TestSnapshotRoundTripDeterministic(t *testing.T) {
@@ -109,6 +115,46 @@ func TestParseSnapshotRejectsStrictJSON(t *testing.T) {
 		if _, err := ParseSnapshot([]byte(tc.json)); err == nil {
 			t.Errorf("%s: accepted", tc.name)
 		}
+	}
+}
+
+func TestSnapshotStoreNewRejectsInvalidIdentity(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range []struct {
+		name      string
+		vaultID   string
+		replicaID string
+	}{
+		{"bad vault", "not-a-uuid", testReplicaID},
+		{"bad replica", testVaultID, "../escape"},
+		{"v5 vault", "04b2cbe6-19cf-584f-bad4-55fa03d9c05a", testReplicaID},
+		{"empty replica", testVaultID, ""},
+	} {
+		if _, err := NewSnapshotStore(root, tc.vaultID, tc.replicaID); err == nil {
+			t.Errorf("%s: accepted", tc.name)
+		}
+	}
+	if _, err := NewSnapshotStore(root, testVaultID, testReplicaID); err != nil {
+		t.Fatalf("valid identity rejected: %v", err)
+	}
+}
+
+func TestSnapshotStoreReplaceRejectsCrossIdentity(t *testing.T) {
+	root := t.TempDir()
+	st := newStore(root, osFsIO{})
+	// A snapshot declaring a different Replica ID than the store is bound to
+	// must be refused before anything is written to disk.
+	other := validSnapshot()
+	other.ReplicaID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	if err := st.Replace(other); err == nil {
+		t.Fatal("cross-identity snapshot accepted")
+	}
+	if _, err := os.Stat(st.Path()); !os.IsNotExist(err) {
+		t.Fatal("cross-identity snapshot was written to disk")
+	}
+	// The store's own identity is still accepted.
+	if err := st.Replace(validSnapshot()); err != nil {
+		t.Fatalf("valid snapshot rejected: %v", err)
 	}
 }
 

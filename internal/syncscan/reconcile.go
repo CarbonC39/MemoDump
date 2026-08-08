@@ -1,9 +1,8 @@
 // Package syncscan derives deterministic local observations for the sync
 // engine from a vault scan and the portable index: which indexed entities are
-// present, missing, blocked, or unstable, which unindexed observations need a
-// Sync ID, and which unique rename/repair candidates exist. It performs no
-// remote, snapshot, or baseline decision — the engine compares these
-// observations against remote and snapshot state.
+// present, missing, blocked, or unstable, and which unindexed observations
+// need a Sync ID. It performs no remote, snapshot, or baseline decision — the
+// engine compares these observations against remote and snapshot state.
 package syncscan
 
 import (
@@ -58,38 +57,26 @@ type Entity struct {
 	LocalHash string // current local digest when the note is present and readable
 }
 
-// NewEntity is an observed path with no Sync ID yet; it needs identity.
+// NewEntity is an observed path with no Sync ID yet; it needs identity. Every
+// unindexed note and folder appears here — identity and rename decisions belong
+// to the engine, never to the scanner.
 type NewEntity struct {
 	Path      string
 	Kind      string
 	LocalHash string
 }
 
-// RepairHint is a unique crash/rename repair candidate: a missing indexed note
-// whose last-known content digest matches exactly one unindexed note. The
-// engine decides whether to apply it; anything ambiguous stays separate.
-type RepairHint struct {
-	SyncID    string // missing indexed note
-	Path      string // old indexed path
-	NewPath   string // the unique unindexed note with identical content
-	LocalHash string // the shared content digest
-}
-
 // Reconciliation is the complete local input for the engine. It schedules
-// nothing — it only describes observations and repair candidates.
+// nothing — it only describes observations.
 type Reconciliation struct {
 	Entities []Entity
 	New      []NewEntity
-	Repairs  []RepairHint
 }
 
 // Reconcile derives per-entity local observations from a scan and the portable
-// index. lastKnown maps a Sync ID to its last-known local content digest
-// (vaultfs.LocalHash) and is used only to produce unique rename/repair hints;
-// when nil or empty, missing notes are plain missing observations and the
-// engine applies a lossless delete-plus-create interpretation or reports a
-// path conflict. It is read-only: no index mutation happens here.
-func Reconcile(res *vaultfs.ScanResult, idx *syncindex.Store, lastKnown map[string]string) (*Reconciliation, error) {
+// index. It is read-only: no index mutation happens here, and no repair or
+// rename inference is performed — the engine decides identity.
+func Reconcile(res *vaultfs.ScanResult, idx *syncindex.Store) (*Reconciliation, error) {
 	notes := make(map[string]vaultfs.Observation, len(res.Notes))
 	for _, n := range res.Notes {
 		notes[n.Path] = n
@@ -113,13 +100,6 @@ func Reconcile(res *vaultfs.ScanResult, idx *syncindex.Store, lastKnown map[stri
 
 	r := &Reconciliation{}
 
-	type missingRef struct {
-		syncID string
-		kind   string
-		path   string
-	}
-	var missing []missingRef
-
 	syncIDs := make([]string, 0, len(idx.Index.Entities))
 	for id := range idx.Index.Entities {
 		syncIDs = append(syncIDs, id)
@@ -142,7 +122,7 @@ func Reconcile(res *vaultfs.ScanResult, idx *syncindex.Store, lastKnown map[stri
 				r.Entities = append(r.Entities, Entity{SyncID: syncID, Kind: ent.Kind, Path: ent.Path, State: StateUnstable})
 				continue
 			}
-			missing = append(missing, missingRef{syncID: syncID, kind: ent.Kind, path: ent.Path})
+			r.Entities = append(r.Entities, Entity{SyncID: syncID, Kind: ent.Kind, Path: ent.Path, State: StateMissing})
 			continue
 		}
 		if obs.Kind != ent.Kind {
@@ -157,57 +137,15 @@ func Reconcile(res *vaultfs.ScanResult, idx *syncindex.Store, lastKnown map[stri
 		r.Entities = append(r.Entities, e)
 	}
 
-	// Unique rename/repair inference: a missing indexed note whose last-known
-	// content digest matches EXACTLY ONE new unindexed note may be a move. Any
-	// ambiguity — two missing entities with the same last-known hash, or two
-	// identical new files — is not used for repair inference; those new files
-	// are copies (new Sync IDs) and the missing originals remain missing.
-	repairTo := make(map[string]string)
-	if len(missing) > 0 {
-		newByHash := make(map[string][]string)
-		for _, n := range res.Notes {
-			if !indexed[n.Path] && n.LocalHash != "" {
-				newByHash[n.LocalHash] = append(newByHash[n.LocalHash], n.Path)
-			}
-		}
-		missingByHash := make(map[string]missingRef)
-		missingCountByHash := make(map[string]int)
-		for _, m := range missing {
-			if hash, ok := lastKnown[m.syncID]; ok && hash != "" {
-				missingCountByHash[hash]++
-				missingByHash[hash] = m
-			}
-		}
-		for hash, paths := range newByHash {
-			if len(paths) != 1 || missingCountByHash[hash] != 1 {
-				continue
-			}
-			repairTo[missingByHash[hash].syncID] = paths[0]
-		}
-	}
-	for _, m := range missing {
-		r.Entities = append(r.Entities, Entity{SyncID: m.syncID, Kind: m.kind, Path: m.path, State: StateMissing})
-		if newPath, ok := repairTo[m.syncID]; ok {
-			r.Repairs = append(r.Repairs, RepairHint{
-				SyncID: m.syncID, Path: m.path, NewPath: newPath, LocalHash: lastKnown[m.syncID],
-			})
-		}
-	}
-
-	// New entities: unindexed observations that need Sync IDs. Paths claimed by
-	// a repair candidate take the old Sync ID and are not new.
-	claimed := make(map[string]bool)
-	for _, h := range r.Repairs {
-		claimed[h.NewPath] = true
-	}
-	// res.Notes and res.Folders are path-sorted, so r.New is deterministic.
+	// New entities: every unindexed observation that needs identity. res.Notes
+	// and res.Folders are path-sorted, so r.New is deterministic.
 	for _, n := range res.Notes {
-		if !indexed[n.Path] && !claimed[n.Path] {
+		if !indexed[n.Path] {
 			r.New = append(r.New, NewEntity{Path: n.Path, Kind: cloudsync.KindNote, LocalHash: n.LocalHash})
 		}
 	}
 	for _, f := range res.Folders {
-		if !indexed[f.Path] && !claimed[f.Path] {
+		if !indexed[f.Path] {
 			r.New = append(r.New, NewEntity{Path: f.Path, Kind: cloudsync.KindFolder})
 		}
 	}
@@ -215,12 +153,12 @@ func Reconcile(res *vaultfs.ScanResult, idx *syncindex.Store, lastKnown map[stri
 	return r, nil
 }
 
-// ApplyIdentity applies the index-only identity decisions of a reconciliation:
-// repair candidates move the old Sync ID to the new path, and every unindexed
-// observation receives a fresh Sync ID. It never touches the remote and never
-// deletes anything. The whole batch is built on a clone and committed through
-// ReplaceIndex only when every change validates, so a failing batch leaves the
-// store's index untouched — never a half-applied identity.
+// ApplyIdentity gives every unindexed observation a fresh Sync ID. It never
+// touches the remote and never deletes anything, and it performs no repair or
+// rename inference — approved identity changes come from the engine. The whole
+// batch is built on a clone and committed through ReplaceIndex only when every
+// change validates, so a failing batch leaves the store's index untouched —
+// never a half-applied identity.
 func ApplyIdentity(r *Reconciliation, idx *syncindex.Store) error {
 	next := syncindex.New(idx.Index.VaultID)
 	for id, e := range idx.Index.Entities {
@@ -231,25 +169,7 @@ func ApplyIdentity(r *Reconciliation, idx *syncindex.Store) error {
 		byPath[e.Path] = id
 	}
 
-	claimed := make(map[string]bool)
-	for _, hint := range r.Repairs {
-		ent, ok := next.Entities[hint.SyncID]
-		if !ok {
-			return fmt.Errorf("unknown syncId %s", hint.SyncID)
-		}
-		if prev, ok := byPath[hint.NewPath]; ok && prev != hint.SyncID {
-			return fmt.Errorf("path %q already indexed as %s", hint.NewPath, prev)
-		}
-		delete(byPath, ent.Path)
-		ent.Path = hint.NewPath
-		next.Entities[hint.SyncID] = ent
-		byPath[hint.NewPath] = hint.SyncID
-		claimed[hint.NewPath] = true
-	}
 	for _, ne := range r.New {
-		if claimed[ne.Path] {
-			continue
-		}
 		if prev, ok := byPath[ne.Path]; ok {
 			return fmt.Errorf("path %q already indexed as %s", ne.Path, prev)
 		}

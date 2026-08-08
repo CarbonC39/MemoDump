@@ -12,7 +12,6 @@ import (
 // implementation uses the os package directly.
 type fsIO interface {
 	CreateTemp(dir, pattern string) (*os.File, error)
-	OpenRead(name string) (*os.File, error)
 	ReadFile(name string) ([]byte, error)
 	WriteAll(f *os.File, b []byte) error
 	Sync(f *os.File) error
@@ -27,8 +26,6 @@ type osFsIO struct{}
 func (osFsIO) CreateTemp(dir, pattern string) (*os.File, error) {
 	return os.CreateTemp(dir, pattern)
 }
-
-func (osFsIO) OpenRead(name string) (*os.File, error) { return os.Open(name) }
 
 func (osFsIO) ReadFile(name string) ([]byte, error) { return os.ReadFile(name) }
 
@@ -130,13 +127,6 @@ func (f *faultFsIO) CreateTemp(dir, pattern string) (*os.File, error) {
 		return nil, f.injected("create")
 	}
 	return f.fsIO.CreateTemp(dir, pattern)
-}
-
-func (f *faultFsIO) OpenRead(name string) (*os.File, error) {
-	if f.shouldFail("read") {
-		return nil, f.injected("read")
-	}
-	return f.fsIO.OpenRead(name)
 }
 
 func (f *faultFsIO) ReadFile(name string) ([]byte, error) {

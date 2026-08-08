@@ -57,16 +57,31 @@ func (d DiscardReason) String() string {
 
 // SnapshotStore owns one replica's disposable snapshot file. There is no
 // backup, append, partial update, compactor, or background goroutine: Replace
-// rewrites the whole file once and Load reads it whole.
+// rewrites the whole file once and Load reads it whole. The store is bound to
+// one Vault/Replica pair at construction and refuses to persist a snapshot
+// declaring any other identity.
 type SnapshotStore struct {
-	dir string
-	io  fsIO
+	dir       string
+	vaultID   string
+	replicaID string
+	io        fsIO
 }
 
 // NewSnapshotStore returns a store for the replica state directory
-// <stateRoot>/<vaultId>/<replicaId>. It creates nothing until Replace.
-func NewSnapshotStore(stateRoot, vaultID, replicaID string) *SnapshotStore {
-	return &SnapshotStore{dir: StateDir(stateRoot, vaultID, replicaID), io: osFsIO{}}
+// <stateRoot>/<vaultId>/<replicaId>. The IDs must be valid version-4 UUIDs so
+// an untrusted value can never escape the state root through a path, and both
+// are stored so Replace can refuse a cross-identity snapshot. It creates
+// nothing until Replace.
+func NewSnapshotStore(stateRoot, vaultID, replicaID string) (*SnapshotStore, error) {
+	if err := validateReplicaArgs(vaultID, replicaID); err != nil {
+		return nil, err
+	}
+	return &SnapshotStore{
+		dir:       StateDir(stateRoot, vaultID, replicaID),
+		vaultID:   vaultID,
+		replicaID: replicaID,
+		io:        osFsIO{},
+	}, nil
 }
 
 // Path is the snapshot file location.
@@ -105,10 +120,16 @@ func (s *SnapshotStore) Load(exp ExpectedIdentity) (*Snapshot, DiscardReason, er
 
 // Replace atomically installs snap as the replica's snapshot: one unique temp
 // file in the same directory, full write, file sync, atomic rename, and a
-// directory sync where the platform supports it. A failure leaves the prior
-// snapshot loadable (the platform's rename guarantees determine the exact
-// durability), and no partial state is ever observed.
+// directory sync where the platform supports it. A snapshot declaring a
+// different Vault or Replica ID than this store was bound to is rejected. A
+// failure before the rename leaves the prior snapshot loadable; a failure after
+// the rename (for example the directory sync) may expose either the old or the
+// new snapshot, but never a partially written file.
 func (s *SnapshotStore) Replace(snap *Snapshot) error {
+	if snap.VaultID != s.vaultID || snap.ReplicaID != s.replicaID {
+		return fmt.Errorf("replace snapshot: snapshot identity (%s/%s) does not match store (%s/%s)",
+			snap.VaultID, snap.ReplicaID, s.vaultID, s.replicaID)
+	}
 	if err := snap.Validate(); err != nil {
 		return fmt.Errorf("replace snapshot: %w", err)
 	}
