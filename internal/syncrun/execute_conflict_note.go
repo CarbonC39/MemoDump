@@ -60,6 +60,10 @@ func (c *NoteCoordinator) executeConflict(ctx context.Context, d cloudsync.NoteD
 		if !ok {
 			return fmt.Errorf("note %s not indexed", d.SyncID)
 		}
+		// Recovery is durable before any local delete.
+		if err := c.writeRecovery(d.SyncID, path); err != nil {
+			return fmt.Errorf("recovery for %s: %w", d.SyncID, err)
+		}
 		deleted, err := c.deleteLocalNote(d.SyncID, path, d.LocalRevision)
 		if err != nil {
 			return err
@@ -70,7 +74,7 @@ func (c *NoteCoordinator) executeConflict(ctx context.Context, d cloudsync.NoteD
 			}
 		}
 	case cloudsync.NotePreserveRemoteThenTombstone:
-		version, ok, err := c.tombstoneOriginal(ctx, d)
+		version, ok, err := c.replaceWithTombstone(ctx, d.SyncID, d.Path, d.Conflict.OriginalVersion)
 		if err != nil {
 			return err
 		}
@@ -165,55 +169,4 @@ func (c *NoteCoordinator) deleteLocalNote(syncID, path, expectedRevision string)
 		return false, fmt.Errorf("delete %s: %w", syncID, err)
 	}
 	return true, nil
-}
-
-// tombstoneOriginal replaces the original remote record with a tombstone using
-// the observed version CAS, re-reading to learn the true outcome. A stale CAS
-// or a concurrent change leaves the note for the next cycle; a fatal store
-// error stops the cycle.
-func (c *NoteCoordinator) tombstoneOriginal(ctx context.Context, d cloudsync.NoteDecision) (string, bool, error) {
-	tomb := &cloudsync.NoteRecord{
-		SchemaVersion: cloudsync.NoteSchemaVersion, SyncID: d.SyncID,
-		Path: d.Path, Deleted: true,
-	}
-	data, err := tomb.Serialize()
-	if err != nil {
-		return "", false, err
-	}
-	key := cloudsync.NoteKey(d.SyncID)
-	version, err := c.remote.Replace(ctx, key, data, d.Conflict.OriginalVersion)
-	if err == nil {
-		return version, true, nil
-	}
-	var se *cloudsync.StoreError
-	if !errors.As(err, &se) {
-		return "", false, err
-	}
-	switch se.Kind {
-	case cloudsync.ErrAuth, cloudsync.ErrPermission, cloudsync.ErrQuota,
-		cloudsync.ErrUnsupportedCapability, cloudsync.ErrInvalidResponse:
-		return "", false, err
-	}
-	existing, actual, rerr := c.remote.Read(ctx, key)
-	if rerr != nil {
-		return "", false, nil
-	}
-	parsed, perr := cloudsync.ParseNoteRecord(existing)
-	if perr == nil && parsed.SyncID == d.SyncID && parsed.Deleted && parsed.Path == d.Path {
-		return actual, true, nil // the tombstone landed idempotently
-	}
-	return "", false, nil
-}
-
-// noteRecordHash is the canonical NoteRecord content hash for a live record.
-func noteRecordHash(syncID, path, markdown string, deleted bool) string {
-	return (&cloudsync.NoteRecord{
-		SchemaVersion: cloudsync.NoteSchemaVersion, SyncID: syncID, Path: path,
-		Markdown: markdown, Deleted: deleted,
-	}).ComputeContentHash()
-}
-
-// tombstoneNoteHash is the canonical content hash of a tombstone record.
-func tombstoneNoteHash(syncID, path string) string {
-	return noteRecordHash(syncID, path, "", true)
 }

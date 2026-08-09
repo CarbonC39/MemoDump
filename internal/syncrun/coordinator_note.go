@@ -18,12 +18,14 @@ import (
 )
 
 // NoteConfig wires the note coordinator's identity. RepoID and Profile are the
-// snapshot identity.
+// snapshot identity. ScanOptions controls the vault scan; tests use its hooks
+// to inject deterministic mid-scan mutations (the zero value scans normally).
 type NoteConfig struct {
-	VaultID   string
-	ReplicaID string
-	RepoID    string
-	Profile   string
+	VaultID     string
+	ReplicaID   string
+	RepoID      string
+	Profile     string
+	ScanOptions vaultfs.ScanOptions
 }
 
 // NoteStatus summarizes one completed or failed note-only cycle.
@@ -64,7 +66,7 @@ func NewNoteCoordinator(repo *vaultfs.Repository, idx *syncindex.NoteStore, snap
 func (c *NoteCoordinator) Run(ctx context.Context) (*NoteStatus, error) {
 	st := &NoteStatus{}
 
-	res, err := vaultfs.Scan(c.repo.Root(), vaultfs.ScanOptions{})
+	res, err := vaultfs.Scan(c.repo.Root(), c.cfg.ScanOptions)
 	if err != nil {
 		return st, fmt.Errorf("scan: %w", err)
 	}
@@ -114,10 +116,6 @@ func (c *NoteCoordinator) Run(ctx context.Context) (*NoteStatus, error) {
 			st.Blocked++
 		case cloudsync.NoteRetry:
 			st.Retry++
-		case cloudsync.NotePushTombstone, cloudsync.NoteApplyTombstone,
-			cloudsync.NotePreserveLocalThenPull, cloudsync.NotePreserveLocalThenDelete,
-			cloudsync.NotePreserveRemoteThenTombstone:
-			st.Deferred++
 		}
 	}
 
@@ -174,7 +172,13 @@ func (c *NoteCoordinator) execute(ctx context.Context, plan []cloudsync.NoteDeci
 	for _, d := range plan {
 		switch d.Kind {
 		case cloudsync.NoteNoop:
-			// Nothing; the baseline (if any) already matches.
+			// Nothing; a converged deletion drops its live index mapping so a
+			// future file at that path becomes a fresh note.
+			if d.IsConvergedDeletion() {
+				if err := c.idx.RemoveNote(d.SyncID); err != nil {
+					return err
+				}
+			}
 		case cloudsync.NoteEstablishBaseline:
 			baselines[d.SyncID] = syncstate.SnapshotEntity{
 				ContentHash: d.ContentHash, Deleted: d.Deleted, RemoteVersion: d.Version,
@@ -199,11 +203,49 @@ func (c *NoteCoordinator) execute(ctx context.Context, plan []cloudsync.NoteDeci
 					ContentHash: d.ContentHash, Deleted: false, RemoteVersion: d.Version,
 				}
 			}
+		case cloudsync.NotePushTombstone:
+			version, ok, err := c.replaceWithTombstone(ctx, d.SyncID, d.Path, d.Version)
+			if err != nil {
+				return err
+			}
+			if ok {
+				baselines[d.SyncID] = syncstate.SnapshotEntity{
+					ContentHash: d.ContentHash, Deleted: true, RemoteVersion: version,
+				}
+			}
+		case cloudsync.NoteApplyTombstone:
+			if err := c.applyTombstone(ctx, d, baselines); err != nil {
+				return err
+			}
 		case cloudsync.NotePreserveLocalThenPull, cloudsync.NotePreserveLocalThenDelete,
 			cloudsync.NotePreserveRemoteThenTombstone:
 			if err := c.executeConflict(ctx, d, baselines); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// applyTombstone applies a pulled tombstone: write the durable recovery copy
+// first, then delete the local note with the observed revision CAS. A recovery
+// failure or a stale local revision leaves the note intact and its baseline
+// unchanged.
+func (c *NoteCoordinator) applyTombstone(ctx context.Context, d cloudsync.NoteDecision, baselines map[string]syncstate.SnapshotEntity) error {
+	path, ok := c.idx.PathByID(d.SyncID)
+	if !ok {
+		return fmt.Errorf("note %s not indexed", d.SyncID)
+	}
+	if err := c.writeRecovery(d.SyncID, path); err != nil {
+		return fmt.Errorf("recovery for %s: %w", d.SyncID, err)
+	}
+	deleted, err := c.deleteLocalNote(d.SyncID, path, d.LocalRevision)
+	if err != nil {
+		return err
+	}
+	if deleted {
+		baselines[d.SyncID] = syncstate.SnapshotEntity{
+			ContentHash: tombstoneNoteHash(d.SyncID, path), Deleted: true, RemoteVersion: d.Version,
 		}
 	}
 	return nil

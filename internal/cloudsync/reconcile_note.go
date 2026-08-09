@@ -485,6 +485,13 @@ func splitNotePath(path string) (dir, base string) {
 	return "", path
 }
 
+// IsConvergedDeletion reports whether a noop decision is a fully-converged
+// deletion: local absent, remote tombstone, and a matching deleted baseline.
+// The coordinator uses it to drop the note's live index mapping.
+func (d NoteDecision) IsConvergedDeletion() bool {
+	return d.Kind == NoteNoop && d.Reason == "converged deletion"
+}
+
 // String renders a decision for diagnostics.
 func (d NoteDecision) String() string {
 	s := fmt.Sprintf("%s %s", d.SyncID, d.Kind)

@@ -65,6 +65,13 @@ func (r *noteRep) noteExists(path string) bool {
 	return err == nil
 }
 
+// withScanOpts installs deterministic scan hooks on the coordinator for the
+// race tests that mutate files mid-scan.
+func (r *noteRep) withScanOpts(opts vaultfs.ScanOptions) *noteRep {
+	r.co.cfg.ScanOptions = opts
+	return r
+}
+
 func (r *noteRep) noteBody(path string) string {
 	data, err := os.ReadFile(filepath.Join(r.root, filepath.FromSlash(path)))
 	if err != nil {
