@@ -21,6 +21,9 @@
     </div>
 
     <div v-show="open" class="settings-sync-body">
+      <div v-if="state.connectionError" class="setting-row">
+        <span class="setting-row-label error-text">{{ t('settings.syncConnectionError') }}: {{ state.connectionError }}</span>
+      </div>
       <div v-if="state.noE2EE" class="setting-row">
         <span class="setting-row-label sync-warning">{{ t('settings.syncNoE2EE') }}</span>
       </div>
@@ -40,6 +43,15 @@
         </button>
         <button type="button" class="btn btn-sm btn-outline" :disabled="state.busy" @click="onTest">
           {{ t('settings.syncTest') }}
+        </button>
+        <button
+          v-if="state.connection"
+          type="button"
+          class="btn btn-sm btn-outline"
+          :disabled="state.busy"
+          @click="onReset"
+        >
+          {{ t('settings.syncReset') }}
         </button>
       </div>
 
@@ -83,6 +95,7 @@ import {
   enableSync,
   runSync,
   disableSync,
+  resetSync,
   testSync,
   restoreRecovery,
 } from '../composables/useSyncSettings'
@@ -144,6 +157,19 @@ async function onTest() {
     syncError.value = false
   } catch (e) {
     syncMessage.value = e?.response?.data?.error || t('settings.syncTestFailed')
+    syncError.value = true
+  }
+}
+
+async function onReset() {
+  if (!window.confirm(t('settings.syncResetConfirm'))) return
+  syncMessage.value = ''
+  try {
+    await resetSync()
+    syncMessage.value = t('settings.syncResetOk')
+    syncError.value = false
+  } catch (e) {
+    syncMessage.value = e?.response?.data?.error || t('settings.syncResetFailed')
     syncError.value = true
   }
 }

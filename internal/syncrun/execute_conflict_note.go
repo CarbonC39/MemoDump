@@ -17,88 +17,98 @@ import (
 )
 
 // executeConflict applies one compound preservation decision in the fixed
-// spec-§8 order and records baselines only for final known-equal states.
-func (c *NoteCoordinator) executeConflict(ctx context.Context, d cloudsync.NoteDecision, baselines map[string]syncstate.SnapshotEntity) error {
+// spec-§8 order and records baselines only for final known-equal states. The
+// returned count is the number of original-path outcomes deferred to the next
+// cycle (a raced local write or a retryable remote failure), so the cycle is
+// never misreported as fully synced while the conflict note converges.
+func (c *NoteCoordinator) executeConflict(ctx context.Context, d cloudsync.NoteDecision, baselines map[string]syncstate.SnapshotEntity) (int, error) {
 	conf := d.Conflict
 	if conf == nil || conf.ConflictSyncID == "" || conf.ConflictPath == "" {
-		return fmt.Errorf("note %s: missing conflict plan", d.SyncID)
+		return 0, fmt.Errorf("note %s: missing conflict plan", d.SyncID)
 	}
 
 	// 1. Reserve the conflict identity/path in the index before the original
 	// changes. Replay-safe: the same ID at the same path is an idempotent no-op.
 	if err := c.reserveConflict(conf); err != nil {
-		return fmt.Errorf("reserve conflict %s: %w", conf.ConflictSyncID, err)
+		return 0, fmt.Errorf("reserve conflict %s: %w", conf.ConflictSyncID, err)
 	}
 	if err := c.fault("conflict:reserved"); err != nil {
-		return err
+		return 0, err
 	}
 	// The reservation must be durable before any conflict note is created.
 	if err := c.idx.Save(); err != nil {
-		return fmt.Errorf("save conflict reservation: %w", err)
+		return 0, fmt.Errorf("save conflict reservation: %w", err)
 	}
 	if err := c.fault("conflict:saved"); err != nil {
-		return err
+		return 0, err
 	}
 
 	// 2. Create/verify the local conflict note (create-if-absent).
 	if err := c.createLocalConflict(conf); err != nil {
-		return fmt.Errorf("create local conflict %s: %w", conf.ConflictSyncID, err)
+		return 0, fmt.Errorf("create local conflict %s: %w", conf.ConflictSyncID, err)
 	}
 	if err := c.fault("conflict:local"); err != nil {
-		return err
+		return 0, err
 	}
 
 	// 3. Create/verify the remote conflict record.
 	conflictVersion, err := c.createRemoteConflict(ctx, conf)
 	if err != nil {
-		return fmt.Errorf("create remote conflict %s: %w", conf.ConflictSyncID, err)
+		return 0, fmt.Errorf("create remote conflict %s: %w", conf.ConflictSyncID, err)
 	}
 	if err := c.fault("conflict:remote"); err != nil {
-		return err
+		return 0, err
 	}
 
 	// 4. Only now act on the original.
+	deferred := 0
 	switch d.Kind {
 	case cloudsync.NotePreserveLocalThenPull:
 		if ok, err := c.pullLive(ctx, d); err != nil {
-			return err
+			return deferred, err
 		} else if ok {
 			baselines[d.SyncID] = syncstate.SnapshotEntity{
 				ContentHash: d.ContentHash, Deleted: false, RemoteVersion: d.Version,
 			}
+		} else {
+			deferred++
 		}
 	case cloudsync.NotePreserveLocalThenDelete:
 		path, ok := c.idx.PathByID(d.SyncID)
 		if !ok {
-			return fmt.Errorf("note %s not indexed", d.SyncID)
+			return deferred, fmt.Errorf("note %s not indexed", d.SyncID)
 		}
 		// Recovery is durable before any local delete.
 		if err := c.writeRecovery(d.SyncID, path); err != nil {
-			return fmt.Errorf("recovery for %s: %w", d.SyncID, err)
+			return deferred, fmt.Errorf("recovery for %s: %w", d.SyncID, err)
 		}
 		deleted, err := c.deleteLocalNote(d.SyncID, path, d.LocalRevision)
 		if err != nil {
-			return err
+			return deferred, err
 		}
 		if deleted {
 			// The baseline records the remote tombstone's carried content hash.
 			baselines[d.SyncID] = syncstate.SnapshotEntity{
 				ContentHash: d.ContentHash, Deleted: true, RemoteVersion: d.Version,
 			}
+		} else {
+			deferred++
 		}
 	case cloudsync.NotePreserveRemoteThenTombstone:
 		version, ok, err := c.replaceWithTombstone(ctx, d.SyncID, d.Path, d.Conflict.OriginalVersion)
 		if err != nil {
-			return err
+			return deferred, err
 		}
 		if ok {
 			baselines[d.SyncID] = syncstate.SnapshotEntity{
 				ContentHash: d.ContentHash, Deleted: true, RemoteVersion: version,
 			}
+		} else {
+			deferred++
 		}
 	}
 	if err := c.fault("conflict:original"); err != nil {
-		return err
+		return deferred, err
 	}
 
 	// 5. The conflict note is now known equal locally and remotely.
@@ -107,7 +117,7 @@ func (c *NoteCoordinator) executeConflict(ctx context.Context, d cloudsync.NoteD
 		Deleted:       false,
 		RemoteVersion: conflictVersion,
 	}
-	return nil
+	return deferred, nil
 }
 
 // reserveConflict records the conflict identity in the index. It is an

@@ -98,19 +98,21 @@ func TestSyncRepoSetupMismatchRefuses(t *testing.T) {
 	}
 }
 
-// TestSyncRepoSetupKnownLostRefusesCreate: a connected vault whose remote
-// repository vanished must be refused at enable — only an explicit disable +
-// re-enable creates a new repository.
+// TestSyncRepoSetupKnownLostRefusesCreate: a vault pinned to a repository
+// (whether connected or disabled) whose remote repository vanished must be
+// refused at enable — only an explicit reset + re-enable creates a new one.
 func TestSyncRepoSetupKnownLostRefusesCreate(t *testing.T) {
 	ctx := context.Background()
-	prev := &syncConnectionRecord{Connected: true, Profile: memoryProfile, RepoID: "11111111-1111-4111-8111-111111111111"}
-	store := cloudsync.NewMemoryStore()
-	if _, _, err := syncRepoSetup(ctx, store, prev); err == nil {
-		t.Fatal("re-created a lost repository without an explicit reset")
-	}
-	// Zero writes: repo.json must not have been created.
-	if _, _, err := store.Read(ctx, "repo.json"); !cloudsync.IsStoreError(err, cloudsync.ErrNotFound) {
-		t.Fatal("lost-repo enable wrote a new repo.json")
+	for _, connected := range []bool{true, false} {
+		prev := &syncConnectionRecord{Connected: connected, Profile: memoryProfile, RepoID: "11111111-1111-4111-8111-111111111111"}
+		store := cloudsync.NewMemoryStore()
+		if _, _, err := syncRepoSetup(ctx, store, prev); err == nil {
+			t.Fatalf("re-created a lost repository (connected=%v) without an explicit reset", connected)
+		}
+		// Zero writes: repo.json must not have been created.
+		if _, _, err := store.Read(ctx, "repo.json"); !cloudsync.IsStoreError(err, cloudsync.ErrNotFound) {
+			t.Fatalf("lost-repo enable wrote a new repo.json (connected=%v)", connected)
+		}
 	}
 }
 

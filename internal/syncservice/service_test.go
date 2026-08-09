@@ -181,6 +181,78 @@ func TestServiceIncompleteListNeverSynced(t *testing.T) {
 	}
 }
 
+// TestServiceDeferredWriteCountsAsRetry: a transient write failure that defers
+// a note to the next cycle is counted as Retry and the run is never reported
+// "synced" — a partial convergence is surfaced as "incomplete", not success.
+func TestServiceDeferredWriteCountsAsRetry(t *testing.T) {
+	ctx := context.Background()
+	store := cloudsync.NewMemoryStore()
+	root, state := t.TempDir(), t.TempDir()
+	if _, err := syncindex.EnableNoteStore(root); err != nil {
+		t.Fatal(err)
+	}
+	s := newService(root, state, store)
+
+	// Establish a baseline for the local note (first upload succeeds).
+	if err := os.WriteFile(filepath.Join(root, "a.md"), []byte("# one\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := s.Run(ctx); err != nil || !res.Synced {
+		t.Fatalf("baseline run = %+v, %v", res, err)
+	}
+
+	// Edit the note; the upload now fails transiently (replace fault) and the
+	// confirm read sees the stale remote state, deferring the note.
+	if err := os.WriteFile(filepath.Join(root, "a.md"), []byte("# two\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	store.ArmFault("replace", &cloudsync.StoreError{Kind: cloudsync.ErrRetryableTransport, Message: "flaky"})
+	res, err := s.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Synced {
+		t.Fatalf("deferred write reported synced: %+v", res)
+	}
+	if res.Retry != 1 {
+		t.Fatalf("Retry = %d, want 1 for the deferred note", res.Retry)
+	}
+	if res.LastError != "incomplete" {
+		t.Fatalf("LastError = %q, want incomplete", res.LastError)
+	}
+	// The local edit is preserved and the note is retried next cycle.
+	if data, rerr := os.ReadFile(filepath.Join(root, "a.md")); rerr != nil || string(data) != "# two\n" {
+		t.Fatalf("local edit lost: %q, %v", data, rerr)
+	}
+	if res2, err := s.Run(ctx); err != nil || !res2.Synced {
+		t.Fatalf("retry run = %+v, %v; want the deferred note to converge", res2, err)
+	}
+}
+
+// TestServiceCancelledRunReportsCancelled: a canceled context surfaces as the
+// "cancelled" label with Synced=false — never a deferred write that is silently
+// reported as synced.
+func TestServiceCancelledRunReportsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	store := cloudsync.NewMemoryStore()
+	root, state := t.TempDir(), t.TempDir()
+	if _, err := syncindex.EnableNoteStore(root); err != nil {
+		t.Fatal(err)
+	}
+	s := newService(root, state, store)
+	res, err := s.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Synced {
+		t.Fatalf("cancelled run reported synced: %+v", res)
+	}
+	if res.LastError != "cancelled" {
+		t.Fatalf("LastError = %q, want cancelled", res.LastError)
+	}
+}
+
 // TestServiceListingErrorNeverSynced: a listing transport error stops the cycle
 // and is never reported "synced".
 func TestServiceListingErrorNeverSynced(t *testing.T) {

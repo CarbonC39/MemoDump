@@ -55,6 +55,7 @@ func doJSON(t *testing.T, method, path string, body any) *httptest.ResponseRecor
 		"POST /api/sync/enable":           handleSyncEnable,
 		"POST /api/sync/run":              handleSyncRun,
 		"POST /api/sync/disable":          handleSyncDisable,
+		"POST /api/sync/reset":            handleSyncReset,
 		"POST /api/sync/test":             handleSyncTest,
 		"GET /api/sync/recovery":          handleSyncRecoveryList,
 		"POST /api/sync/recovery/restore": handleSyncRecoveryRestore,
@@ -149,13 +150,13 @@ func TestSyncApiEnableRequiresCapabilityProbe(t *testing.T) {
 	}
 }
 
-// TestSyncApiRunReprobesChangedProvider: a provider swapped after enable is
-// probed again before its first run — a changed profile whose probe fails
-// refuses the run instead of using an unverified remote.
-func TestSyncApiRunReprobesChangedProvider(t *testing.T) {
+// TestSyncApiRunRefusesChangedProvider: a provider swapped after enable is
+// refused at run time without updating the connection record — switching
+// targets is an explicit reset/reconnect, never something a run decides.
+func TestSyncApiRunRefusesChangedProvider(t *testing.T) {
 	dir, state := t.TempDir(), t.TempDir()
 	storeA := &profileStore{RemoteStore: cloudsync.NewMemoryStore(), profile: "profile-a", probeOK: true}
-	storeB := &profileStore{RemoteStore: cloudsync.NewMemoryStore(), profile: "profile-b", probeOK: false}
+	storeB := &profileStore{RemoteStore: cloudsync.NewMemoryStore(), profile: "profile-b", probeOK: true}
 	cur := storeA
 	setSyncEnv(t, dir, state, func() (cloudsync.RemoteStore, error) { return cur, nil })
 
@@ -164,11 +165,109 @@ func TestSyncApiRunReprobesChangedProvider(t *testing.T) {
 		t.Fatalf("enable = %+v", en)
 	}
 
-	// Swap the provider: the run must re-probe and refuse.
+	// Swap the provider: the run must refuse the mismatch.
 	cur = storeB
 	run := decodeSync[map[string]any](t, doJSON(t, "POST", "/api/sync/run", nil))
 	if run["LastError"] == nil {
-		t.Fatalf("run = %+v, want a probe refusal for the changed provider", run)
+		t.Fatalf("run = %+v, want a refusal for the changed provider", run)
+	}
+	// The connection record must be unchanged (still pinned to profile-a).
+	rec, err := syncReadConnected()
+	if err != nil || rec == nil || rec.Profile != "profile-a" || rec.RepoID == "" {
+		t.Fatalf("record after refused run = %+v, %v; want the enable-time identity preserved", rec, err)
+	}
+}
+
+// TestSyncApiDisablePreservesIdentityThenReconnect: disable keeps the verified
+// profile and pinned repository in the connection record, so re-enabling with
+// the same provider reconnects cleanly and the first run after it is not
+// mistaken for a fresh setup.
+func TestSyncApiDisablePreservesIdentityThenReconnect(t *testing.T) {
+	dir, state := t.TempDir(), t.TempDir()
+	setSyncEnv(t, dir, state, nil)
+	if err := os.WriteFile(filepath.Join(dir, "idea.md"), []byte("# Idea\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	doJSON(t, "POST", "/api/sync/enable", nil)
+	if run := decodeSync[syncRunJSON](t, doJSON(t, "POST", "/api/sync/run", nil)); !run.Synced {
+		t.Fatalf("initial run = %+v", run)
+	}
+
+	before, err := syncReadConnected()
+	if err != nil || before == nil || !before.Connected {
+		t.Fatalf("record after enable = %+v, %v", before, err)
+	}
+
+	doJSON(t, "POST", "/api/sync/disable", nil)
+	after, err := syncReadConnected()
+	if err != nil || after == nil {
+		t.Fatalf("record after disable = %+v, %v; identity must be preserved", after, err)
+	}
+	if after.Connected {
+		t.Fatal("disable left the record connected")
+	}
+	if after.Profile != before.Profile || after.RepoID != before.RepoID {
+		t.Fatalf("disable dropped identity: before %+v, after %+v", before, after)
+	}
+
+	// Re-enable with the same provider reconnects to the same repository.
+	doJSON(t, "POST", "/api/sync/enable", nil)
+	if run := decodeSync[syncRunJSON](t, doJSON(t, "POST", "/api/sync/run", nil)); !run.Synced {
+		t.Fatalf("reconnect run = %+v", run)
+	}
+}
+
+// TestSyncApiResetAllowsFreshSetup: the explicit reset clears the snapshot and
+// the connection identity, so the next enable is a fresh setup against a
+// different repository instead of a permanent mismatch stop.
+func TestSyncApiResetAllowsFreshSetup(t *testing.T) {
+	dir, state := t.TempDir(), t.TempDir()
+	setSyncEnv(t, dir, state, nil)
+	if err := os.WriteFile(filepath.Join(dir, "idea.md"), []byte("# Idea\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	doJSON(t, "POST", "/api/sync/enable", nil)
+	if run := decodeSync[syncRunJSON](t, doJSON(t, "POST", "/api/sync/run", nil)); !run.Synced {
+		t.Fatalf("initial run = %+v", run)
+	}
+
+	// Reset discards the snapshot and identity pin.
+	rs := decodeSync[map[string]any](t, doJSON(t, "POST", "/api/sync/reset", nil))
+	if rs["reset"] != true {
+		t.Fatalf("reset = %+v", rs)
+	}
+	rec, err := syncReadConnected()
+	if err != nil || rec != nil {
+		t.Fatalf("record after reset = %+v, %v; want cleared", rec, err)
+	}
+
+	// A fresh enable re-establishes against the shared remote and runs cleanly.
+	doJSON(t, "POST", "/api/sync/enable", nil)
+	if run := decodeSync[syncRunJSON](t, doJSON(t, "POST", "/api/sync/run", nil)); !run.Synced {
+		t.Fatalf("run after reset+enable = %+v", run)
+	}
+}
+
+// TestSyncStatusSurfacesCorruptConnectionRecord: a corrupt connection record is
+// exposed as connectionError in the status instead of silently reporting
+// "disabled".
+func TestSyncStatusSurfacesCorruptConnectionRecord(t *testing.T) {
+	dir, state := t.TempDir(), t.TempDir()
+	setSyncEnv(t, dir, state, nil)
+	if err := os.WriteFile(filepath.Join(dir, "idea.md"), []byte("# Idea\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	doJSON(t, "POST", "/api/sync/enable", nil)
+	vaultID, replicaID, stateRoot, err := syncIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(syncConnectedPath(stateRoot, vaultID, replicaID), []byte(`{bad json`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	st := decodeSync[map[string]any](t, doJSON(t, "GET", "/api/sync/status", nil))
+	if st["connectionError"] == nil {
+		t.Fatalf("status = %+v, want connectionError surfaced", st)
 	}
 }
 

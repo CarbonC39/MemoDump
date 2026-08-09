@@ -508,6 +508,7 @@ const localApi = {
   syncEnable() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
   syncRun() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
   syncDisable() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
+  syncReset() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
   syncTest() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
   syncRecovery() { return Promise.resolve({ data: { recovery: [] } }) },
 }

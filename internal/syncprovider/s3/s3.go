@@ -271,6 +271,13 @@ func randomProbeKey() string {
 // classifyS3Error maps a minio-go error onto a normalized StoreError without
 // leaking bodies or credentials.
 func classifyS3Error(err error) error {
+	// Cancellation and deadlines must reach the caller as the ORIGINAL error so
+	// the coordinator can propagate them (and the cycle reports "cancelled").
+	// Wrapping them as retryable transport would let a canceled final upload be
+	// silently deferred and the cycle misreported as synced.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
 	var resp minio.ErrorResponse
 	if errors.As(err, &resp) {
 		code := resp.Code

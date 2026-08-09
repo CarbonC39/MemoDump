@@ -16,18 +16,25 @@ import (
 type syncserviceResult = syncservice.Result
 
 // handleSyncStatus reports the current sync state. "enabled" and "connected"
-// both reflect the persistent connect marker, so a disabled vault is never
-// shown as enabled. The last (redacted) run and its completion time are omitted
-// until a run has happened, and only the recovery copy COUNT is returned —
-// detailed content is served by the recovery endpoint.
+// both reflect the persistent connection record, so a disabled vault is never
+// shown as enabled. A corrupt or unreadable connection record is surfaced as
+// connectionError rather than silently reported "disabled". The last (redacted)
+// run and its completion time are omitted until a run has happened, and only
+// the recovery copy COUNT is returned — detailed content is served by the
+// recovery endpoint.
 func handleSyncStatus(w http.ResponseWriter, r *http.Request) {
-	connected := syncConnected()
+	rec, cerr := syncReadConnected()
+	connected := rec != nil && rec.Connected
 	resp := map[string]any{
 		"enabled":       connected,
 		"connected":     connected,
+		"connection":    rec != nil,
 		"experimental":  true,
 		"noE2EE":        true,
 		"recoveryCount": 0,
+	}
+	if cerr != nil {
+		resp["connectionError"] = cerr.Error()
 	}
 	lastRun, lastCompleted := lastRunSnapshot()
 	if !lastCompleted.IsZero() {
@@ -127,21 +134,14 @@ func handleSyncRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profile := providerProfile(remote)
-	if rec.Profile != profile {
-		// The provider changed since enable: re-verify before running.
-		caps, perr := remote.Test(r.Context())
-		if perr != nil || !caps.ConditionalWrites || !caps.PagedListing {
-			recErr := errors.New("sync provider changed and failed its probe; disable and re-enable sync")
-			recordLastRunError(recErr)
-			writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(recErr)})
-			return
-		}
-		rec.Profile = profile
-		if werr := syncWriteConnected(rec); werr != nil {
-			recordLastRunError(werr)
-			writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(werr)})
-			return
-		}
+	if rec.Profile == "" || rec.Profile != profile {
+		// A provider changed since enable is refused without updating the
+		// connection record: switching targets is an explicit reconnect, never
+		// something a run decides on its own.
+		recErr := errors.New("sync provider changed since enable; disable and reset sync to reconnect")
+		recordLastRunError(recErr)
+		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(recErr)})
+		return
 	}
 	repoID, _, err := syncRepoIdentity(r.Context(), remote)
 	if err != nil {
@@ -149,20 +149,11 @@ func handleSyncRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
 		return
 	}
-	if rec.RepoID != "" && repoID != rec.RepoID {
-		recErr := errors.New("remote repository changed since enable; disable and re-enable sync")
+	if rec.RepoID == "" || repoID != rec.RepoID {
+		recErr := errors.New("remote repository changed since enable; disable and reset sync to reconnect")
 		recordLastRunError(recErr)
 		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(recErr)})
 		return
-	}
-	if rec.RepoID == "" {
-		// A legacy marker without a pinned repository adopts the verified one.
-		rec.RepoID = repoID
-		if werr := syncWriteConnected(rec); werr != nil {
-			recordLastRunError(werr)
-			writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(werr)})
-			return
-		}
 	}
 	svc, err := buildSyncService(r.Context(), repoID, profile, remote)
 	if err != nil {
@@ -200,19 +191,45 @@ func clearLastRun() {
 	syncLastRunMu.Unlock()
 }
 
-// handleSyncDisable disconnects sync for the replica: it clears only the
-// connection record. It never deletes local notes, remote records, the identity
-// index, the snapshot, or recovery copies; re-enabling re-uses the existing
-// identities.
+// handleSyncDisable disconnects sync for the replica: it flips only the
+// Connected flag in the connection record. The verified provider profile and
+// pinned repository ID are preserved, so re-enabling with the same provider
+// reconnects cleanly and a normal run never sees an identity mismatch. It never
+// deletes local notes, remote records, the identity index, the snapshot, or
+// recovery copies. Switching repositories is the explicit reset flow.
 func handleSyncDisable(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
-	if err := syncWriteConnected(nil); err != nil {
+	rec, err := syncReadConnected()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if rec != nil {
+		rec.Connected = false
+		if err := syncWriteConnected(rec); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	clearLastRun()
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "disconnected": true})
+}
+
+// handleSyncReset is the explicit reconnect/reset flow: it discards the
+// replica's disposable snapshot and clears the connection record (identity
+// pin), so the next enable starts a fresh setup. This is the ONLY deliberate
+// way to switch repositories or recreate a lost one. Local notes and recovery
+// copies are preserved.
+func handleSyncReset(w http.ResponseWriter, r *http.Request) {
+	syncOpMu.Lock()
+	defer syncOpMu.Unlock()
+	if err := syncReplicaReset(); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	clearLastRun()
-	writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "disconnected": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reset": true})
 }
 
 // handleSyncTest probes the configured provider's capabilities.

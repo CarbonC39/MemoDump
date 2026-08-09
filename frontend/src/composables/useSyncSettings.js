@@ -11,6 +11,8 @@ const state = reactive({
   initialized: false,
   enabled: false,
   connected: false,
+  connection: false,
+  connectionError: '',
   experimental: false,
   noE2EE: false,
   lastRun: null,
@@ -35,6 +37,8 @@ export async function refreshSyncSettings() {
     const d = resp.data || {}
     state.enabled = !!d.enabled
     state.connected = !!d.connected
+    state.connection = !!d.connection
+    state.connectionError = d.connectionError || ''
     state.experimental = !!d.experimental
     state.noE2EE = !!d.noE2EE
     state.lastRun = d.lastRun || null
@@ -90,6 +94,17 @@ export async function disableSync() {
     const { data } = await apiClient.syncDisable()
     state.connected = false
     state.enabled = false
+    return data
+  })
+}
+
+export async function resetSync() {
+  return withBusy(async () => {
+    const { data } = await apiClient.syncReset()
+    state.connected = false
+    state.enabled = false
+    state.connection = false
+    await refreshSyncSettings()
     return data
   })
 }

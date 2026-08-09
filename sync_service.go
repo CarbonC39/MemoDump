@@ -116,10 +116,10 @@ func syncRepoIdentity(ctx context.Context, remote cloudsync.RemoteStore) (repoID
 // syncRepoSetup establishes or re-adopts the remote repository during the
 // EXPLICIT enable flow — the only place repo.json is ever created. A missing
 // descriptor is created only-if-absent; a lost concurrent create race re-reads
-// the winner. When the vault is already connected, the remote must match the
-// pinned repository ID; a changed or lost repository is refused instead of
-// silently re-initializing (the user must disable and re-enable to deliberately
-// create a new repository).
+// the winner. A vault pinned to a repository (the connection record carries a
+// RepoID, whether connected or disabled) must match it; a changed or lost
+// repository is refused instead of silently re-initializing. The deliberate
+// switch happens through the reset/reconnect flow.
 func syncRepoSetup(ctx context.Context, remote cloudsync.RemoteStore, prev *syncConnectionRecord) (repoID, profile string, err error) {
 	profile = providerProfile(remote)
 	data, _, rerr := remote.Read(ctx, "repo.json")
@@ -128,16 +128,16 @@ func syncRepoSetup(ctx context.Context, remote cloudsync.RemoteStore, prev *sync
 		if perr != nil {
 			return "", "", fmt.Errorf("invalid remote repo.json: %w", perr)
 		}
-		if prev != nil && prev.Connected && prev.RepoID != "" && parsed.RepositoryID != prev.RepoID {
-			return "", "", fmt.Errorf("remote repository changed (was %s, now %s); disable and re-enable sync to re-establish", shortID(prev.RepoID), shortID(parsed.RepositoryID))
+		if prev != nil && prev.RepoID != "" && parsed.RepositoryID != prev.RepoID {
+			return "", "", fmt.Errorf("remote repository changed (was %s, now %s); reset and re-enable sync to switch", shortID(prev.RepoID), shortID(parsed.RepositoryID))
 		}
 		return parsed.RepositoryID, profile, nil
 	}
 	if !cloudsync.IsStoreError(rerr, cloudsync.ErrNotFound) {
 		return "", "", rerr
 	}
-	if prev != nil && prev.Connected && prev.RepoID != "" {
-		return "", "", fmt.Errorf("remote repository lost though sync was enabled; disable and re-enable sync to create a new one")
+	if prev != nil && prev.RepoID != "" {
+		return "", "", fmt.Errorf("remote repository lost though sync was established; reset and re-enable sync to create a new one")
 	}
 	desc := cloudsync.RepositoryDescriptor{
 		FormatVersion: 1, RepositoryID: uuid.NewString(),
@@ -241,9 +241,11 @@ type syncConnectionRecord struct {
 }
 
 // syncWriteConnected durably records the connection state for the replica.
-// Passing nil removes the marker (disable). The index, identity, snapshot, and
-// recovery copies are always preserved. Disabling a never-enabled vault is a
-// no-op.
+// Passing nil removes the marker (disable no longer removes identity — the
+// reset flow does). The record is the identity authority, so it is written
+// atomically (unique temp + file sync + rename + directory sync), never with a
+// bare os.WriteFile. The index, identity, snapshot, and recovery copies are
+// always preserved otherwise. Disabling a never-enabled vault is a no-op.
 func syncWriteConnected(rec *syncConnectionRecord) error {
 	vaultID, replicaID, stateRoot, err := syncIdentity()
 	if err != nil {
@@ -263,7 +265,31 @@ func syncWriteConnected(rec *syncConnectionRecord) error {
 		return err
 	}
 	data, _ := json.Marshal(rec)
-	return os.WriteFile(path, data, 0600)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".memodump-connected-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 // syncReadConnected returns the replica's connection record, or nil when sync
@@ -296,6 +322,54 @@ func syncReadConnected() (*syncConnectionRecord, error) {
 func syncConnected() bool {
 	rec, err := syncReadConnected()
 	return err == nil && rec != nil && rec.Connected
+}
+
+// syncReplicaReset is the explicit reconnect/reset flow. It discards the
+// replica's disposable snapshot and clears the connection record (identity
+// pin), so the next enable starts a fresh setup — the ONLY deliberate way to
+// switch repositories or recreate a lost one. Recovery copies and local notes
+// are never touched.
+func syncReplicaReset() error {
+	vaultID, replicaID, stateRoot, err := syncIdentity()
+	if err != nil {
+		if errors.Is(err, syncindex.ErrNotEnabled) {
+			return nil // never enabled: nothing to reset
+		}
+		return err
+	}
+	snaps, err := syncstate.NewSnapshotStoreV2(stateRoot, vaultID, replicaID)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(snaps.Path()); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reset snapshot: %w", err)
+	}
+	return syncWriteConnected(nil)
+}
+
+// syncConnectionIssue reports a corrupt or unreadable connection record so the
+// status endpoint can surface it instead of silently reporting "disabled".
+// A nil return means the record is absent, clean, or sync was never enabled.
+func syncConnectionIssue() error {
+	vaultID, replicaID, stateRoot, err := syncIdentity()
+	if err != nil {
+		if errors.Is(err, syncindex.ErrNotEnabled) {
+			return nil
+		}
+		return err
+	}
+	data, rerr := os.ReadFile(syncConnectedPath(stateRoot, vaultID, replicaID))
+	if rerr != nil {
+		if os.IsNotExist(rerr) {
+			return nil
+		}
+		return rerr
+	}
+	var rec syncConnectionRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return fmt.Errorf("corrupt sync connection record: %w", err)
+	}
+	return nil
 }
 
 // buildSyncService assembles the sync service for the current data dir, with

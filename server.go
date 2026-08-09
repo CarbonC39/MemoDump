@@ -133,6 +133,7 @@ func buildAPIMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/sync/enable", authMiddleware(handleSyncEnable))
 	mux.HandleFunc("POST /api/sync/run", authMiddleware(handleSyncRun))
 	mux.HandleFunc("POST /api/sync/disable", authMiddleware(handleSyncDisable))
+	mux.HandleFunc("POST /api/sync/reset", authMiddleware(handleSyncReset))
 	mux.HandleFunc("POST /api/sync/test", authMiddleware(handleSyncTest))
 	mux.HandleFunc("GET /api/sync/recovery", authMiddleware(handleSyncRecoveryList))
 	mux.HandleFunc("POST /api/sync/recovery/restore", authMiddleware(handleSyncRecoveryRestore))

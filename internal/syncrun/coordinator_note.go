@@ -149,9 +149,11 @@ func (c *NoteCoordinator) Run(ctx context.Context) (*NoteStatus, error) {
 		return st, err
 	}
 
-	if err := c.execute(ctx, plan, baselines); err != nil {
+	deferred, err := c.execute(ctx, plan, baselines)
+	if err != nil {
 		return st, err
 	}
+	st.Retry += deferred
 
 	// Save consolidated index changes; a failure prevents the snapshot commit.
 	if err := c.idx.Save(); err != nil {
@@ -202,11 +204,15 @@ func (c *NoteCoordinator) loadBaselines() (map[string]syncstate.SnapshotEntity, 
 // establishment, conditional live upload, and local revision-CAS pull. The
 // compound preservation and tombstone outcomes are deferred to later phases:
 // their notes keep their previous baselines and are re-decided next cycle.
-func (c *NoteCoordinator) execute(ctx context.Context, plan []cloudsync.NoteDecision, baselines map[string]syncstate.SnapshotEntity) error {
+// Every deferred execution (an ok=false outcome: a retryable failure, a
+// concurrent change, or a local revision race) is counted and surfaced as
+// Retry, so a cycle that could not converge a note is never reported as synced.
+func (c *NoteCoordinator) execute(ctx context.Context, plan []cloudsync.NoteDecision, baselines map[string]syncstate.SnapshotEntity) (int, error) {
+	deferred := 0
 	for _, d := range plan {
 		// Cancellation lands between note boundaries, never mid-note.
 		if err := ctx.Err(); err != nil {
-			return err
+			return deferred, err
 		}
 		switch d.Kind {
 		case cloudsync.NoteNoop:
@@ -214,7 +220,7 @@ func (c *NoteCoordinator) execute(ctx context.Context, plan []cloudsync.NoteDeci
 			// future file at that path becomes a fresh note.
 			if d.IsConvergedDeletion() {
 				if err := c.idx.RemoveNote(d.SyncID); err != nil {
-					return err
+					return deferred, err
 				}
 			}
 		case cloudsync.NoteEstablishBaseline:
@@ -224,62 +230,74 @@ func (c *NoteCoordinator) execute(ctx context.Context, plan []cloudsync.NoteDeci
 		case cloudsync.NotePushLive:
 			version, ok, err := c.pushLive(ctx, d)
 			if err != nil {
-				return err
+				return deferred, err
 			}
 			if ok {
 				baselines[d.SyncID] = syncstate.SnapshotEntity{
 					ContentHash: d.ContentHash, Deleted: false, RemoteVersion: version,
 				}
+			} else {
+				deferred++
 			}
 		case cloudsync.NotePullLive:
 			ok, err := c.pullLive(ctx, d)
 			if err != nil {
-				return err
+				return deferred, err
 			}
 			if ok {
 				baselines[d.SyncID] = syncstate.SnapshotEntity{
 					ContentHash: d.ContentHash, Deleted: false, RemoteVersion: d.Version,
 				}
+			} else {
+				deferred++
 			}
 		case cloudsync.NotePushTombstone:
 			version, ok, err := c.replaceWithTombstone(ctx, d.SyncID, d.Path, d.Version)
 			if err != nil {
-				return err
+				return deferred, err
 			}
 			if ok {
 				baselines[d.SyncID] = syncstate.SnapshotEntity{
 					ContentHash: d.ContentHash, Deleted: true, RemoteVersion: version,
 				}
+			} else {
+				deferred++
 			}
 		case cloudsync.NoteApplyTombstone:
-			if err := c.applyTombstone(ctx, d, baselines); err != nil {
-				return err
+			ok, err := c.applyTombstone(ctx, d, baselines)
+			if err != nil {
+				return deferred, err
+			}
+			if !ok {
+				deferred++
 			}
 		case cloudsync.NotePreserveLocalThenPull, cloudsync.NotePreserveLocalThenDelete,
 			cloudsync.NotePreserveRemoteThenTombstone:
-			if err := c.executeConflict(ctx, d, baselines); err != nil {
-				return err
+			n, err := c.executeConflict(ctx, d, baselines)
+			if err != nil {
+				return deferred, err
 			}
+			deferred += n
 		}
 	}
-	return nil
+	return deferred, nil
 }
 
 // applyTombstone applies a pulled tombstone: write the durable recovery copy
 // first, then delete the local note with the observed revision CAS. A recovery
 // failure or a stale local revision leaves the note intact and its baseline
-// unchanged.
-func (c *NoteCoordinator) applyTombstone(ctx context.Context, d cloudsync.NoteDecision, baselines map[string]syncstate.SnapshotEntity) error {
+// unchanged; the returned bool reports whether the tombstone was applied.
+func (c *NoteCoordinator) applyTombstone(ctx context.Context, d cloudsync.NoteDecision, baselines map[string]syncstate.SnapshotEntity) (bool, error) {
 	path, ok := c.idx.PathByID(d.SyncID)
 	if !ok {
-		return fmt.Errorf("note %s not indexed", d.SyncID)
+		return false, fmt.Errorf("note %s not indexed", d.SyncID)
 	}
 	if err := c.writeRecovery(d.SyncID, path); err != nil {
-		return fmt.Errorf("recovery for %s: %w", d.SyncID, err)
+		return false, fmt.Errorf("recovery for %s: %w", d.SyncID, err)
 	}
 	deleted, err := c.deleteLocalNote(d.SyncID, path, d.LocalRevision)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if deleted {
 		// The baseline records the REMOTE tombstone's own content hash and
@@ -289,7 +307,7 @@ func (c *NoteCoordinator) applyTombstone(ctx context.Context, d cloudsync.NoteDe
 			ContentHash: d.ContentHash, Deleted: true, RemoteVersion: d.Version,
 		}
 	}
-	return nil
+	return deleted, nil
 }
 
 // pushLive conditionally uploads the local note, creating only-if-absent or

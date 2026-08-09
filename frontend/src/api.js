@@ -142,6 +142,9 @@ const remoteApi = {
     syncDisable() {
         return api.post('/sync/disable')
     },
+    syncReset() {
+        return api.post('/sync/reset')
+    },
     syncTest() {
         return api.post('/sync/test')
     },

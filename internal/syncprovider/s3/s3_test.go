@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -302,6 +303,22 @@ func TestS3ListPaginationAndPrefix(t *testing.T) {
 		if keys[i] != want {
 			t.Fatalf("keys[%d] = %q, want %q", i, keys[i], want)
 		}
+	}
+}
+
+// TestClassifyS3ErrorPassesThroughContext: cancellation and deadline errors must
+// reach the caller unchanged (never wrapped as retryable transport), so a
+// canceled cycle is reported "cancelled" instead of being silently deferred and
+// misreported as synced.
+func TestClassifyS3ErrorPassesThroughContext(t *testing.T) {
+	if err := classifyS3Error(context.Canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("classifyS3Error(context.Canceled) = %v, want the original error", err)
+	}
+	if err := classifyS3Error(context.DeadlineExceeded); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("classifyS3Error(context.DeadlineExceeded) = %v, want the original error", err)
+	}
+	if _, ok := classifyS3Error(context.Canceled).(*cloudsync.StoreError); ok {
+		t.Fatal("context.Canceled must not be wrapped as a StoreError")
 	}
 }
 

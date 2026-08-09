@@ -6,6 +6,7 @@ vi.mock('../api', () => ({
     syncEnable: vi.fn(),
     syncRun: vi.fn(),
     syncDisable: vi.fn(),
+    syncReset: vi.fn(),
     syncTest: vi.fn(),
     syncRecovery: vi.fn(),
   },
@@ -19,6 +20,7 @@ import {
   refreshSyncSettings,
   runSync,
   disableSync,
+  resetSync,
   testSync,
 } from './useSyncSettings'
 
@@ -41,6 +43,7 @@ describe('sync settings', () => {
     apiClient.syncEnable.mockResolvedValue({ data: { enabled: true } })
     apiClient.syncRun.mockResolvedValue({ data: { Synced: true, Conflicts: 0 } })
     apiClient.syncDisable.mockResolvedValue({ data: { enabled: false } })
+    apiClient.syncReset.mockResolvedValue({ data: { ok: true } })
     apiClient.syncTest.mockResolvedValue({ data: { ok: true } })
   })
 
@@ -64,8 +67,24 @@ describe('sync settings', () => {
     await disableSync()
     expect(getSyncSettings().connected).toBe(false)
     expect(getSyncSettings().enabled).toBe(false)
+    apiClient.syncStatus.mockResolvedValue({
+      data: { enabled: false, connected: false, connection: false },
+    })
+    await resetSync()
+    expect(apiClient.syncReset).toHaveBeenCalled()
+    expect(getSyncSettings().connection).toBe(false)
     await testSync()
     expect(apiClient.syncTest).toHaveBeenCalled()
+  })
+
+  it('hydrates the connection record state and surfaces a connection error', async () => {
+    apiClient.syncStatus.mockResolvedValue({
+      data: { enabled: false, connected: false, connection: true, connectionError: 'corrupt' },
+    })
+    await refreshSyncSettings()
+    const s = getSyncSettings()
+    expect(s.connection).toBe(true)
+    expect(s.connectionError).toBe('corrupt')
   })
 
   it('surfaces a recovery error instead of faking an empty list', async () => {
