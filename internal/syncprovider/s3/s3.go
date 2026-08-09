@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -50,11 +51,22 @@ type Client struct {
 
 // New validates the config and returns a client backed by minio-go (which
 // performs the SigV4 signing and URL/path-style handling). Nothing is
-// contacted yet.
+// contacted yet. Plain HTTP is allowed only for localhost/loopback development
+// endpoints; other schemes, credentials-in-URL, query, and fragment parts are
+// rejected.
 func New(cfg Config) (*Client, error) {
 	u, err := url.Parse(cfg.Endpoint)
 	if err != nil || u.Host == "" {
 		return nil, fmt.Errorf("invalid S3 endpoint")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported S3 endpoint scheme %q", u.Scheme)
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("S3 endpoint must not carry userinfo, query, or fragment")
+	}
+	if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
+		return nil, fmt.Errorf("plain HTTP S3 endpoint is only allowed for localhost/loopback development")
 	}
 	if cfg.Bucket == "" {
 		return nil, fmt.Errorf("missing S3 bucket")
@@ -85,6 +97,15 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	return &Client{cfg: cfg, core: core}, nil
+}
+
+// isLoopbackHost reports whether the host is localhost or a loopback address.
+func isLoopbackHost(host string) bool {
+	ip := net.ParseIP(host)
+	if ip != nil {
+		return ip.IsLoopback()
+	}
+	return strings.EqualFold(host, "localhost")
 }
 
 // Profile is the secret-free provider fingerprint: a hash of the location
@@ -161,9 +182,12 @@ func (c *Client) Read(ctx context.Context, key string) ([]byte, string, error) {
 		return nil, "", classifyS3Error(err)
 	}
 	defer reader.Close()
-	data, rerr := io.ReadAll(reader)
+	data, rerr := io.ReadAll(io.LimitReader(reader, cloudsync.MaxEntityBytes+1))
 	if rerr != nil {
 		return nil, "", classifyS3Error(rerr)
+	}
+	if len(data) > cloudsync.MaxEntityBytes {
+		return nil, "", &cloudsync.StoreError{Kind: cloudsync.ErrInvalidResponse, Message: "object exceeds the size limit"}
 	}
 	version := trimETag(info.ETag)
 	if version == "" {
@@ -175,26 +199,42 @@ func (c *Client) Read(ctx context.Context, key string) ([]byte, string, error) {
 // List returns one page of changes under prefix. The syncCursor argument is the
 // pagination continuation token (the engine uses full listings only). A listing
 // truncated without a continuation token is ErrIncompleteList, never a silent
-// partial view.
+// partial view. The caller's context cancels the wait even though minio-go's
+// single-page Core method ignores ctx.
 func (c *Client) List(ctx context.Context, prefix, syncCursor string) (cloudsync.ChangePage, error) {
-	result, err := c.core.ListObjectsV2(c.cfg.Bucket, c.objectKeyPrefix()+prefix, "", syncCursor, "", 1000)
-	if err != nil {
-		return cloudsync.ChangePage{}, classifyS3Error(err)
+	type outcome struct {
+		page cloudsync.ChangePage
+		err  error
 	}
-	if result.IsTruncated && result.NextContinuationToken == "" {
-		return cloudsync.ChangePage{}, &cloudsync.StoreError{Kind: cloudsync.ErrIncompleteList, Message: "listing truncated without a continuation token"}
+	ch := make(chan outcome, 1)
+	go func() {
+		result, err := c.core.ListObjectsV2(c.cfg.Bucket, c.objectKeyPrefix()+prefix, "", syncCursor, "", 1000)
+		if err != nil {
+			ch <- outcome{err: classifyS3Error(err)}
+			return
+		}
+		if result.IsTruncated && result.NextContinuationToken == "" {
+			ch <- outcome{err: &cloudsync.StoreError{Kind: cloudsync.ErrIncompleteList, Message: "listing truncated without a continuation token"}}
+			return
+		}
+		page := cloudsync.ChangePage{}
+		for _, obj := range result.Contents {
+			rel := strings.TrimPrefix(obj.Key, c.objectKeyPrefix())
+			page.Changes = append(page.Changes, cloudsync.Change{
+				Key: rel, Type: cloudsync.ChangeCreated, Version: trimETag(obj.ETag),
+			})
+		}
+		if result.IsTruncated {
+			page.NextCursor = result.NextContinuationToken
+		}
+		ch <- outcome{page: page}
+	}()
+	select {
+	case o := <-ch:
+		return o.page, o.err
+	case <-ctx.Done():
+		return cloudsync.ChangePage{}, ctx.Err()
 	}
-	page := cloudsync.ChangePage{}
-	for _, obj := range result.Contents {
-		rel := strings.TrimPrefix(obj.Key, c.objectKeyPrefix())
-		page.Changes = append(page.Changes, cloudsync.Change{
-			Key: rel, Type: cloudsync.ChangeCreated, Version: trimETag(obj.ETag),
-		})
-	}
-	if result.IsTruncated {
-		page.NextCursor = result.NextContinuationToken
-	}
-	return page, nil
 }
 
 // Create stores bytes under a key that must not already exist.

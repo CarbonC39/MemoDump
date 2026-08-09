@@ -53,7 +53,9 @@ func lastRunSnapshot() (syncserviceResult, time.Time) {
 
 // handleSyncEnable enables sync for the vault: it creates the note-only index
 // (assigning a stable Vault ID and Sync IDs), resolves the replica identity,
-// and records the connect marker. It never modifies existing Markdown.
+// and records the connect marker. It never modifies existing Markdown. The
+// provider's capability probe is REQUIRED: a service that ignores conditional
+// writes is refused rather than admitted into real sync.
 func handleSyncEnable(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
@@ -66,6 +68,15 @@ func handleSyncEnable(w http.ResponseWriter, r *http.Request) {
 	_, replicaID, stateRoot, err := syncIdentity()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	remote, err := syncProvider()
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := remote.Test(r.Context()); err != nil {
+		writeErr(w, http.StatusBadRequest, "sync provider probe failed; sync not enabled")
 		return
 	}
 	if err := syncSetConnected(stateRoot, vaultID, replicaID, true); err != nil {

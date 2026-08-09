@@ -68,13 +68,22 @@ func syncS3Config() s3.Config {
 	}
 }
 
-// defaultSyncProvider selects the remote store: the S3-compatible provider when
-// configured (MEMODUMP_SYNC_ENDPOINT and MEMODUMP_SYNC_BUCKET), otherwise the
-// process-local memory remote.
+// defaultSyncProvider selects the remote store. With no S3 config at all, the
+// process-local memory remote is used ONLY when the explicit development switch
+// MEMODUMP_SYNC_MEMORY=1 is set; production runs must configure a real
+// provider. A partially configured S3 endpoint (one of endpoint/bucket missing)
+// is an error, never a silent fallback that loses data on restart.
 func defaultSyncProvider() (cloudsync.RemoteStore, error) {
 	cfg := syncS3Config()
+	if cfg.Endpoint == "" && cfg.Bucket == "" && cfg.Prefix == "" &&
+		cfg.Region == "" && cfg.AccessKey == "" && cfg.SecretKey == "" {
+		if os.Getenv("MEMODUMP_SYNC_MEMORY") == "1" {
+			return syncMemoryRemote, nil
+		}
+		return nil, fmt.Errorf("no sync provider configured (set MEMODUMP_SYNC_ENDPOINT/BUCKET, or MEMODUMP_SYNC_MEMORY=1 for the in-memory dev remote)")
+	}
 	if cfg.Endpoint == "" || cfg.Bucket == "" {
-		return syncMemoryRemote, nil
+		return nil, fmt.Errorf("incomplete S3 sync config: MEMODUMP_SYNC_ENDPOINT and MEMODUMP_SYNC_BUCKET are required")
 	}
 	return s3.New(cfg)
 }
@@ -89,14 +98,19 @@ func providerProfile(remote cloudsync.RemoteStore) string {
 }
 
 // syncRepoIdentity returns the repository ID and provider profile for the
-// remote, reading repo.json and creating it only-if-absent with a fresh
-// Repository ID. A known repository that becomes missing or invalid stops.
-func syncRepoIdentity(ctx context.Context, remote cloudsync.RemoteStore) (repoID, profile string, err error) {
+// remote. When no repository has ever been established (known == false), a
+// missing repo.json is created only-if-absent; a lost create race re-reads the
+// winner. When a repository is KNOWN (a durable snapshot exists), a missing
+// repo.json is remote damage and stops with zero writes — never replaced.
+func syncRepoIdentity(ctx context.Context, remote cloudsync.RemoteStore, known bool) (repoID, profile string, err error) {
 	profile = providerProfile(remote)
 	data, _, rerr := remote.Read(ctx, "repo.json")
 	if rerr != nil {
 		if !cloudsync.IsStoreError(rerr, cloudsync.ErrNotFound) {
 			return "", "", rerr
+		}
+		if known {
+			return "", "", fmt.Errorf("remote repository lost though sync was established")
 		}
 		desc := cloudsync.RepositoryDescriptor{
 			FormatVersion: 1, RepositoryID: uuid.NewString(),
@@ -107,15 +121,53 @@ func syncRepoIdentity(ctx context.Context, remote cloudsync.RemoteStore) (repoID
 			return "", "", serr
 		}
 		if _, cerr := remote.Create(ctx, "repo.json", ser); cerr != nil {
+			if cloudsync.IsStoreError(cerr, cloudsync.ErrPreconditionFailed) {
+				// Lost a concurrent first-create race: adopt the winner.
+				return reReadRepoIdentity(ctx, remote, profile)
+			}
 			return "", "", cerr
 		}
 		return desc.RepositoryID, profile, nil
 	}
+	return parseRepoIdentity(data, profile)
+}
+
+// reReadRepoIdentity re-reads repo.json after a lost create race.
+func reReadRepoIdentity(ctx context.Context, remote cloudsync.RemoteStore, profile string) (string, string, error) {
+	data, _, rerr := remote.Read(ctx, "repo.json")
+	if rerr != nil {
+		return "", "", rerr
+	}
+	return parseRepoIdentity(data, profile)
+}
+
+func parseRepoIdentity(data []byte, profile string) (string, string, error) {
 	parsed, perr := cloudsync.ParseRepositoryDescriptor(data)
 	if perr != nil {
 		return "", "", fmt.Errorf("invalid remote repo.json: %w", perr)
 	}
 	return parsed.RepositoryID, profile, nil
+}
+
+// syncRepoEstablished reports whether this replica has ever completed a sync
+// (a disposable snapshot exists), meaning the remote repository is known.
+func syncRepoEstablished() (bool, error) {
+	vaultID, replicaID, stateRoot, err := syncIdentity()
+	if err != nil {
+		return false, err
+	}
+	snaps, err := syncstate.NewSnapshotStoreV2(stateRoot, vaultID, replicaID)
+	if err != nil {
+		return false, err
+	}
+	_, rerr := os.Stat(snaps.Path())
+	if rerr != nil {
+		if os.IsNotExist(rerr) {
+			return false, nil
+		}
+		return false, rerr
+	}
+	return true, nil
 }
 
 // syncStateRoot resolves the empty default state root to the OS app-data
@@ -192,8 +244,9 @@ func syncConnected() bool {
 
 // buildSyncService assembles the sync service for the current data dir, with
 // the resolved state root passed to every store, and the repository identity
-// (repoID + secret-free profile) derived from the configured provider's
-// repo.json.
+// (repoID + secret-free profile) derived from the provider's repo.json. The
+// SAME remote instance is bound into the service so identity resolution and the
+// cycle cannot drift onto a different provider.
 func buildSyncService(ctx context.Context) (*syncservice.Service, error) {
 	vaultID, replicaID, stateRoot, err := syncIdentity()
 	if err != nil {
@@ -203,7 +256,11 @@ func buildSyncService(ctx context.Context) (*syncservice.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	repoID, profile, err := syncRepoIdentity(ctx, remote)
+	known, err := syncRepoEstablished()
+	if err != nil {
+		return nil, err
+	}
+	repoID, profile, err := syncRepoIdentity(ctx, remote, known)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +268,7 @@ func buildSyncService(ctx context.Context) (*syncservice.Service, error) {
 		RepoRoot: dataDir, StateRoot: stateRoot,
 		VaultID: vaultID, ReplicaID: replicaID,
 		RepoID: repoID, Profile: profile,
-		Provider: syncProvider,
+		Remote: remote,
 	}), nil
 }
 

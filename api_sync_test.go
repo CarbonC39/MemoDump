@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -18,12 +19,13 @@ import (
 )
 
 // setSyncEnv points the package-level sync globals at a test vault/state root
-// and restores them at cleanup. A nil provider keeps the current default.
+// and restores them at cleanup. A nil provider selects a fresh memory store.
 func setSyncEnv(t *testing.T, dir, stateRoot string, provider syncservice.Provider) {
 	t.Helper()
 	oldDataDir, oldSyncRoot, oldProvider := dataDir, syncRoot, syncProvider
 	if provider == nil {
-		provider = oldProvider
+		store := cloudsync.NewMemoryStore()
+		provider = func() (cloudsync.RemoteStore, error) { return store, nil }
 	}
 	dataDir, syncRoot, syncProvider = dir, stateRoot, provider
 	syncLastRunMu.Lock()
@@ -124,6 +126,38 @@ func TestSyncApiRecoveryListReportsCorruptIndex(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("corrupt index recovery list status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
 	}
+}
+
+// TestSyncApiEnableRequiresCapabilityProbe: a provider whose capability probe
+// fails is refused at enable, so a service that ignores conditional writes is
+// never admitted into real sync.
+func TestSyncApiEnableRequiresCapabilityProbe(t *testing.T) {
+	dir, state := t.TempDir(), t.TempDir()
+	store := cloudsync.NewMemoryStore()
+	failing := &failingProbeStore{RemoteStore: store}
+	setSyncEnv(t, dir, state, func() (cloudsync.RemoteStore, error) { return failing, nil })
+
+	en := decodeSync[map[string]any](t, doJSON(t, "POST", "/api/sync/enable", nil))
+	if en["enabled"] == true {
+		t.Fatalf("enable = %+v, want the probe to refuse", en)
+	}
+	if en["error"] == nil {
+		t.Fatal("enable accepted a provider without conditional writes")
+	}
+	// The vault must not be marked connected.
+	if connected := syncConnected(); connected {
+		t.Fatal("vault marked connected despite the failed probe")
+	}
+}
+
+// failingProbeStore wraps a store whose Test always reports unsupported
+// capabilities.
+type failingProbeStore struct {
+	cloudsync.RemoteStore
+}
+
+func (f *failingProbeStore) Test(context.Context) (cloudsync.Capabilities, error) {
+	return cloudsync.Capabilities{}, &cloudsync.StoreError{Kind: cloudsync.ErrUnsupportedCapability, Message: "ignores preconditions"}
 }
 
 type syncRunJSON struct {

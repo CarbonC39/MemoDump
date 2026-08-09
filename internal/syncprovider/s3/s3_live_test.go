@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"memodump/internal/cloudsync"
 	"memodump/internal/syncindex"
@@ -52,12 +55,19 @@ func TestS3Live(t *testing.T) {
 		_ = c.deleteObject(context.Background(), c.objectKey("repo.json"))
 	}()
 
-	// Two replicas converge through the live provider.
+	// Establish the repository identity through repo.json (create-if-absent,
+	// adopting a concurrent winner).
+	repoID, err := establishLiveRepo(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Two replicas converge through the live provider with the resolved repo ID.
 	provider := func() (cloudsync.RemoteStore, error) { return c, nil }
 	rootA, rootB := t.TempDir(), t.TempDir()
 	stateA, stateB := t.TempDir(), t.TempDir()
-	a := liveReplica(t, rootA, stateA, provider, c.Profile())
-	b := liveReplica(t, rootB, stateB, provider, c.Profile())
+	a := liveReplica(t, rootA, stateA, provider, c.Profile(), repoID)
+	b := liveReplica(t, rootB, stateB, provider, c.Profile(), repoID)
 	if err := os.WriteFile(filepath.Join(rootA, "idea.md"), []byte("# Live\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -72,11 +82,42 @@ func TestS3Live(t *testing.T) {
 	}
 }
 
+// establishLiveRepo reads repo.json, creating it only-if-absent with a fresh
+// Repository ID, and returns the repository ID.
+func establishLiveRepo(ctx context.Context, c *Client) (string, error) {
+	data, _, err := c.Read(ctx, "repo.json")
+	if err == nil {
+		parsed, perr := cloudsync.ParseRepositoryDescriptor(data)
+		if perr != nil {
+			return "", perr
+		}
+		return parsed.RepositoryID, nil
+	}
+	if !cloudsync.IsStoreError(err, cloudsync.ErrNotFound) {
+		return "", err
+	}
+	desc := cloudsync.RepositoryDescriptor{
+		FormatVersion: 1, RepositoryID: uuid.NewString(),
+		CreatedAt: time.Now().UnixMilli(), MinimumClientVersion: "2.0.0",
+	}
+	ser, serr := desc.Serialize()
+	if serr != nil {
+		return "", serr
+	}
+	if _, cerr := c.Create(ctx, "repo.json", ser); cerr != nil {
+		if !cloudsync.IsStoreError(cerr, cloudsync.ErrPreconditionFailed) {
+			return "", cerr
+		}
+		return establishLiveRepo(ctx, c) // lost the race: adopt the winner
+	}
+	return desc.RepositoryID, nil
+}
+
 type liveReplicaInfo struct {
 	svc *syncservice.Service
 }
 
-func liveReplica(t *testing.T, root, state string, provider syncservice.Provider, profile string) *liveReplicaInfo {
+func liveReplica(t *testing.T, root, state string, provider syncservice.Provider, profile, repoID string) *liveReplicaInfo {
 	t.Helper()
 	idx, err := syncindex.EnableNoteStore(root)
 	if err != nil {
@@ -89,6 +130,6 @@ func liveReplica(t *testing.T, root, state string, provider syncservice.Provider
 	return &liveReplicaInfo{svc: syncservice.New(syncservice.Config{
 		RepoRoot: root, StateRoot: state,
 		VaultID: idx.Index.VaultID, ReplicaID: string(replicaID),
-		RepoID: "33333333-3333-4333-8333-333333333333", Profile: profile, Provider: provider,
+		RepoID: repoID, Profile: profile, Provider: provider,
 	})}
 }

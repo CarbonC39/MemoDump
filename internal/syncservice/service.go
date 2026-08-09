@@ -23,7 +23,9 @@ import (
 // provider error bodies into its status.
 type Provider func() (cloudsync.RemoteStore, error)
 
-// Config binds a Service to one vault replica.
+// Config binds a Service to one vault replica. Provider selects the remote
+// store when Remote is nil; Remote binds a specific instance so identity
+// resolution and the cycle share one provider.
 type Config struct {
 	RepoRoot  string
 	StateRoot string
@@ -32,6 +34,7 @@ type Config struct {
 	RepoID    string
 	Profile   string
 	Provider  Provider
+	Remote    cloudsync.RemoteStore
 }
 
 // Result is the redacted outcome of one manual run: counts and a stable phase
@@ -78,9 +81,13 @@ func (s *Service) Run(ctx context.Context) (*Result, error) {
 	}
 	defer lock.Close()
 
-	remote, err := s.cfg.Provider()
-	if err != nil {
-		return &Result{LastError: "provider"}, nil
+	remote := s.cfg.Remote
+	if remote == nil {
+		var perr error
+		remote, perr = s.cfg.Provider()
+		if perr != nil {
+			return &Result{LastError: "provider"}, nil
+		}
 	}
 	res, err := s.runOnce(ctx, remote, lock)
 	if err != nil {
