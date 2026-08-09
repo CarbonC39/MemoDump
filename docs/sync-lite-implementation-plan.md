@@ -1,476 +1,323 @@
-# MemoDump Cloud Sync — Simplified Implementation Plan
+# MemoDump Versioned-Note Sync — Implementation Plan
 
 Status: proposed handoff plan
 Date: 2026-08-08
 Architecture contract: [`sync-spec-lite.md`](sync-spec-lite.md)
 
-## 1. How to use this plan
+## 1. Reset point
 
-Implement one phase at a time. Do not give an implementation agent the whole
-file as one coding assignment. Each phase has a narrow exit gate and must leave
-the repository compiling with sync disabled by default.
+The previous Phase 0–3 work is a useful prototype, not the architecture to keep
+patching. It proved the local CAS, portable index, snapshot, recovery store,
+remote conditional-write boundary, and several failure scenarios. It also
+showed that folder entities plus a repository-wide planner are too large for
+MemoDump V1.
 
-When this plan and historical documents differ, `sync-spec-lite.md` wins. In
-particular, do not restore WAL, compaction, a persisted operation queue, durable
-conflict records, or parallel workers. Do not start a real provider until the
-shared in-memory crash scenarios pass.
+Do not continue the old Phase 3 defect list one item at a time. Replace the
+coordinator behind tests with the note-only path below, then delete code that no
+longer has callers.
 
-For every phase:
+This plan uses `R0`, `R1`, and so on to avoid confusing the reset with the
+already implemented phases. Give a small implementation agent exactly one task
+inside a reset phase, not the whole document.
 
-1. read `CLAUDE.md`, the lite spec, this phase, and the files named by it;
-2. inspect current code before editing—several prerequisites already exist;
-3. add/adjust tests with the implementation, using injected IDs/faults rather
-   than sleeps or live services;
-4. run the narrow tests, then the standard verification commands;
-5. stop at the exit gate and report remaining failures instead of continuing
-   into the next phase.
+## 2. Keep, adapt, retire
 
-## 2. Current baseline: keep, refactor, remove
+Keep:
 
-### Keep
+- `internal/vaultfs` safe paths, stable Markdown reads, local revisions, atomic
+  note create/replace/delete, and front-matter preservation;
+- `internal/syncstate` identity, registry, replica lock, atomic snapshot helper,
+  and recovery store;
+- `internal/cloudsync.RemoteStore`, normalized provider errors, conditional
+  memory store, canonical JSON helpers, and reusable fault injection;
+- `internal/syncscan` stable-read and unsafe/unknown classifications;
+- UUID-v5 conflict derivation and state-hash fixtures where their inputs still
+  match the new note record.
 
-- `internal/vaultfs`: repository boundary, revision CAS, front-matter
-  preservation, reserved paths, stable scanner, and symlink handling.
-- `internal/syncindex`: opt-in portable identity, validation, backup, atomic
-  replace, and tests.
-- `internal/cloudsync`: canonical entity/repository formats, normalized store
-  errors, `RemoteStore`, memory store, and shared fixtures.
-- `frontend/src/storage`: canonical Markdown/revision storage.
-- `frontend/src/sync/core`: TypeScript wire contract and memory store.
-- `testdata/sync`: cross-language contract fixtures.
-- From `internal/syncstate`: Device/Replica identity, path registry, replica
-  process lock, state-root selection, and the small durable-replace helpers.
+Adapt:
 
-### Refactor
+- `syncindex` becomes schema v2 and maps only Sync ID to Markdown path;
+- `Snapshot` becomes schema v2, removes cursor, and stores note baselines only;
+- the remote entity becomes a schema-v2 note record with a complete portable
+  path and no `kind` or `parentId`;
+- the pure decision code becomes one small Go per-note function;
+- scanner output covers Markdown notes only.
 
-- `internal/syncscan/reconcile.go` currently depends on WAL-backed baselines and
-  decides states too early. Make it produce local observations only; the new
-  pure engine compares them with remote and snapshot state and makes identity/
-  repair decisions.
-- Existing conflict names use clocks and device labels. Replace them with the
-  deterministic UUID/path contract from the lite spec.
-- Sync-ID validation currently accepts only UUID v4. Add a separate `IsSyncID`
-  accepting v4/v5; do not weaken Vault/Replica/Device/Repository validation.
+Retire after replacement tests pass:
 
-### Remove after replacement is wired
+- folder remote entities, parent-graph validation, topological action ordering,
+  folder recovery/deletion, and remote folder move logic;
+- cursor persistence and delta-list decisions;
+- the general `Action`/repository planner and simulator executor when the
+  note-only coordinator no longer calls them;
+- the TypeScript reconciliation/coordinator port. Keep generic wire/store code
+  only if it remains used or cheap to maintain;
+- any coordinator path that recursively deletes a folder.
 
-- WAL records and replay;
-- compaction, generations, checksums, sequence/watermark code and benchmarks;
-- `syncstate.Store.Put/Delete`, `PutBaseline/GetBaseline`, and any scan API that
-  reads them.
+Do not delete the historical commits or users' legacy state files. Schema-v1
+index/snapshot data has not shipped with a production provider, so V1 may report
+it as unsupported prototype state and require sync re-enable; it must never
+reinterpret it as deletion evidence.
 
-Do not delete the retained identity/registry/lock files merely because they
-share the `syncstate` package. Do not delete legacy state files from a user's
-disk; new code simply ignores them.
-
-## 3. Target module boundaries
-
-Use the current layout rather than a broad repository reorganization:
+## 3. Target code shape
 
 ```text
-internal/cloudsync/       wire models, pure decisions, action/result types,
-                          memory remote, shared scenario runner
-internal/syncindex/       portable identity only
-internal/syncstate/       identity/registry/lock + one snapshot store
-internal/syncscan/        stable local observations only
-internal/syncrun/         serialized coordinator executing planned actions
-internal/syncprovider/
-  s3/
-  webdav/
-  dropbox/
-internal/vaultfs/         only filesystem materialization boundary
+internal/cloudsync/
+  note.go                 schema-v2 note record + validation/canonical hash
+  reconcile_note.go       pure decision for one Sync ID
+  remote_store.go         conditional object-store boundary
+  memory_store.go         test implementation and faults
 
-sync_service.go           Go lifecycle and dependency assembly
-api_sync.go               authenticated /api/v2/sync/* handlers
+internal/syncindex/       Sync ID -> Markdown path only
+internal/syncscan/        stable note observations only
+internal/syncstate/       identity/lock + snapshot v2 + recovery
+internal/syncrun/         one serialized note coordinator
+internal/syncprovider/s3/ first real provider
 
-frontend/src/sync/
-  core/                   wire models and pure decisions
-  storage/                opt-in memodump-sync IndexedDB
-  coordinator/            serialized browser cycle + Web Lock
-  providers/              adapters only; no conflict decisions
-frontend/src/composables/useSync.js
+sync_service.go           lifecycle/configuration
+api_sync.go               manual setup/run/status endpoints
 ```
 
-`cloudsync` must not import filesystem, HTTP clients, provider SDKs, IndexedDB,
-Vue, or `package main`. Provider adapters must not decide conflicts. `syncrun`
-owns ordering and side effects but asks the pure core for decisions.
-
-## 4. Phase 0 — Freeze the amended shared contract
-
-Purpose: remove ambiguities before persistence or engine work.
-
-### Tasks
-
-1. Add `IsSyncID` in Go and TypeScript. Accept UUID v4/v5 for entity `syncId`
-   and `parentId`; retain UUID-v4-only checks for all other IDs.
-2. Keep the existing entity `contentHash` algorithm unchanged. Add a helper for
-   the complete state hash over canonical `{contentHash, deleted}`.
-3. Define the fixed MemoDump conflict namespace UUID, deterministic UUID v5,
-   and deterministic conflict filename in both languages.
-4. Remove clock-based conflict naming from the core API. It may remain only as
-   an unrelated UI formatting helper if something already uses it.
-5. Add shared fixtures for state hashes, derived conflict IDs/names, v5-valid
-   Sync IDs, invalid v5 use as Repository/Device IDs, and collision behavior.
-6. Clarify `RemoteStore.List` tests: full listing is complete; delta listing can
-   report physical removal but that is damage, not a tombstone.
-
-### Likely files
-
-- `internal/cloudsync/entity.go`, `canonical.go`, `names.go`
-- `frontend/src/sync/core/entity.ts`, `canonical.ts`, `names.ts`
-- `internal/syncindex/index.go`
-- `testdata/sync/entities.json`, `conflict-names.json`, plus a new
-  `state-hashes.json`
-
-### Required tests
-
-- Go and TypeScript produce identical state hashes, UUIDs, and filenames.
-- Repeating a conflict derivation produces the same result.
-- Swapping local/remote *content values* while retaining role labels changes
-  the derivation when the conflict semantics differ.
-- Existing entity/repository/memory-store fixtures still pass.
-
-### Exit gate
-
-The shared wire and deterministic-ID contract is frozen. No local state format
-or production behavior has changed.
-
-## 5. Phase 1 — Replace WAL state with one snapshot
-
-Purpose: complete the architectural cutover before an engine depends on state.
-
-### Tasks
-
-1. Add versioned `Snapshot`, `SnapshotEntity`, validation, and canonical JSON
-   serialization in `internal/syncstate/snapshot.go`.
-2. Implement a small `SnapshotStore`:
-   - `Load(expectedIdentity) -> snapshot or discard reason`;
-   - distinguish not-exist/corrupt/identity-mismatch from real I/O error;
-   - `Replace(snapshot)` using one temp file, file sync, atomic replace, and
-     directory sync where supported;
-   - no backup, append, partial update, compactor, or background goroutine.
-3. Preserve state root, registry, and replica lock behavior. Use
-   `<root>/<vaultId>/<replicaId>/state.json`.
-4. Refactor `syncscan` so it no longer accepts `*syncstate.Store`. Its output
-   contains indexed present/missing/blocked/unstable observations and unindexed
-   observations only. It performs no remote or baseline decision, and rename/
-   repair inference is deferred to the engine/coordinator (which derives a
-   temporary local digest from remote Markdown only when the remote equals the
-   snapshot baseline). Until then an offline rename degrades to lossless
-   delete-plus-create.
-5. Delete the now-unreachable WAL/baseline/compaction implementation and its
-   benchmarks. Keep durability helpers used by the snapshot.
-6. Add a regression test that legacy `state.snapshot.json` and WAL files are
-   ignored and never treated as a baseline.
-7. Update `CLAUDE.md` only after the old code is actually gone.
-
-### Snapshot validation details
-
-- exact schema version and non-null entity map;
-- UUID-v4 Vault/Replica/Repository IDs;
-- provider fingerprint and content hashes are lowercase 64-hex;
-- Sync IDs pass `IsSyncID`;
-- remote version is non-empty for every stored baseline;
-- cursor is opaque and optional;
-- duplicate JSON fields and trailing content are rejected if the parser can
-  detect them without a large custom framework.
-
-### Required tests
-
-- round trip and deterministic serialization;
-- missing, truncated, malformed, unknown schema, wrong identity/profile, and
-  permission/read failure classifications;
-- failure injection at create/write/sync/rename/directory-sync boundaries;
-- failed replace leaves the prior valid snapshot loadable where the platform
-  guarantee allows it;
-- one successful cycle-equivalent replace performs one state-file rewrite;
-- scanner classifications never turn blocked/unstable/read failure into absent.
-
-### Exit gate
-
-`rg "WAL|compaction|PutBaseline|GetBaseline" internal` finds no live sync-state
-implementation or call site (comments about migration may remain). All tests
-pass without `state.wal.ndjson`.
-
-## 6. Phase 2 — Pure reconciliation engine and shared scenarios
-
-Purpose: prove decisions without filesystem, IndexedDB, HTTP, or providers.
-
-### Tasks
-
-1. Define small immutable inputs in Go and TypeScript:
-   - local observation: present/absent/unknown plus canonical entity and local
-     revision when present;
-   - remote observation: live/tombstone/missing/invalid plus version;
-   - optional snapshot baseline;
-   - path/graph conflict annotations.
-2. Define normalized decisions such as `noop`, `establish-baseline`,
-   `pull-live`, `push-live`, `push-tombstone`, `apply-tombstone`,
-   `create-conflict`, `repair-index`, `block`, and `retry`.
-3. Implement the known-baseline and no-baseline tables exactly once per
-   language as pure functions. Do not put I/O or retry loops in them.
-4. Add repository-wide planning order: parents before live children,
-   conflict preservation before destructive actions, and tombstones
-   child-first.
-5. Extend both memory stores with deterministic "write accepted, response
-   lost", stale precondition, cursor rejection, incomplete listing, and
-   physical-removal faults if not already available.
-6. Create shared JSON scenario traces in `testdata/sync/scenarios/`. Each trace
-   contains initial local/index/snapshot/remote state, one event, normalized
-   expected decisions, and expected final canonical state.
-7. Build a small simulator that can stop before/after each abstract local,
-   index, remote, recovery, and snapshot boundary, restart from durable state,
-   and run until quiescent.
-
-### Minimum shared scenarios
-
-The pure decision traces cover the reconciliation space:
-
-- first local upload, first remote download, identical onboarding;
-- one-sided edit and rename, simultaneous identical edit;
-- divergent note edits, recreate-from-deleted-baseline (identical and divergent);
-- local delete, remote tombstone, and both directions of edit/delete;
-- deterministic conflict create replay and create-response loss;
-- stale replace CAS followed by remote read;
-- remote object physically missing versus valid tombstone;
-- path collision, invalid record, parent cycle, folder structural conflict.
-
-Coordinator-boundary scenarios are intentionally NOT per-entity decision
-traces and are verified at their own layer instead:
-
-- **remote faults** (write-response loss, stale precondition, cursor
-  rejection, incomplete listing) are injected into the Go simulator and proven
-  to converge there; the shared traces keep the pure decision space.
-- **snapshot missing/corrupt and snapshot-write failure** are SnapshotStore and
-  coordinator concerns: `SnapshotStore.Load` classifies them (Phase 1), a
-  missing/corrupt snapshot drives the no-baseline decisions already traced, and
-  the write-failure-then-converge-by-L==R behavior is exercised in Phase 3.
-- **repository/profile mismatch** is a setup/`SnapshotStore.Load` outcome that
-  stops or requires confirmation before any engine decision; it is proven by
-  the Phase 1 load-classification tests and the Phase 3 coordinator.
-- **a blocked change preventing cursor advancement** is asserted by the
-  simulator (baseline/cursor do not advance past block/retry/repair).
-
-### Exit gate
-
-Go and TypeScript emit the same normalized decisions for every shared scenario.
-The simulator converges without duplicate conflict IDs under every injected
-restart. There are still no real providers or UI worker.
-
-## 7. Phase 3 — Go filesystem coordinator with the memory remote
-
-Purpose: connect the proven decisions to real local atomic boundaries.
-
-### Tasks
-
-1. Add only the missing `vaultfs` operations:
-   - stable full-Markdown read with revision;
-   - exact-path note create-if-absent (no timestamp de-collision);
-   - CAS replace/move needed by pull;
-   - CAS/revalidated note delete;
-   - exact folder create/move/delete with collision checks;
-   - no direct filesystem work in `syncrun`.
-2. Implement a filesystem recovery store under the replica directory. Write
-   `<recovery>/<syncId>/<stateHash>.md` atomically and idempotently before a
-   pulled tombstone deletes a note.
-3. Implement `internal/syncrun.Coordinator` with injected index, snapshot,
-   scanner, repository, recovery store, clock/ID attribution, and
-   `RemoteStore`. Serialize `Run` and require the existing replica lock.
-4. Build canonical local entities from the indexed folder graph. Read Markdown
-   only for notes that the cycle needs; keep raw local revision separate.
-5. Implement exact action ordering from spec Section 6. Reserve conflict IDs in
-   the index before replacing/deleting originals.
-6. After CAS/transport uncertainty, re-read instead of guessing. Recompute final
-   baselines from known-equal states and replace the snapshot once.
-7. Remove settled tombstone path mappings safely. Ensure the union of index,
-   snapshot, and remote IDs still observes old tombstones.
-8. Add an in-memory or temp-directory repository harness with two replicas.
-
-### Required tests
-
-- all Phase 2 scenarios through real `vaultfs`, `syncindex`, snapshot files,
-  and memory remote;
-- external edit races every pull replace/delete and survives CAS failure;
-- crash points around conflict index reservation, conflict file creation,
-  original replacement/delete, index cleanup, and snapshot replace;
-- exact-path collision never invokes existing timestamp de-collision helpers;
-- recovery write failure prevents delete; repeated recovery is idempotent;
-- empty folders and child-first folder deletion;
-- index write failure prevents snapshot advancement and restart converges.
-
-### Exit gate
-
-Two temporary filesystem replicas converge through the full in-memory scenario
-suite. A killed/restarted coordinator needs no WAL or pending queue.
-
-## 8. Phase 4 — Pure-frontend storage and coordinator with memory remote
-
-Purpose: match the Go behavior using actual IndexedDB boundaries.
-
-### Tasks
-
-1. Add `frontend/src/sync/storage/syncDb.ts` (or `.js` if the surrounding call
-   site requires it). Do not change the normal `memodump` DB version merely to
-   pre-create sync stores.
-2. Lazily create `memodump-sync` on enable with:
-   - metadata store keys `index` and `snapshot`;
-   - recovery store keyed by `syncId/stateHash`.
-3. Implement strict index/snapshot validation and one-transaction replacement
-   of each logical record. Never store bodies in the snapshot.
-4. Add a browser local adapter over the existing note/folder stores with
-   transaction-scoped local revision CAS and exact-path create.
-5. Implement the same coordinator ordering and uncertainty re-reads as Go.
-   Cross-database atomicity is intentionally not simulated; tests restart
-   between notes-DB and sync-DB commits.
-6. Acquire a Web Lock scoped to Vault ID + provider fingerprint before a cycle.
-   If unavailable or already held, return a visible status and perform no sync
-   mutation. Do not add a lease/fencing subsystem in V1.
-7. Prove no sync database is opened by normal local app startup, note CRUD, or
-   image upload when sync was never enabled.
-
-### Required tests
-
-- the shared Phase 2 scenarios through fake IndexedDB and memory remote;
-- transaction abort/quota failure for index, snapshot, recovery, and note apply;
-- restart between every cross-database boundary;
-- two tabs: only the Web-Lock owner runs, while both retain working local CAS;
-- unavailable Web Locks disables only sync;
-- never-enabled browser storage has no `memodump-sync` database.
-
-### Exit gate
-
-The browser and filesystem adapters pass equivalent scenarios using their real
-local persistence. No production provider exists yet.
-
-## 9. Phase 5 — Manual service/API and minimal status UI
-
-Purpose: expose one manually triggered cycle without adding scheduling
-complexity.
-
-### Tasks
-
-1. Add `sync_service.go` to assemble identities, lock, index, snapshot,
-   repository/local adapter, provider configuration, and coordinator. It owns
-   cancellation and exposes no internal store directly.
-2. Add authenticated endpoints in `api_sync.go` and register them in
-   `buildAPIMux()` for both CLI and Wails:
-   - `GET /api/v2/sync/status`;
-   - `POST /api/v2/sync/setup/test`;
-   - `POST /api/v2/sync/enable`;
-   - `POST /api/v2/sync/run`;
-   - `POST /api/v2/sync/disable` (disconnect only; never delete notes/remote);
-   - `GET /api/v2/sync/recovery` and a recover action.
-3. Define one redacted provider-config boundary. The returned API model contains
-   provider kind, configured/fingerprint state, repository ID, and warnings,
-   never secret values.
-4. Add the equivalent pure-frontend commands behind `useSync.js`.
-5. Add minimal settings/status UI: enable/test, manual Sync, phase, last
-   completed time, blocked/conflict/error counts, actionable errors, and the
-   no-E2EE warning. Add English and Chinese strings together.
-6. Keep the feature hidden behind an experimental flag. Do not add timers,
-   online listeners, or a retry queue.
-
-### Required tests
-
-- auth and secret redaction;
-- double manual run returns already-running without a second coordinator;
-- disable during a cycle cancels only at an atomic boundary and keeps index;
-- status never reports synced after a failed snapshot commit;
-- Wails and CLI share routes/lifecycle;
-- pure frontend and server expose equivalent normalized status.
-
-### Exit gate
-
-A user can configure and manually run the complete memory-provider flow through
-public UI/API surfaces. Sync remains opt-in and experimental.
-
-## 10. Phase 6 — S3-compatible provider
-
-S3 is first because the repository already depends on MinIO in Go and
-`aws4fetch` in the browser. Reuse low-level endpoint/signing normalization only;
-do not reuse the public image-host profile or prefix.
-
-### Tasks
-
-- private bucket/prefix configuration and a distinct fingerprint;
-- `repo.json`/entity read and paged full listing;
-- conditional create (`If-None-Match: *`) and replace (`If-Match`);
-- map native errors to `StoreError` without leaking response bodies/secrets;
-- reject endpoints that ignore either precondition during setup probe;
-- support path-style addressing as an explicit profile field;
-- opt-in live contract tests under a random isolated prefix.
-
-### Exit gate
-
-Go and browser adapters pass the same provider contract, including accepted
-write/response-loss, stale ETag, pagination, auth, quota, and cleanup limited to
-the test prefix. Manual end-to-end sync works before scheduling is added.
-
-## 11. Phase 7 — WebDAV provider
-
-### Tasks
-
-- HTTPS URL normalization with credentials removed from fingerprints/errors;
-- `GET`/`PUT`, ETag capture, `If-None-Match`, and `If-Match`;
-- `PROPFIND Depth: 1` complete listing; optional `sync-collection` only after the
-  fallback is correct;
-- setup probe proving the server does not ignore conditional headers;
-- redirect policy that never forwards auth across origins;
-- browser CORS errors mapped to actionable status;
-- opt-in live contract tests against an isolated collection.
-
-### Exit gate
-
-Both adapters pass the common contract on a server without RFC 6578. Servers
-with missing/weak/ignored CAS are rejected, never downgraded to LWW.
-
-## 12. Phase 8 — Dropbox provider
-
-### Tasks
-
-- App Folder OAuth with PKCE and least privilege;
-- read/write by fixed application-managed key, Dropbox revision CAS, and
-  create-if-absent behavior;
-- paginated `list_folder`, delta cursor, and cursor-reset-to-full-list path;
-- refresh/reauthorization boundary with tokens in the appropriate secret store;
-- browser flow that does not put refresh tokens in ordinary page-readable
-  storage by default;
-- opt-in live contract tests using an isolated application folder.
-
-### Exit gate
-
-Go/browser adapters pass the common contract, cursor reset, auth expiry,
-rate-limit, stale revision, and response-loss cases. Provider-specific behavior
-has not entered the core engine.
-
-## 13. Phase 9 — Scheduling and release hardening
-
-Only start this phase after at least one real provider passes manual sync.
-
-### Tasks
-
-- startup/open and manual triggers first;
-- debounced local-change hint and online-recovery trigger;
-- one simple periodic interval while the owner process/tab is active;
-- in-memory exponential backoff honoring `Retry-After`; restart forgets it;
-- server continues while clients disconnect; Wails/browser stop with owner;
-- calm conflict/path/recovery UI and setup merge summary;
-- documentation for provider privacy, browser CORS/OAuth, server state-root
-  persistence, backups, and unsupported external double-sync layering.
-
-Do not add filesystem watchers for correctness, durable scheduling state,
-parallel entity workers, or automatic tombstone/recovery GC.
-
-### Release gate
-
-All acceptance tests in the lite spec pass on Windows, macOS, Linux, and the
-supported browser matrix. Live tests pass for each advertised provider. The
-experimental flag remains until recovery UI and manual destructive-edge cases
-have been reviewed.
-
-## 14. Standard verification commands
-
-Run narrow tests during development, then all gates at every phase exit:
+The coordinator may use a small `switch` over a per-note decision. Do not add a
+generic action DAG, durable action records, folder graph, cursor abstraction,
+worker pool, or retry scheduler.
+
+## 4. R0 — Freeze the note-only contract
+
+Purpose: make later work compile against the product we actually want.
+
+### R0.1 Remote note schema
+
+Implement schema-v2 `NoteRecord` in Go with:
+
+- `syncId`, complete slash-relative `.md` path, `markdown`, and `deleted`;
+- UUID v4 for ordinary notes and the existing deterministic v5 allowance for
+  conflict notes;
+- canonical LF Markdown and deterministic hash/serialization;
+- strict size, UTF-8, traversal, reserved-path, extension, and tombstone checks;
+- no `kind`, `parentId`, folder record, or graph validation.
+
+Add Go fixtures for live, nested-path, tombstone, conflict-ID, malformed, and
+portable-collision records. Do not update TypeScript in this task.
+
+Exit gate: new Go contract tests pass while the old entity contract may coexist
+temporarily for compilation.
+
+Estimated review size: 250–450 changed lines.
+
+### R0.2 Index and snapshot v2
+
+Change the index and snapshot models behind new constructors/loaders:
+
+- index maps Sync ID to Markdown path only;
+- snapshot uses `notes`, has no cursor, and validates identity/profile/version;
+- schema-v1 prototype state is classified as unsupported, never loaded as a
+  baseline;
+- atomic replace, backup/recovery rules, lock, and recovery files remain.
+
+Do not wire the coordinator yet. Add migration-classification and deterministic
+serialization tests.
+
+Exit gate: stores round-trip v2, reject v1 safely, and retain prior valid files
+on injected replace failures.
+
+Estimated review size: 250–450 changed lines.
+
+## 5. R1 — One-note decisions
+
+Purpose: replace the general planner with the smallest correctness core.
+
+### R1.1 Pure decision table
+
+Define one immutable input for a single Sync ID:
+
+- local: present, absent, or unknown; live state and raw local revision;
+- remote: live, tombstone, missing, or invalid; opaque remote version;
+- optional last-known-equal baseline;
+- precomputed path-conflict flag.
+
+Return one of a small fixed set:
+
+```text
+noop
+establish_baseline
+push_live
+pull_live
+push_tombstone
+apply_tombstone
+preserve_local_then_pull
+preserve_local_then_delete
+preserve_remote_then_tombstone
+block
+retry
+```
+
+Implement the tables in spec Section 7. The function performs no I/O, contains
+no folder branch, and emits no multi-entity action graph. Conflict preservation
+is a named compound outcome whose execution order is fixed by its name.
+
+Required tests cover onboarding, one-sided edit, concurrent identical/different
+edit, local/remote delete, both edit/delete directions, unknown local state,
+physical remote absence, invalid remote input, and path conflict.
+
+Exit gate: every row is table-tested in Go and the package has no filesystem or
+provider imports.
+
+Estimated review size: 250–400 changed lines.
+
+### R1.2 Deterministic preservation helpers
+
+Adapt conflict ID/path derivation to schema-v2 note state. Test that retries and
+swapped role inputs behave intentionally. Define exact handling when the desired
+conflict path collides: block; never append a timestamp or numeric suffix.
+
+Exit gate: repeating a compound conflict decision derives exactly one identity
+and path.
+
+Estimated review size: 100–250 changed lines.
+
+## 6. R2 — Filesystem cycle with memory remote
+
+Purpose: prove the actual product flow before adding service or network code.
+
+### R2.1 Note-only observation assembly
+
+Build the cycle's union of IDs from index, snapshot, and a complete remote
+listing. Scan `.md` files only. Persist IDs for definite new notes before any
+upload. Classify blocked, unstable, symlinked, and read-error notes as unknown.
+
+Precompute path conflicts across live local and remote note records. Parent
+directories are ordinary filesystem implementation details, not entities.
+
+Exit gate: observation tests cover nested notes, unindexed notes, indexed
+absence, external rename as old absence plus new identity, portable collisions,
+and incomplete remote listing.
+
+Estimated review size: 300–500 changed lines.
+
+### R2.2 Non-destructive decisions
+
+Wire `noop`, baseline establishment, conditional live upload, exact-path local
+create, and local revision-CAS pull. Process Sync IDs in sorted order. Re-read a
+remote key after precondition failure or uncertain response.
+
+At cycle end, save consolidated index changes and replace the snapshot once.
+An index save failure prevents snapshot commit. No cursor is read or written.
+
+Exit gate: two temporary vaults converge for create, nested create, edit,
+identical simultaneous edit, in-app path change, and restart after an accepted
+write whose response or snapshot commit was lost.
+
+Estimated review size: 300–500 changed lines.
+
+### R2.3 Conflict preservation
+
+Wire the three compound preservation outcomes. Required order:
+
+1. derive conflict ID/path;
+2. reserve and save it in the index;
+3. create/verify the local conflict note;
+4. create/verify the remote conflict record when required;
+5. only then replace or delete the original;
+6. record baselines only for final known-equal states.
+
+Inject a stop before and after every boundary above. Restart must reuse the same
+conflict note, not allocate another one.
+
+Exit gate: concurrent edits and both edit/delete directions preserve all edited
+Markdown through every injected restart.
+
+Estimated review size: 300–500 changed lines.
+
+### R2.4 Tombstones and recovery
+
+Wire conditional tombstone upload and pulled tombstone application. Before a
+local delete, atomically write the recovery copy. Revalidate the local revision
+when deleting. A recovery failure or local CAS failure leaves the note intact
+and its baseline unchanged.
+
+Never call recursive folder deletion. Empty parent directories may remain.
+
+Exit gate: deletion converges in both directions, recovery is idempotent, races
+preserve newer local edits, and no test can delete an unrelated child file.
+
+Estimated review size: 250–450 changed lines.
+
+### R2.5 Remove the prototype executor
+
+After all R2 tests pass, remove dead folder planner/executor/simulator code and
+obsolete tests. Preserve reusable fault fixtures and historical docs. Run `rg`
+for folder actions, fake cursor `c1`, `RemoveAll`, and uncalled old coordinator
+entry points; inspect each remaining match rather than deleting mechanically.
+
+Exit gate: the production coordinator has one per-note execution path and no
+recursive directory deletion, action DAG, or cursor.
+
+Estimated review size: mostly deletions; keep this separate from behavior work.
+
+## 7. R3 — Manual product surface with memory remote
+
+Purpose: validate lifecycle and UX before credentials and provider behavior.
+
+### R3.1 Service and lock ownership
+
+Add a service that owns provider selection, replica OS lock, serialized `Run`,
+cancellation between note boundaries, and redacted status. The coordinator must
+not be constructible for production without verified lock ownership.
+
+Exit gate: concurrent manual runs do not overlap; a lock loser can still edit
+notes; auth/permission/incomplete-list errors never report “synced”.
+
+### R3.2 Minimal API and UI
+
+Expose authenticated setup-test, enable, manual-run, status, disable, and
+recovery-list/restore operations. Disable disconnects only; it never deletes
+local or remote notes. Show the no-E2EE warning, last completed time, error,
+conflict, and recovery state.
+
+Keep the feature experimental. Do not add timers, watchers, online listeners,
+or background retry state.
+
+Exit gate: a user can exercise two local replicas against the memory remote
+through the public service/API boundary.
+
+## 8. R4 — One real provider
+
+Implement S3-compatible storage first because the repository already has MinIO
+and signing dependencies.
+
+Required provider behavior:
+
+- private bucket/prefix and secret-free profile fingerprint;
+- read `repo.json`, full paginated `notes/` listing, and object read;
+- create with `If-None-Match: *` and replace with `If-Match`;
+- setup probe that rejects services which ignore either precondition;
+- normalized auth, permission, rate-limit, quota, invalid-response, and
+  retryable errors without leaking bodies or credentials;
+- opt-in live tests limited to a random isolated prefix.
+
+Exit gate: two filesystem replicas manually converge through S3 for every R2
+scenario applicable to a live adapter. Do not start WebDAV, Dropbox, browser
+sync, cursors, or scheduling in the same phase.
+
+## 9. R5 — Scheduling and release hardening
+
+Only after manual S3 synchronization is stable:
+
+- run on explicit manual action and optionally application start;
+- add one simple periodic interval while the process is alive;
+- use in-memory backoff only; restart may forget it;
+- document provider privacy, backups, state-root persistence, and the risks of
+  layering another filesystem sync tool over the same vault;
+- retain the experimental flag until recovery and conflict UX are reviewed on
+  Windows, macOS, and Linux.
+
+Filesystem watchers, delta cursors, parallel transfers, tombstone GC, and pure
+frontend synchronization remain separate future proposals.
+
+## 10. Verification gates
+
+For each small assignment, run its narrow tests. At every reset-phase exit run:
 
 ```sh
 go test ./...
@@ -484,34 +331,28 @@ npm run build
 npm run build:local
 ```
 
-Provider live tests remain opt-in, secret-redacted, and scoped to a random
-prefix/folder. They must never clean an account, bucket, or collection root.
+The frontend gates ensure the existing application still works; they do not
+authorize porting the new coordinator to TypeScript.
 
-## 15. First assignment for a smaller agent
+## 11. First handoff to a smaller agent
 
-Give the agent **Phase 0 only**. The expected review is small: shared state hash,
-deterministic conflict UUID/name, Sync-ID validation, and fixtures. It must not
-touch persistence, delete WAL code, implement reconciliation, add UI, or call a
-real provider.
-
-After Phase 0 merges, give a fresh agent/context **Phase 1 only**. This ordering
-prevents the new engine from inheriting the old WAL baseline shape and keeps
-every review independently reversible.
-
-Suggested first handoff prompt:
+Start with R0.1 only:
 
 ```text
-Read CLAUDE.md, docs/sync-spec-lite.md, and Phase 0 of
-docs/sync-lite-implementation-plan.md. Implement Phase 0 only.
+Read CLAUDE.md, docs/sync-spec-lite.md, and R0.1 of
+docs/sync-lite-implementation-plan.md. Implement R0.1 only.
 
-Preserve the current entity contentHash wire algorithm. Add the complete-state
-hash, deterministic UUID-v5 conflict identity/name, a Sync-ID validator that
-accepts v4/v5 without weakening other UUID checks, and shared Go/TypeScript
-fixtures/tests. Inspect existing code before editing and keep both languages
-byte-identical.
+Add the Go schema-v2 versioned-note remote record and its fixtures/tests. The
+record has syncId, complete portable .md path, full LF-normalized Markdown, and
+deleted. It has no folder kind, parentId, cursor, or graph validation. Reuse the
+existing strict canonical JSON, UUID, size, UTF-8, and path validation helpers
+where appropriate. Keep the old entity type temporarily if current callers
+need it to compile.
 
-Do not change persistence, syncscan, WAL/snapshot code, providers, API, UI, or
-scheduling. Run the Phase 0 narrow tests, then the repository's standard Go and
-frontend verification gates. Stop and report if an exit-gate requirement cannot
-be met; do not continue into Phase 1.
+Do not change syncindex, snapshot, scanner, coordinator, TypeScript, providers,
+API, UI, or scheduling. Run the narrow Go tests and then go test ./.... Stop at
+the R0.1 exit gate and report any compatibility issue; do not continue to R0.2.
 ```
+
+Expected review: one new contract type plus fixtures, with no runtime behavior
+change.

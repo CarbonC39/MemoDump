@@ -1,12 +1,13 @@
 # MemoDump Cloud Sync Implementation Plan (Historical Proposal)
 
-Status: superseded by [`sync-spec-lite.md`](sync-spec-lite.md)
+Status: historical; superseded by the versioned-note
+[`sync-spec-lite.md`](sync-spec-lite.md)
 Date: 2026-08-04
 Architecture contract: [`sync-spec.md`](sync-spec.md)
 
 This phase plan is retained as design history. Do not continue its Phase 3+
-WAL/compaction architecture; write a new implementation plan only after the
-simplified specification is accepted.
+WAL/compaction architecture or its generic filesystem-sync model. New work is sequenced in
+[`sync-lite-implementation-plan.md`](sync-lite-implementation-plan.md).
 
 ## 1. Purpose and authority
 
