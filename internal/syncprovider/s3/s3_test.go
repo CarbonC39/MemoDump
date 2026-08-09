@@ -32,6 +32,7 @@ type fakeS3 struct {
 	pageSize            int
 	requireAuth         bool
 	failListCode        string
+	failPutNext         bool
 }
 
 type fakeObject struct {
@@ -117,6 +118,16 @@ func (f *fakeS3) handlePut(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if r.Header.Get("If-Match") != "" {
 		s3Error(w, http.StatusPreconditionFailed, "PreconditionFailed")
+		return
+	}
+	if f.failPutNext {
+		// An accepted-but-lost-response write: the object lands, then the
+		// response fails so the client must re-read to learn the outcome.
+		f.failPutNext = false
+		f.etagSeq++
+		etag := strconv.Itoa(f.etagSeq)
+		f.objects[key] = &fakeObject{data: body, etag: etag}
+		s3Error(w, http.StatusInternalServerError, "InternalError")
 		return
 	}
 	f.etagSeq++

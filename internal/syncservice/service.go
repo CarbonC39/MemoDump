@@ -25,7 +25,10 @@ type Provider func() (cloudsync.RemoteStore, error)
 
 // Config binds a Service to one vault replica. Provider selects the remote
 // store when Remote is nil; Remote binds a specific instance so identity
-// resolution and the cycle share one provider.
+// resolution and the cycle share one provider. Lock is an optional pre-held
+// replica OS lock: when set, Run uses it and does NOT close it (the caller owns
+// it), so lifecycle validation and the cycle can share one lock critical
+// section; when nil, Run acquires and closes the lock itself.
 type Config struct {
 	RepoRoot  string
 	StateRoot string
@@ -35,6 +38,7 @@ type Config struct {
 	Profile   string
 	Provider  Provider
 	Remote    cloudsync.RemoteStore
+	Lock      *syncstate.Lock
 }
 
 // Result is the redacted outcome of one manual run: counts and a stable phase
@@ -63,23 +67,32 @@ type Service struct {
 // New returns a service bound to one vault replica.
 func New(cfg Config) *Service { return &Service{cfg: cfg} }
 
-// Run acquires the replica lock, runs one serialized note-only cycle, and
-// releases the lock. A lock loser returns a Result with Synced=false and a
-// "locked" label. Fatal cycle errors (auth, permission, listing failure,
-// invalid remote data, local I/O) return a Result with Synced=false — never a
-// "synced" report. Cancellation lands between note boundaries.
+// Run acquires the replica lock (or uses a pre-held Config.Lock), runs one
+// serialized note-only cycle, and releases the lock. A lock loser returns a
+// Result with Synced=false and a "locked" label. Fatal cycle errors (auth,
+// permission, listing failure, invalid remote data, local I/O) return a Result
+// with Synced=false — never a "synced" report. Cancellation lands between note
+// boundaries.
 func (s *Service) Run(ctx context.Context) (*Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	lock, err := syncstate.AcquireReplicaLock(s.cfg.StateRoot, s.cfg.VaultID, s.cfg.ReplicaID)
-	if err != nil {
-		if errors.Is(err, syncstate.ErrLocked) {
-			return &Result{LastError: "locked"}, nil
+	var lock *syncstate.Lock
+	if s.cfg.Lock != nil {
+		// The caller holds the lock and owns its release (for example the
+		// lifecycle handler that validated the connection inside it).
+		lock = s.cfg.Lock
+	} else {
+		var err error
+		lock, err = syncstate.AcquireReplicaLock(s.cfg.StateRoot, s.cfg.VaultID, s.cfg.ReplicaID)
+		if err != nil {
+			if errors.Is(err, syncstate.ErrLocked) {
+				return &Result{LastError: "locked"}, nil
+			}
+			return nil, fmt.Errorf("acquire replica lock: %w", err)
 		}
-		return nil, fmt.Errorf("acquire replica lock: %w", err)
+		defer lock.Close()
 	}
-	defer lock.Close()
 
 	remote := s.cfg.Remote
 	if remote == nil {

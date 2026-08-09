@@ -318,6 +318,32 @@ func TestSyncApiResetBlockedByLock(t *testing.T) {
 	}
 }
 
+// TestSyncApiRunBlockedByLock: a run's connection validation and cycle now share
+// one replica-lock critical section, so a run is refused while another process
+// holds the lock — a stale run can never sync past a disable/reset.
+func TestSyncApiRunBlockedByLock(t *testing.T) {
+	dir, state := t.TempDir(), t.TempDir()
+	setSyncEnv(t, dir, state, nil)
+	if err := os.WriteFile(filepath.Join(dir, "idea.md"), []byte("# Idea\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	doJSON(t, "POST", "/api/sync/enable", nil)
+	vaultID, replicaID, stateRoot, err := syncIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := syncstate.AcquireReplicaLock(stateRoot, vaultID, replicaID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+
+	run := decodeSync[map[string]any](t, doJSON(t, "POST", "/api/sync/run", nil))
+	if run["LastError"] == nil && run["error"] == nil {
+		t.Fatalf("run while another process holds the lock = %+v, want refusal", run)
+	}
+}
+
 // TestSyncStatusSurfacesCorruptConnectionRecord: a corrupt connection record is
 // exposed as connectionError in the status instead of silently reporting
 // "disabled", and the record still counts as present so the reset affordance is

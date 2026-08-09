@@ -8,6 +8,7 @@ import (
 
 	"memodump/internal/syncindex"
 	"memodump/internal/syncservice"
+	"memodump/internal/syncstate"
 	"memodump/internal/vaultfs"
 )
 
@@ -57,25 +58,35 @@ func lastRunSnapshot() (syncserviceResult, time.Time) {
 	return syncLastRun.Result, syncLastRun.Completed
 }
 
-// handleSyncEnable enables sync for the vault through the EXPLICIT setup flow:
-// it creates the note-only index (assigning a stable Vault ID and Sync IDs),
-// resolves the replica identity, verifies the provider's capabilities (a
-// service that ignores conditional writes is refused), establishes or re-adopts
+// handleSyncEnable enables sync for the vault through the EXPLICIT setup flow.
+// First-time index creation runs without the replica lock (no index means no
+// connected replica can be running a cycle); once an index exists, the re-scan
+// and identity assignment happen INSIDE the replica lock so they can never race
+// a cycle in another process that also indexes the same new notes. The whole
+// enable then verifies the provider's capabilities, establishes or re-adopts
 // the remote repository — the only place repo.json is ever created — and records
 // the connection with the verified provider profile and pinned repository ID.
-// The whole enable holds the replica OS lock so the connection record is never
-// written while another process runs a cycle (which commits the snapshot and
-// re-reads the record). It never modifies existing Markdown.
+// It never modifies existing Markdown.
 func handleSyncEnable(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
-	if _, err := syncindex.EnableNoteStore(dataDir); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
+	_, lerr := syncindex.LoadNoteStore(dataDir)
+	firstEnable := errors.Is(lerr, syncindex.ErrNotEnabled)
+	if firstEnable {
+		if _, err := syncindex.EnableNoteStore(dataDir); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	var vaultID, replicaID, repoID string
-	err := withSyncLifecycleLock(func(v, rep, stateRoot string) error {
+	err := withSyncLifecycleLock(func(v, rep, stateRoot string, lock *syncstate.Lock) error {
 		vaultID, replicaID = v, rep
+		if !firstEnable {
+			// Re-scan and index newly discovered notes under the replica lock.
+			if _, err := syncindex.EnableNoteStore(dataDir); err != nil {
+				return err
+			}
+		}
 		prev, err := syncReadConnected()
 		if err != nil {
 			return err
@@ -104,64 +115,56 @@ func handleSyncEnable(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// errSyncDisabled marks a run refusal because sync is disabled; the handler
+// surfaces it as a 400 rather than a redacted run result.
+var errSyncDisabled = errors.New("sync is disabled; enable it first")
+
 // handleSyncRun runs one manual note cycle and records the redacted outcome.
-// It refuses to run while the connection record is absent or disconnected, and
-// re-verifies the provider whenever its profile differs from the one recorded
-// at enable (a changed provider is probed again before running). repo.json is
-// only ever read here — never created. Every outcome, including build and run
-// failures, is written to syncLastRun so a refresh never surfaces a stale one.
+// The connection validation (record, provider profile, repository ID) happens
+// INSIDE the replica OS lock critical section that the cycle itself runs under,
+// so a disable/reset in another process can never leave a stale run syncing or
+// re-writing a reset snapshot. Every outcome, including build and run failures,
+// is written to syncLastRun so a refresh never surfaces a stale one.
 func handleSyncRun(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
-	rec, err := syncReadConnected()
+	var res *syncservice.Result
+	err := withSyncLifecycleLock(func(vaultID, replicaID, stateRoot string, lock *syncstate.Lock) error {
+		rec, err := syncReadConnected()
+		if err != nil {
+			return err
+		}
+		if rec == nil || !rec.Connected {
+			return errSyncDisabled
+		}
+		remote, err := syncProvider()
+		if err != nil {
+			return err
+		}
+		profile := providerProfile(remote)
+		if rec.Profile == "" || rec.Profile != profile {
+			return errors.New("sync provider changed since enable; disable and reset sync to reconnect")
+		}
+		repoID, _, err := syncRepoIdentity(r.Context(), remote)
+		if err != nil {
+			return err
+		}
+		if rec.RepoID == "" || repoID != rec.RepoID {
+			return errors.New("remote repository changed since enable; disable and reset sync to reconnect")
+		}
+		svc, err := buildSyncService(r.Context(), repoID, profile, remote, lock)
+		if err != nil {
+			return err
+		}
+		res, err = svc.Run(r.Context())
+		return err
+	})
 	if err != nil {
 		recordLastRunError(err)
-		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
-		return
-	}
-	if rec == nil || !rec.Connected {
-		recErr := errors.New("sync is disabled; enable it first")
-		recordLastRunError(recErr)
-		writeErr(w, http.StatusBadRequest, recErr.Error())
-		return
-	}
-	remote, err := syncProvider()
-	if err != nil {
-		recordLastRunError(err)
-		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
-		return
-	}
-	profile := providerProfile(remote)
-	if rec.Profile == "" || rec.Profile != profile {
-		// A provider changed since enable is refused without updating the
-		// connection record: switching targets is an explicit reconnect, never
-		// something a run decides on its own.
-		recErr := errors.New("sync provider changed since enable; disable and reset sync to reconnect")
-		recordLastRunError(recErr)
-		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(recErr)})
-		return
-	}
-	repoID, _, err := syncRepoIdentity(r.Context(), remote)
-	if err != nil {
-		recordLastRunError(err)
-		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
-		return
-	}
-	if rec.RepoID == "" || repoID != rec.RepoID {
-		recErr := errors.New("remote repository changed since enable; disable and reset sync to reconnect")
-		recordLastRunError(recErr)
-		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(recErr)})
-		return
-	}
-	svc, err := buildSyncService(r.Context(), repoID, profile, remote)
-	if err != nil {
-		recordLastRunError(err)
-		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
-		return
-	}
-	res, err := svc.Run(r.Context())
-	if err != nil {
-		recordLastRunError(err)
+		if errors.Is(err, errSyncDisabled) || errors.Is(err, syncindex.ErrNotEnabled) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
 		return
 	}
@@ -200,7 +203,7 @@ func clearLastRun() {
 func handleSyncDisable(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
-	err := withSyncLifecycleLock(func(v, rep, stateRoot string) error {
+	err := withSyncLifecycleLock(func(v, rep, stateRoot string, lock *syncstate.Lock) error {
 		rec, err := syncReadConnected()
 		if err != nil {
 			return err
@@ -232,7 +235,7 @@ func handleSyncDisable(w http.ResponseWriter, r *http.Request) {
 func handleSyncReset(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
-	err := withSyncLifecycleLock(func(v, rep, stateRoot string) error {
+	err := withSyncLifecycleLock(func(v, rep, stateRoot string, lock *syncstate.Lock) error {
 		return syncReplicaResetAt(v, rep, stateRoot)
 	})
 	if err != nil {

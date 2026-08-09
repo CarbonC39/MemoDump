@@ -343,9 +343,11 @@ func syncConnectionExists() bool {
 // withSyncLifecycleLock runs fn while holding the replica's OS lock, so the
 // connection record and the disposable snapshot are never mutated concurrently
 // with a running cycle in another process (which commits the snapshot and
-// re-reads the record). The lock is non-blocking: a run in flight refuses the
-// lifecycle op with a descriptive error instead of queueing behind it.
-func withSyncLifecycleLock(fn func(vaultID, replicaID, stateRoot string) error) error {
+// re-reads the record). The lock is passed to fn so a run can reuse the SAME
+// lock critical section for its connection validation and the cycle. The lock
+// is non-blocking: a run in flight refuses the lifecycle op with a descriptive
+// error instead of queueing behind it.
+func withSyncLifecycleLock(fn func(vaultID, replicaID, stateRoot string, lock *syncstate.Lock) error) error {
 	vaultID, replicaID, stateRoot, err := syncIdentity()
 	if err != nil {
 		return err
@@ -358,7 +360,7 @@ func withSyncLifecycleLock(fn func(vaultID, replicaID, stateRoot string) error) 
 		return err
 	}
 	defer lock.Close()
-	return fn(vaultID, replicaID, stateRoot)
+	return fn(vaultID, replicaID, stateRoot, lock)
 }
 
 // syncReplicaResetAt is the destructive part of the reset flow, run under the
@@ -405,10 +407,11 @@ func syncConnectionIssue() error {
 // buildSyncService assembles the sync service for the current data dir, with
 // the resolved state root passed to every store. The caller has already
 // resolved and verified the repository identity (repoID + secret-free profile)
-// against the connection record; the SAME remote instance is bound into the
-// service so identity resolution and the cycle cannot drift onto a different
-// provider.
-func buildSyncService(ctx context.Context, repoID, profile string, remote cloudsync.RemoteStore) (*syncservice.Service, error) {
+// against the connection record under the replica lock; the SAME remote
+// instance is bound into the service so identity resolution and the cycle
+// cannot drift onto a different provider. lock is a pre-held replica OS lock
+// the service uses without closing (the caller owns it).
+func buildSyncService(ctx context.Context, repoID, profile string, remote cloudsync.RemoteStore, lock *syncstate.Lock) (*syncservice.Service, error) {
 	vaultID, replicaID, stateRoot, err := syncIdentity()
 	if err != nil {
 		return nil, err
@@ -417,7 +420,7 @@ func buildSyncService(ctx context.Context, repoID, profile string, remote clouds
 		RepoRoot: dataDir, StateRoot: stateRoot,
 		VaultID: vaultID, ReplicaID: replicaID,
 		RepoID: repoID, Profile: profile,
-		Remote: remote,
+		Remote: remote, Lock: lock,
 	}), nil
 }
 

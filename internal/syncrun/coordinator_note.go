@@ -180,6 +180,12 @@ func (c *NoteCoordinator) fault(point string) error {
 	return c.cfg.TestFault(point)
 }
 
+// SetScanOptions installs deterministic scan hooks (used by race tests that
+// mutate the vault mid-scan). It replaces the coordinator's scan options.
+func (c *NoteCoordinator) SetScanOptions(opts vaultfs.ScanOptions) {
+	c.cfg.ScanOptions = opts
+}
+
 // loadBaselines reads the disposable snapshot against the coordinator identity.
 func (c *NoteCoordinator) loadBaselines() (map[string]syncstate.SnapshotEntity, syncstate.DiscardReason, error) {
 	snap, reason, err := c.snaps.Load(syncstate.ExpectedIdentity{
