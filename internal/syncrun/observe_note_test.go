@@ -230,7 +230,7 @@ func TestObserveRemoteUnionIncompleteListing(t *testing.T) {
 		t.Fatalf("union = %v, want sorted [%s %s]", ids, idR1, idR2)
 	}
 
-	remotes := noteRemoteObservations(ctx, s, keys, ids)
+	remotes, err := noteRemoteObservations(ctx, s, keys, ids)
 	if r := remotes[idR1]; r.State != cloudsync.RemoteLive || r.ContentHash != noteHash(idR1, "a.md", "# R1\n") {
 		t.Fatalf("idR1 remote = %+v, want live", r)
 	}
@@ -248,7 +248,7 @@ func TestObserveRemoteUnionIncompleteListing(t *testing.T) {
 	if len(keys) != 1 {
 		t.Fatalf("incomplete listing returned %d keys, want 1", len(keys))
 	}
-	remotes = noteRemoteObservations(ctx, s, keys, ids)
+	remotes, err = noteRemoteObservations(ctx, s, keys, ids)
 	if r := remotes[idR2]; r.State != cloudsync.RemoteMissing {
 		t.Fatalf("hidden note = %+v, want missing (not a tombstone)", r)
 	}

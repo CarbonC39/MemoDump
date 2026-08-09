@@ -219,12 +219,16 @@ func listNoteKeys(ctx context.Context, remote cloudsync.RemoteStore) (map[string
 }
 
 // noteRemoteObservations reads and parses the listed note records, classifying
-// every union Sync ID's remote state. A listed key that cannot be read or
-// parsed is RemoteInvalid (retryable when the transport error is retryable); a
-// key absent from the listing is RemoteMissing — never a tombstone. An
-// incomplete listing therefore surfaces as RemoteMissing and, for a note a
-// baseline expected, blocks the cycle rather than deleting anything.
-func noteRemoteObservations(ctx context.Context, remote cloudsync.RemoteStore, keys map[string]bool, ids []string) map[string]cloudsync.NoteRemoteObservation {
+// every union Sync ID's remote state. A key absent from the listing is
+// RemoteMissing — never a tombstone (an incomplete listing therefore surfaces
+// as RemoteMissing and, for a note a baseline expected, blocks rather than
+// deleting). A retryable read error (transport, rate-limit) becomes a retryable
+// RemoteInvalid for that note only. Every OTHER remote failure — auth,
+// permission, quota, unsupported capability, an invalid response, a malformed
+// record, or a record whose embedded syncId does not match its key — stops the
+// cycle (spec §9): the coordinator exits before any execution and commits no
+// snapshot.
+func noteRemoteObservations(ctx context.Context, remote cloudsync.RemoteStore, keys map[string]bool, ids []string) (map[string]cloudsync.NoteRemoteObservation, error) {
 	obs := make(map[string]cloudsync.NoteRemoteObservation, len(ids))
 	for _, id := range ids {
 		key := cloudsync.NoteKey(id)
@@ -234,16 +238,22 @@ func noteRemoteObservations(ctx context.Context, remote cloudsync.RemoteStore, k
 		}
 		data, version, err := remote.Read(ctx, key)
 		if err != nil {
-			obs[id] = cloudsync.NoteRemoteObservation{
-				SyncID: id, State: cloudsync.RemoteInvalid,
-				Retryable: cloudsync.IsStoreError(err, cloudsync.ErrRetryableTransport),
+			if cloudsync.ClassifyRetry(err).Retryable {
+				obs[id] = cloudsync.NoteRemoteObservation{
+					SyncID: id, State: cloudsync.RemoteInvalid, Retryable: true,
+				}
+				continue
 			}
-			continue
+			return nil, fmt.Errorf("read remote %s: %w", id, err)
 		}
 		rec, perr := cloudsync.ParseNoteRecord(data)
 		if perr != nil {
-			obs[id] = cloudsync.NoteRemoteObservation{SyncID: id, State: cloudsync.RemoteInvalid}
-			continue
+			return nil, fmt.Errorf("invalid remote record %s: %w", id, perr)
+		}
+		// The record must declare the same Sync ID its key claims; a mismatch is
+		// invalid remote data, never a usable record.
+		if rec.SyncID != id {
+			return nil, fmt.Errorf("remote record %s declares syncId %q", key, rec.SyncID)
 		}
 		state := cloudsync.RemoteLive
 		if rec.Deleted {
@@ -254,5 +264,5 @@ func noteRemoteObservations(ctx context.Context, remote cloudsync.RemoteStore, k
 			Markdown: rec.Markdown, ContentHash: rec.ComputeContentHash(), Version: version,
 		}
 	}
-	return obs
+	return obs, nil
 }

@@ -29,20 +29,32 @@ func (c *NoteCoordinator) executeConflict(ctx context.Context, d cloudsync.NoteD
 	if err := c.reserveConflict(conf); err != nil {
 		return fmt.Errorf("reserve conflict %s: %w", conf.ConflictSyncID, err)
 	}
+	if err := c.fault("conflict:reserved"); err != nil {
+		return err
+	}
 	// The reservation must be durable before any conflict note is created.
 	if err := c.idx.Save(); err != nil {
 		return fmt.Errorf("save conflict reservation: %w", err)
+	}
+	if err := c.fault("conflict:saved"); err != nil {
+		return err
 	}
 
 	// 2. Create/verify the local conflict note (create-if-absent).
 	if err := c.createLocalConflict(conf); err != nil {
 		return fmt.Errorf("create local conflict %s: %w", conf.ConflictSyncID, err)
 	}
+	if err := c.fault("conflict:local"); err != nil {
+		return err
+	}
 
 	// 3. Create/verify the remote conflict record.
 	conflictVersion, err := c.createRemoteConflict(ctx, conf)
 	if err != nil {
 		return fmt.Errorf("create remote conflict %s: %w", conf.ConflictSyncID, err)
+	}
+	if err := c.fault("conflict:remote"); err != nil {
+		return err
 	}
 
 	// 4. Only now act on the original.
@@ -69,8 +81,9 @@ func (c *NoteCoordinator) executeConflict(ctx context.Context, d cloudsync.NoteD
 			return err
 		}
 		if deleted {
+			// The baseline records the remote tombstone's carried content hash.
 			baselines[d.SyncID] = syncstate.SnapshotEntity{
-				ContentHash: tombstoneNoteHash(d.SyncID, d.Path), Deleted: true, RemoteVersion: d.Version,
+				ContentHash: d.ContentHash, Deleted: true, RemoteVersion: d.Version,
 			}
 		}
 	case cloudsync.NotePreserveRemoteThenTombstone:
@@ -83,6 +96,9 @@ func (c *NoteCoordinator) executeConflict(ctx context.Context, d cloudsync.NoteD
 				ContentHash: d.ContentHash, Deleted: true, RemoteVersion: version,
 			}
 		}
+	}
+	if err := c.fault("conflict:original"); err != nil {
+		return err
 	}
 
 	// 5. The conflict note is now known equal locally and remotely.

@@ -20,12 +20,16 @@ import (
 // NoteConfig wires the note coordinator's identity. RepoID and Profile are the
 // snapshot identity. ScanOptions controls the vault scan; tests use its hooks
 // to inject deterministic mid-scan mutations (the zero value scans normally).
+// TestFault is a test-only crash seam: when set, it is called at named
+// execution boundaries and a non-nil error aborts the cycle exactly as a crash
+// would, so tests can verify restart safety.
 type NoteConfig struct {
 	VaultID     string
 	ReplicaID   string
 	RepoID      string
 	Profile     string
 	ScanOptions vaultfs.ScanOptions
+	TestFault   func(point string) error
 }
 
 // NoteStatus summarizes one completed or failed note-only cycle.
@@ -98,7 +102,10 @@ func (c *NoteCoordinator) Run(ctx context.Context) (*NoteStatus, error) {
 
 	ids := unionNoteIDs(c.idx, baselines, keys)
 	locals := noteLocalObservations(res, c.idx, ids, c.readNote)
-	remotes := noteRemoteObservations(ctx, c.remote, keys, ids)
+	remotes, err := noteRemoteObservations(ctx, c.remote, keys, ids)
+	if err != nil {
+		return st, err // fatal remote error: stop before any decision or execution
+	}
 	blocked := notePathConflicts(locals, remotes)
 
 	plan := make([]cloudsync.NoteDecision, 0, len(ids))
@@ -123,6 +130,9 @@ func (c *NoteCoordinator) Run(ctx context.Context) (*NoteStatus, error) {
 	if err := c.idx.Save(); err != nil {
 		return st, fmt.Errorf("save index before upload: %w", err)
 	}
+	if err := c.fault("pre-execute"); err != nil {
+		return st, err
+	}
 
 	if err := c.execute(ctx, plan, baselines); err != nil {
 		return st, err
@@ -142,6 +152,15 @@ func (c *NoteCoordinator) Run(ctx context.Context) (*NoteStatus, error) {
 // readNote wires the observation layer to vaultfs.ReadVerbatim.
 func (c *NoteCoordinator) readNote(path string) (string, string, error) {
 	return c.repo.ReadVerbatim(path)
+}
+
+// fault is the test-only crash seam: a non-nil TestFault returning an error at
+// a named point aborts the cycle as a crash would.
+func (c *NoteCoordinator) fault(point string) error {
+	if c.cfg.TestFault == nil {
+		return nil
+	}
+	return c.cfg.TestFault(point)
 }
 
 // loadBaselines reads the disposable snapshot against the coordinator identity.
@@ -244,8 +263,11 @@ func (c *NoteCoordinator) applyTombstone(ctx context.Context, d cloudsync.NoteDe
 		return err
 	}
 	if deleted {
+		// The baseline records the REMOTE tombstone's own content hash and
+		// path (carried on the decision), which may differ from the local
+		// path when a rename happened before the deletion elsewhere.
 		baselines[d.SyncID] = syncstate.SnapshotEntity{
-			ContentHash: tombstoneNoteHash(d.SyncID, path), Deleted: true, RemoteVersion: d.Version,
+			ContentHash: d.ContentHash, Deleted: true, RemoteVersion: d.Version,
 		}
 	}
 	return nil
@@ -293,56 +315,159 @@ func (c *NoteCoordinator) pushLive(ctx context.Context, d cloudsync.NoteDecision
 	// removed key: re-read to learn whether the write landed — never guess. An
 	// identical landed write (lost/uncertain response, idempotent collision) is
 	// established at the actual version; anything else is left for the next
-	// cycle.
-	existing, actual, rerr := c.remote.Read(ctx, key)
+	// cycle, and a fatal error during the confirmation stops the cycle.
+	return c.confirmWrite(ctx, key, d.SyncID, func(rec *cloudsync.NoteRecord) bool {
+		return !rec.Deleted && rec.Path == d.Path && rec.Markdown == d.Markdown
+	})
+}
+
+// confirmWrite re-reads a key after a conditional-write failure to learn the
+// outcome without guessing. A record matching want is an idempotent success at
+// the actual version. A retryable transport error or a now-missing key defers
+// (the next cycle's full listing recreates or reports remote damage); a fatal
+// store error, a malformed record, or a record whose embedded syncId does not
+// match the key stops the cycle (spec §9). Any other landed state (a
+// concurrent edit) defers to the next cycle.
+func (c *NoteCoordinator) confirmWrite(ctx context.Context, key, wantSyncID string, want func(rec *cloudsync.NoteRecord) bool) (string, bool, error) {
+	existing, version, rerr := c.remote.Read(ctx, key)
 	if rerr != nil {
-		return "", false, nil
+		if cloudsync.IsStoreError(rerr, cloudsync.ErrNotFound) {
+			return "", false, nil // write never landed or key removed concurrently
+		}
+		if cloudsync.ClassifyRetry(rerr).Retryable {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("re-read %s: %w", key, rerr)
 	}
-	parsed, perr := cloudsync.ParseNoteRecord(existing)
-	if perr == nil && parsed.SyncID == d.SyncID && !parsed.Deleted &&
-		parsed.Path == d.Path && parsed.Markdown == d.Markdown {
-		return actual, true, nil
+	rec, perr := cloudsync.ParseNoteRecord(existing)
+	if perr != nil {
+		return "", false, fmt.Errorf("invalid remote record %s: %w", key, perr)
 	}
-	return "", false, nil
+	if rec.SyncID != wantSyncID {
+		return "", false, fmt.Errorf("remote record %s declares syncId %q", key, rec.SyncID)
+	}
+	if want(rec) {
+		return version, true, nil
+	}
+	return "", false, nil // a concurrent change; defer to the next cycle
 }
 
 // pullLive materializes the remote note locally with the observed local
-// revision CAS (create-if-absent when the note is remote-only or lives at a
-// different local path). An editor racing the pull wins: the local revision
-// conflict preserves the new edit and the note is left for the next cycle. An
-// in-app path change pulls the note at its new path, removes the old location
-// (unchanged, or this would be a conflict), and re-maps the Sync ID. On success
-// the note is indexed at its materialized path.
+// revision CAS (create-if-absent when the note is remote-only). An editor
+// racing the pull wins: the local revision conflict preserves the new edit and
+// the note is left for the next cycle. An in-app path change pulls the note at
+// its new path in a crash-safe order: the old location is removed first (its
+// observed revision CAS), then the Sync ID is re-mapped and that mapping is
+// saved BEFORE the new file appears, so a crash at any point never leaves the
+// new path unindexed (which would mint a second identity) and a racing edit of
+// the old path aborts before any index or baseline change.
 func (c *NoteCoordinator) pullLive(ctx context.Context, d cloudsync.NoteDecision) (bool, error) {
 	indexedPath, indexed := c.idx.PathByID(d.SyncID)
 	path := d.Path
-	// When the local note lives at a different path (an in-app path change on
-	// the other side), the target path is new locally: create-if-absent, then
-	// remove the old file afterwards.
-	expectedRevision := d.LocalRevision
-	if indexed && indexedPath != path {
-		expectedRevision = ""
-	}
-	if _, err := c.repo.Apply(path, d.Markdown, expectedRevision); err != nil {
-		if errors.Is(err, vaultfs.ErrRevisionConflict) {
-			return false, nil // a local edit raced the pull; next cycle re-decides
+
+	if !indexed {
+		// Remote-only note: reserve the Sync ID/path in the index and persist
+		// it BEFORE the file appears, so a crash between the write and the
+		// end-of-cycle index save never leaves the new file unindexed (which
+		// would mint a second identity and a permanent path conflict). If the
+		// target is still claimed by a different Sync ID (a not-yet-cleaned
+		// tombstone entry), defer so the stale claim can be released first —
+		// never abort the whole cycle.
+		if prev, ok := c.idx.IDByPath(path); ok && prev != d.SyncID {
+			return false, nil
 		}
-		return false, fmt.Errorf("pull %s: %w", d.SyncID, err)
-	}
-	if indexed && indexedPath != path {
-		// The old location is the same note at its former path; it was unchanged
-		// (otherwise this would be a conflict), so remove it with the observed
-		// revision CAS and re-map.
-		if err := c.repo.Delete(indexedPath, d.LocalRevision); err != nil &&
-			!errors.Is(err, vaultfs.ErrNotFound) && !errors.Is(err, vaultfs.ErrRevisionConflict) {
-			return false, fmt.Errorf("remove old path %s: %w", indexedPath, err)
-		}
-		if err := c.idx.UpdatePath(d.SyncID, path); err != nil {
-			return false, err
-		}
-	} else if !indexed {
 		if err := c.idx.AddNote(d.SyncID, path); err != nil {
 			return false, fmt.Errorf("index pulled note %s: %w", d.SyncID, err)
+		}
+		if err := c.idx.Save(); err != nil {
+			return false, fmt.Errorf("save pulled note index: %w", err)
+		}
+		if err := c.fault("pull:remote:index-saved"); err != nil {
+			return false, err
+		}
+		ok, err := c.applyOrVerify(path, d.Markdown, "")
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+		if err := c.fault("pull:remote:file-written"); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	if indexedPath == path {
+		// Same-path pull: local revision-CAS replace.
+		ok, err := c.applyOrVerify(path, d.Markdown, d.LocalRevision)
+		if err != nil {
+			return false, err
+		}
+		return ok, nil
+	}
+
+	// In-app path change. The old file is the note at its former location,
+	// unchanged (else this would be a conflict); delete it with the observed
+	// revision CAS FIRST so a racing edit keeps the old path and identity.
+	// Before deleting anything, confirm the target path is not claimed by a
+	// different Sync ID (a not-yet-cleaned tombstone entry): a stale claim
+	// defers the pull rather than deleting the old file and then failing.
+	if prev, ok := c.idx.IDByPath(path); ok && prev != d.SyncID {
+		return false, nil
+	}
+	if err := c.repo.Delete(indexedPath, d.LocalRevision); err != nil {
+		if errors.Is(err, vaultfs.ErrRevisionConflict) {
+			return false, nil // racing edit preserved; nothing else changed
+		}
+		if !errors.Is(err, vaultfs.ErrNotFound) {
+			return false, fmt.Errorf("remove old path %s: %w", indexedPath, err)
+		}
+	}
+	if err := c.fault("pull:path:old-deleted"); err != nil {
+		return false, err
+	}
+	// Re-map the Sync ID and persist the mapping before the new file appears.
+	if err := c.idx.UpdatePath(d.SyncID, path); err != nil {
+		return false, err
+	}
+	if err := c.idx.Save(); err != nil {
+		return false, fmt.Errorf("save path change: %w", err)
+	}
+	if err := c.fault("pull:path:index-saved"); err != nil {
+		return false, err
+	}
+	ok, err := c.applyOrVerify(path, d.Markdown, "")
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	if err := c.fault("pull:path:new-written"); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// applyOrVerify writes a note with the expected revision CAS ("" =
+// create-if-absent). A file that already holds the exact requested content is
+// an idempotent success; any other revision conflict is a raced local write
+// that is left intact for the next cycle.
+func (c *NoteCoordinator) applyOrVerify(path, markdown, expectedRevision string) (bool, error) {
+	if _, err := c.repo.Apply(path, markdown, expectedRevision); err != nil {
+		if !errors.Is(err, vaultfs.ErrRevisionConflict) {
+			return false, fmt.Errorf("pull %s: %w", path, err)
+		}
+		md, _, rerr := c.repo.ReadVerbatim(path)
+		if rerr != nil {
+			if errors.Is(rerr, vaultfs.ErrNotFound) {
+				return false, nil // raced away; next cycle re-decides
+			}
+			return false, rerr
+		}
+		if md != markdown {
+			return false, nil // a raced local edit; preserve it
 		}
 	}
 	return true, nil

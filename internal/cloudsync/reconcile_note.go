@@ -328,7 +328,7 @@ func decideNoteWithBaseline(local NoteLocalObservation, remote NoteRemoteObserva
 			case local.ContentHash == b.ContentHash:
 				// Local unchanged live baseline vs remote tombstone: recovery
 				// copy, then local revision-CAS delete.
-				return d.applyTombstone(remote.Version, local.Revision)
+				return d.applyTombstone(remote, local.Revision)
 			default:
 				// Local edit versus remote tombstone.
 				return d.preserveLocalThenDelete(local, remote)
@@ -415,10 +415,16 @@ func (d NoteDecision) pushTombstone(remote NoteRemoteObservation, version string
 	return d
 }
 
-func (d NoteDecision) applyTombstone(version, localRevision string) NoteDecision {
+// applyTombstone applies a pulled tombstone. The decision carries the remote
+// tombstone's own path and content hash: after the local delete the final
+// known-equal state is the REMOTE tombstone, which may live at a path this
+// device has not yet seen (a rename happened before the deletion elsewhere).
+func (d NoteDecision) applyTombstone(remote NoteRemoteObservation, localRevision string) NoteDecision {
 	d.Kind = NoteApplyTombstone
 	d.Deleted = true
-	d.Version = version
+	d.Path = remote.Path
+	d.ContentHash = remote.ContentHash
+	d.Version = remote.Version
 	d.LocalRevision = localRevision
 	d.Reason = "remote tombstone; write recovery and delete locally"
 	return d
@@ -475,6 +481,7 @@ func (d NoteDecision) preserveLocalThenDelete(local NoteLocalObservation, remote
 	d.Kind = NotePreserveLocalThenDelete
 	d.Deleted = true
 	d.Path = remote.Path // the original path, for the tombstone baseline
+	d.ContentHash = remote.ContentHash
 	d.Version = remote.Version
 	d.LocalRevision = local.Revision
 	d.Conflict = &NoteConflictInfo{

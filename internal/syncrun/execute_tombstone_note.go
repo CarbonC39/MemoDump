@@ -40,15 +40,11 @@ func (c *NoteCoordinator) replaceWithTombstone(ctx context.Context, syncID, path
 		cloudsync.ErrUnsupportedCapability, cloudsync.ErrInvalidResponse:
 		return "", false, err
 	}
-	existing, actual, rerr := c.remote.Read(ctx, key)
-	if rerr != nil {
-		return "", false, nil
-	}
-	parsed, perr := cloudsync.ParseNoteRecord(existing)
-	if perr == nil && parsed.SyncID == syncID && parsed.Deleted && parsed.Path == path {
-		return actual, true, nil // the tombstone landed idempotently
-	}
-	return "", false, nil
+	// Re-read to learn the true outcome; a fatal error during the confirmation
+	// stops the cycle.
+	return c.confirmWrite(ctx, key, syncID, func(rec *cloudsync.NoteRecord) bool {
+		return rec.Deleted && rec.Path == path
+	})
 }
 
 // noteRecordHash is the canonical NoteRecord content hash for a live record.
@@ -57,11 +53,6 @@ func noteRecordHash(syncID, path, markdown string, deleted bool) string {
 		SchemaVersion: cloudsync.NoteSchemaVersion, SyncID: syncID, Path: path,
 		Markdown: markdown, Deleted: deleted,
 	}).ComputeContentHash()
-}
-
-// tombstoneNoteHash is the canonical content hash of a tombstone record.
-func tombstoneNoteHash(syncID, path string) string {
-	return noteRecordHash(syncID, path, "", true)
 }
 
 // writeRecovery copies the current local Markdown for a note to the recovery
