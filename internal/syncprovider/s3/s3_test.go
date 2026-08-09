@@ -1,10 +1,13 @@
 package s3
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -95,6 +98,11 @@ func (f *fakeS3) handler(w http.ResponseWriter, r *http.Request) {
 func (f *fakeS3) handlePut(w http.ResponseWriter, r *http.Request) {
 	_, key := f.parseBucketKey(r)
 	body, _ := io.ReadAll(r.Body)
+	if r.Header.Get("x-amz-content-sha256") == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD" {
+		if decoded, err := readAWSChunked(bytes.NewReader(body)); err == nil {
+			body = decoded
+		}
+	}
 	if existing, ok := f.objects[key]; ok {
 		if !f.ignorePreconditions {
 			if r.Header.Get("If-None-Match") == "*" {
@@ -125,6 +133,9 @@ func (f *fakeS3) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", `"`+obj.etag+`"`)
+	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Last-Modified", "Mon, 02 Jan 2006 15:04:05 GMT")
+	w.Header().Set("Content-Length", fmt.Sprint(len(obj.data)))
 	w.Write(obj.data)
 }
 
@@ -379,10 +390,11 @@ func TestS3SignsRequests(t *testing.T) {
 			s3Error(w, http.StatusForbidden, "SignatureDoesNotMatch")
 			return
 		}
+		w.Header().Set("ETag", `"1"`)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()
-	c, err := New(Config{Endpoint: ts.URL, Region: "us-east-1", Bucket: "b", AccessKey: "ak", SecretKey: "sk", ForcePathStyle: true})
+	c, err := New(Config{Endpoint: ts.URL, Region: "us-east-1", Bucket: "notes", AccessKey: "ak", SecretKey: "sk", ForcePathStyle: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,4 +409,39 @@ func TestS3SignsRequests(t *testing.T) {
 func hashOf(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// readAWSChunked decodes an AWS SigV4 chunked-encoded body into its raw
+// payload, mirroring how a real S3 service decodes a chunked upload.
+func readAWSChunked(r io.Reader) ([]byte, error) {
+	br := bufio.NewReader(r)
+	var out []byte
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		line = strings.TrimSuffix(line, "\r\n")
+		sizeHex := line
+		if i := strings.Index(line, ";"); i >= 0 {
+			sizeHex = line[:i]
+		}
+		n, perr := strconv.ParseInt(strings.TrimSpace(sizeHex), 16, 64)
+		if perr != nil {
+			return nil, perr
+		}
+		if n == 0 {
+			_, _ = br.ReadString('\n') // trailing chunk-signature line
+			break
+		}
+		chunk := make([]byte, n+2) // include the trailing \r\n
+		if _, err := io.ReadFull(br, chunk); err != nil {
+			return nil, err
+		}
+		out = append(out, chunk[:n]...)
+	}
+	return out, nil
 }

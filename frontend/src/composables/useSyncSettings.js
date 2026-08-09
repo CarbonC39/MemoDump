@@ -39,20 +39,17 @@ export async function refreshSyncSettings() {
     state.noE2EE = !!d.noE2EE
     state.lastRun = d.lastRun || null
     state.lastCompleted = d.lastCompleted || null
-    // The status carries only the count; fetch the detailed copies when the
-    // vault is enabled, and surface a failure instead of faking an empty list.
-    if (state.enabled) {
-      try {
-        const rec = await apiClient.syncRecovery()
-        state.recovery = (rec.data && rec.data.recovery) || []
-        state.recoveryError = ''
-      } catch (e) {
-        state.recovery = []
-        state.recoveryError = e?.response?.data?.error || 'recovery-unavailable'
-      }
-    } else {
-      state.recovery = []
+    // The status carries only the count; fetch the detailed copies always (the
+    // endpoint safely returns an empty list when sync was never enabled), and
+    // surface a failure instead of faking an empty list — a corrupt index must
+    // show a recovery error even when the status reports disabled.
+    try {
+      const rec = await apiClient.syncRecovery()
+      state.recovery = (rec.data && rec.data.recovery) || []
       state.recoveryError = ''
+    } catch (e) {
+      state.recovery = []
+      state.recoveryError = e?.response?.data?.error || 'recovery-unavailable'
     }
   } catch (_) {
     // A pre-login 401 redirects to Login; leave initialization retryable.

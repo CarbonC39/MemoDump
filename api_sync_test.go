@@ -227,6 +227,16 @@ func TestSyncApiRunFatalErrorNeverSynced(t *testing.T) {
 	if err := shared.Seed(cloudsync.NoteKey(rec.SyncID), data, "1"); err != nil {
 		t.Fatal(err)
 	}
+	// Seed a valid repo.json so the repo-identity read succeeds and the armed
+	// fault targets the note read.
+	desc := cloudsync.RepositoryDescriptor{
+		FormatVersion: 1, RepositoryID: "99999999-9999-4999-8999-999999999999",
+		CreatedAt: 1, MinimumClientVersion: "2.0.0",
+	}
+	ser, _ := desc.Serialize()
+	if err := shared.Seed("repo.json", ser, "1"); err != nil {
+		t.Fatal(err)
+	}
 	shared.ArmFault("read", &cloudsync.StoreError{Kind: cloudsync.ErrPermission, Message: "denied"})
 
 	doJSON(t, "POST", "/api/sync/enable", nil)

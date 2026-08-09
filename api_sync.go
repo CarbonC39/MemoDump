@@ -87,14 +87,14 @@ func handleSyncRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "sync is disabled; enable it first")
 		return
 	}
-	svc, err := buildSyncService()
+	svc, err := buildSyncService(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
 		return
 	}
 	res, err := svc.Run(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "sync run failed")
+		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
 		return
 	}
 	syncLastRunMu.Lock()

@@ -84,7 +84,7 @@ func (s *Service) Run(ctx context.Context) (*Result, error) {
 	}
 	res, err := s.runOnce(ctx, remote, lock)
 	if err != nil {
-		return &Result{LastError: classify(err)}, nil
+		return &Result{LastError: ClassifyError(err)}, nil
 	}
 	// A cycle with blocked or retried notes (including a potentially incomplete
 	// listing surfacing as remote damage) has not converged: it is never
@@ -145,9 +145,9 @@ func conflictCount(decisions []cloudsync.NoteDecision) int {
 	return n
 }
 
-// classify maps a cycle error onto a stable, secret-free label so a status
-// never leaks provider details.
-func classify(err error) string {
+// ClassifyError maps a cycle or provider error onto a stable, secret-free label
+// so a status never leaks provider details.
+func ClassifyError(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "cancelled"
 	}
