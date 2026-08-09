@@ -328,6 +328,9 @@
 
       <hr class="settings-divider" />
 
+      <!-- Cloud sync (experimental) -->
+      <SyncPanel />
+
       <!-- Custom CSS -->
       <div class="settings-section">
         <h3>{{ t('settings.customCss') }}</h3>
@@ -370,6 +373,7 @@ import {
   isLocalBuild as isLocalImageBuild,
 } from '../composables/useImageSettings'
 import InfoTooltip from './InfoTooltip.vue'
+import SyncPanel from './SyncPanel.vue'
 
 const emit = defineEmits(['close'])
 

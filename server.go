@@ -129,6 +129,13 @@ func buildAPIMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/v2/duplicate/{path...}", authMiddleware(handleV2DuplicateNote))
 	mux.HandleFunc("GET /api/v2/folders", authMiddleware(handleV2ListFolders))
 	mux.HandleFunc("GET /api/v2/search", authMiddleware(handleV2Search))
+	mux.HandleFunc("GET /api/sync/status", authMiddleware(handleSyncStatus))
+	mux.HandleFunc("POST /api/sync/enable", authMiddleware(handleSyncEnable))
+	mux.HandleFunc("POST /api/sync/run", authMiddleware(handleSyncRun))
+	mux.HandleFunc("POST /api/sync/disable", authMiddleware(handleSyncDisable))
+	mux.HandleFunc("POST /api/sync/test", authMiddleware(handleSyncTest))
+	mux.HandleFunc("GET /api/sync/recovery", authMiddleware(handleSyncRecoveryList))
+	mux.HandleFunc("POST /api/sync/recovery/restore", authMiddleware(handleSyncRecoveryRestore))
 	mux.HandleFunc("GET /custom.css", handleCustomCSS)
 	return mux
 }

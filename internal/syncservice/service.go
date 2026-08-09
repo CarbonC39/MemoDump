@@ -42,6 +42,7 @@ type Result struct {
 	Scanned           int
 	Blocked           int
 	Retry             int
+	Conflicts         int
 	SnapshotCommitted bool
 	LastError         string // stable, redacted label for the last failure, if any
 }
@@ -119,8 +120,23 @@ func (s *Service) runOnce(ctx context.Context, remote cloudsync.RemoteStore, loc
 		Scanned:           st.Scanned,
 		Blocked:           st.Blocked,
 		Retry:             st.Retry,
+		Conflicts:         conflictCount(st.Decisions),
 		SnapshotCommitted: st.SnapshotCommitted,
 	}, nil
+}
+
+// conflictCount counts the compound preservation outcomes in a cycle's
+// decisions.
+func conflictCount(decisions []cloudsync.NoteDecision) int {
+	n := 0
+	for _, d := range decisions {
+		switch d.Kind {
+		case cloudsync.NotePreserveLocalThenPull, cloudsync.NotePreserveLocalThenDelete,
+			cloudsync.NotePreserveRemoteThenTombstone:
+			n++
+		}
+	}
+	return n
 }
 
 // classify maps a cycle error onto a stable, secret-free label so a status

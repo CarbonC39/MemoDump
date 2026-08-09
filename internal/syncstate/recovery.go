@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"memodump/internal/cloudsync"
@@ -126,6 +127,45 @@ func (s *RecoveryStore) List(syncID string) (map[string]string, error) {
 		}
 		if data, rerr := os.ReadFile(filepath.Join(s.dir, syncID, e.Name())); rerr == nil {
 			out[stateHash] = string(data)
+		}
+	}
+	return out, nil
+}
+
+// RecoveryCopy is one recoverable-delete copy: the Sync ID it belongs to, the
+// state hash it was saved under, and the recovered Markdown.
+type RecoveryCopy struct {
+	SyncID    string
+	StateHash string
+	Markdown  string
+}
+
+// ListAll returns every recovery copy across all Sync IDs, deterministically
+// ordered by Sync ID then state hash.
+func (s *RecoveryStore) ListAll() ([]RecoveryCopy, error) {
+	ids, err := os.ReadDir(s.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []RecoveryCopy
+	for _, id := range ids {
+		if !id.IsDir() || !cloudsync.IsSyncID(id.Name()) {
+			continue
+		}
+		copies, err := s.List(id.Name())
+		if err != nil {
+			return nil, err
+		}
+		hashes := make([]string, 0, len(copies))
+		for h := range copies {
+			hashes = append(hashes, h)
+		}
+		sort.Strings(hashes)
+		for _, h := range hashes {
+			out = append(out, RecoveryCopy{SyncID: id.Name(), StateHash: h, Markdown: copies[h]})
 		}
 	}
 	return out, nil

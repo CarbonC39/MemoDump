@@ -130,6 +130,24 @@ const remoteApi = {
     imageConfigTest(config) {
         return api.post('/config/image/test', config)
     },
+    syncStatus() {
+        return api.get('/sync/status')
+    },
+    syncEnable() {
+        return api.post('/sync/enable')
+    },
+    syncRun() {
+        return api.post('/sync/run')
+    },
+    syncDisable() {
+        return api.post('/sync/disable')
+    },
+    syncTest() {
+        return api.post('/sync/test')
+    },
+    syncRecovery() {
+        return api.get('/sync/recovery')
+    },
 }
 
 // Select backend: localApi (IndexedDB, no server) when built with VITE_LOCAL=1,
