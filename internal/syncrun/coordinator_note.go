@@ -199,6 +199,11 @@ func (c *NoteCoordinator) execute(ctx context.Context, plan []cloudsync.NoteDeci
 					ContentHash: d.ContentHash, Deleted: false, RemoteVersion: d.Version,
 				}
 			}
+		case cloudsync.NotePreserveLocalThenPull, cloudsync.NotePreserveLocalThenDelete,
+			cloudsync.NotePreserveRemoteThenTombstone:
+			if err := c.executeConflict(ctx, d, baselines); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

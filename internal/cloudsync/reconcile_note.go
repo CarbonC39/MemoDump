@@ -409,6 +409,7 @@ func (d NoteDecision) preserveLocalThenDelete(local NoteLocalObservation, remote
 	}
 	d.Kind = NotePreserveLocalThenDelete
 	d.Deleted = true
+	d.Path = remote.Path // the original path, for the tombstone baseline
 	d.Version = remote.Version
 	d.LocalRevision = local.Revision
 	d.Conflict = &NoteConflictInfo{
