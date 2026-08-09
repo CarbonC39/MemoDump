@@ -688,9 +688,9 @@ func TestNoteConflictSnapshotLossRestart(t *testing.T) {
 		t.Fatalf("pre-loss conflict notes = %v, want 1", got)
 	}
 
-	// Lose the device state; restart must re-establish baselines and keep the
-	// single conflict note.
-	if err := os.RemoveAll(stateB); err != nil {
+	// Lose the device snapshot; restart must re-establish baselines and keep
+	// the single conflict note.
+	if err := os.Remove(b.co.snaps.Path()); err != nil {
 		t.Fatal(err)
 	}
 	b.runQuiescent(t, ctx)

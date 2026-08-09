@@ -56,6 +56,7 @@ func newNoteRep(t *testing.T, root, stateRoot, replicaID string, remote cloudsyn
 	t.Cleanup(func() { _ = lock.Close() })
 	co := NewNoteCoordinator(repo, idx, snaps, recovery, remote, NoteConfig{
 		VaultID: noteVaultID, ReplicaID: replicaID, RepoID: noteRepoID, Profile: noteProfile,
+		Lock: lock,
 	})
 	return &noteRep{root: root, stateRoot: stateRoot, idx: idx, co: co, lock: lock}
 }
@@ -287,8 +288,8 @@ func TestNoteCoordinatorSnapshotLostConverges(t *testing.T) {
 	}
 
 	// Simulate a lost snapshot: the note survives locally and on the remote,
-	// but the device state is gone.
-	if err := os.RemoveAll(state); err != nil {
+	// but the device state file is gone.
+	if err := os.Remove(a.co.snaps.Path()); err != nil {
 		t.Fatal(err)
 	}
 

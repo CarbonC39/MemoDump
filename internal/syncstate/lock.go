@@ -62,6 +62,22 @@ func (l *Lock) Close() error {
 	return closeErr
 }
 
+// Held reports whether the lock is currently owned by this process. It probes a
+// fresh non-blocking handle on the same lock file: flock/LockFileEx treat each
+// open description independently, so a second handle from the same process
+// contends with the held one, and the probe failing means the lock is held.
+func (l *Lock) Held() bool {
+	if l == nil || l.f == nil {
+		return false
+	}
+	f, err := os.OpenFile(l.f.Name(), os.O_RDWR, 0)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	return tryLock(f) != nil
+}
+
 // acquireRegistryLock takes the short-lived cross-process lock guarding the
 // state-root registry/device read-modify-write in Resolve, so two processes
 // first-enabling the same vault cannot generate and persist two different

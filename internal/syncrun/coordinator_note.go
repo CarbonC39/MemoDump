@@ -22,12 +22,15 @@ import (
 // to inject deterministic mid-scan mutations (the zero value scans normally).
 // TestFault is a test-only crash seam: when set, it is called at named
 // execution boundaries and a non-nil error aborts the cycle exactly as a crash
-// would, so tests can verify restart safety.
+// would, so tests can verify restart safety. Lock is the replica OS lock the
+// caller holds; Run verifies it is still held so a production coordinator can
+// never run without verified lock ownership.
 type NoteConfig struct {
 	VaultID     string
 	ReplicaID   string
 	RepoID      string
 	Profile     string
+	Lock        *syncstate.Lock
 	ScanOptions vaultfs.ScanOptions
 	TestFault   func(point string) error
 }
@@ -69,6 +72,13 @@ func NewNoteCoordinator(repo *vaultfs.Repository, idx *syncindex.NoteStore, snap
 // commit. No cursor is read or written.
 func (c *NoteCoordinator) Run(ctx context.Context) (*NoteStatus, error) {
 	st := &NoteStatus{}
+
+	// A production coordinator must never run without verified replica-lock
+	// ownership: the lock guards the index and snapshot against a concurrent
+	// process.
+	if c.cfg.Lock == nil || !c.cfg.Lock.Held() {
+		return st, fmt.Errorf("coordinator requires the replica OS lock")
+	}
 
 	res, err := vaultfs.Scan(c.repo.Root(), c.cfg.ScanOptions)
 	if err != nil {
@@ -189,6 +199,10 @@ func (c *NoteCoordinator) loadBaselines() (map[string]syncstate.SnapshotEntity, 
 // their notes keep their previous baselines and are re-decided next cycle.
 func (c *NoteCoordinator) execute(ctx context.Context, plan []cloudsync.NoteDecision, baselines map[string]syncstate.SnapshotEntity) error {
 	for _, d := range plan {
+		// Cancellation lands between note boundaries, never mid-note.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		switch d.Kind {
 		case cloudsync.NoteNoop:
 			// Nothing; a converged deletion drops its live index mapping so a
