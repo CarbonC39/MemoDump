@@ -12,6 +12,71 @@ import (
 // spec §8). NoteLocalObservation carries the same canonical content hash as the
 // remote note record, so local/remote equality is a direct hash comparison.
 
+// LocalState classifies one Sync ID's local observation.
+type LocalState int
+
+const (
+	// LocalLive: the indexed path exists and is readable; the observation
+	// carries the canonical note state.
+	LocalLive LocalState = iota
+	// LocalAbsent: the indexed path is gone. Absence is an observation, not a
+	// deletion, until a usable baseline proves the note existed remotely.
+	LocalAbsent
+	// LocalUnknown: blocked (symlink/kind flip), unstable, or unreadable. It is
+	// never treated as absent.
+	LocalUnknown
+)
+
+func (s LocalState) String() string {
+	switch s {
+	case LocalLive:
+		return "live"
+	case LocalAbsent:
+		return "absent"
+	case LocalUnknown:
+		return "unknown"
+	}
+	return "unknown"
+}
+
+// RemoteState classifies one Sync ID's remote observation.
+type RemoteState int
+
+const (
+	// RemoteLive: a valid live note record at the expected version.
+	RemoteLive RemoteState = iota
+	// RemoteTombstone: a valid note record with deleted=true. A physically
+	// removed key is RemoteMissing, never a tombstone.
+	RemoteTombstone
+	// RemoteMissing: the key is physically absent. That is repository damage,
+	// not a deletion signal.
+	RemoteMissing
+	// RemoteInvalid: an unreadable, malformed, or invalid record. It is never
+	// materialized.
+	RemoteInvalid
+)
+
+func (s RemoteState) String() string {
+	switch s {
+	case RemoteLive:
+		return "live"
+	case RemoteTombstone:
+		return "tombstone"
+	case RemoteMissing:
+		return "missing"
+	case RemoteInvalid:
+		return "invalid"
+	}
+	return "unknown"
+}
+
+// Baseline is the usable snapshot baseline for one Sync ID, when present.
+type Baseline struct {
+	ContentHash   string
+	Deleted       bool
+	RemoteVersion string
+}
+
 // NoteLocalObservation is the immutable local input for one Sync ID. It
 // describes a Markdown note only.
 type NoteLocalObservation struct {

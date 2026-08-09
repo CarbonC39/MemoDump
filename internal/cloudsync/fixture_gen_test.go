@@ -6,7 +6,6 @@ package cloudsync
 // suites both assert against.
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -37,121 +36,36 @@ func TestGenerateFixtures(t *testing.T) {
 		}
 	}
 
-	// ---- entities ----
-	type entityCase struct {
-		Name          string `json:"name"`
-		Entity        Entity `json:"entity"`
-		ContentHash   string `json:"contentHash"`
-		CanonicalJSON string `json:"canonicalJson"`
+	// ---- note records (schema v2, V1 wire contract) ----
+	// The V1 record carries a complete portable .md path and has no kind,
+	// parentId, graph, or stored contentHash (the hash is derived). Each case
+	// pins the DERIVED content hash so later phases can assert the hash
+	// derivation is stable. The conflict-ID case reuses the v5 identity derived
+	// from the same note-state hashes pinned in state-hashes.json, so both
+	// fixtures agree on the same conflict note.
+	sourceID := "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+	ideaRecord := &NoteRecord{
+		SchemaVersion: NoteSchemaVersion, SyncID: sourceID,
+		Path: "Projects/idea.md", Markdown: "---\ntags: [\"project\"]\n---\n# Idea\n",
 	}
-	entities := []*Entity{
-		{
-			SchemaVersion: 1, SyncID: "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
-			Kind: KindNote, ParentID: "", Name: "idea",
-			Markdown:  "---\ntags: [\"project\"]\n---\n# Idea\n",
-			Deleted:   false,
-			UpdatedBy: "1a2b3c4d-1111-4222-8333-444455556666",
-			UpdatedAt: 1785800000000,
-		},
-		{
-			SchemaVersion: 1, SyncID: "6e6e9c3d-a5b8-4c49-9409-9de566677770",
-			Kind: KindNote, ParentID: "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8", Name: "nested",
-			Markdown:  "# Nested\nbody",
-			Deleted:   false,
-			UpdatedBy: "1a2b3c4d-1111-4222-8333-444455556666",
-			UpdatedAt: 1785800100000,
-		},
-		{
-			SchemaVersion: 1, SyncID: "7f7f0d4e-b6c9-4d5a-a51a-0ef677788881",
-			Kind: KindFolder, ParentID: "", Name: "Projects",
-			Deleted:   false,
-			UpdatedBy: "1a2b3c4d-1111-4222-8333-444455556666",
-			UpdatedAt: 1785800200000,
-		},
-		{
-			SchemaVersion: 1, SyncID: "8a8a1e5f-c7da-4e6b-b62b-1f0788899992",
-			Kind: KindNote, ParentID: "", Name: "deleted",
-			Markdown:  "gone",
-			Deleted:   true,
-			UpdatedBy: "1a2b3c4d-1111-4222-8333-444455556666",
-			UpdatedAt: 1785800300000,
-		},
-		{
-			SchemaVersion: 1, SyncID: "9b9b2f60-d8eb-4f7c-a73c-2018999aaab3",
-			Kind: KindNote, ParentID: "", Name: "escaped",
-			Markdown:  "line1\nline2 \"quoted\" \\ backslash\ttab\ncontrol",
-			Deleted:   false,
-			UpdatedBy: "1a2b3c4d-1111-4222-8333-444455556666",
-			UpdatedAt: 1785800400000,
-		},
-		{
-			SchemaVersion: 1, SyncID: "acac3051-e9fc-408d-884d-3119aaaa4bb4",
-			Kind: KindNote, ParentID: "", Name: "unicode",
-			Markdown:  "# 你好\n中文内容",
-			Deleted:   false,
-			UpdatedBy: "1a2b3c4d-1111-4222-8333-444455556666",
-			UpdatedAt: 1785800500000,
-		},
-		{
-			SchemaVersion: 1, SyncID: "bdad4162-faf1-418e-895e-4221bbbb5cc5",
-			Kind: KindNote, ParentID: "", Name: "media",
-			Markdown:  "![alt](memodump-media:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png)",
-			Deleted:   false,
-			UpdatedBy: "1a2b3c4d-1111-4222-8333-444455556666",
-			UpdatedAt: 1785800600000,
-		},
+	nestedRecord := &NoteRecord{
+		SchemaVersion: NoteSchemaVersion, SyncID: "6e6e9c3d-a5b8-4c49-9409-9de566677770",
+		Path: "Projects/Sub/deep.md", Markdown: "# Nested\nbody\n",
 	}
-	// Compute content hashes for every base entity first; the conflict identity
-	// below is derived from those pinned hashes so entities.json and
-	// state-hashes.json stay consistent.
-	var entityCases []entityCase
-	for _, e := range entities {
-		e.ContentHash = e.ComputeContentHash()
-		ser, err := e.Serialize()
-		if err != nil {
-			t.Fatal(err)
-		}
-		entityCases = append(entityCases, entityCase{
-			Name: e.Name, Entity: *e, ContentHash: e.ContentHash, CanonicalJSON: string(ser),
-		})
+	tombRecord := &NoteRecord{
+		SchemaVersion: NoteSchemaVersion, SyncID: "8a8a1e5f-c7da-4e6b-b62b-1f0788899992",
+		Path: "archive/deleted.md", Deleted: true,
 	}
-
-	// A deterministic conflict copy carries a UUID v5 Sync ID. It is derived
-	// from the same source/state hashes pinned in state-hashes.json, so the
-	// wire contract exercises the full conflict identity end to end.
-	ideaHash := entities[0].ContentHash
-	nestedHash := entities[1].ContentHash
-	deletedHash := entities[3].ContentHash
-	sourceID := entities[0].SyncID
+	ideaHash := ideaRecord.ComputeContentHash()
+	nestedHash := nestedRecord.ComputeContentHash()
+	tombHash := tombRecord.ComputeContentHash()
 	localDivergent := StateHash(nestedHash, false)
 	remoteDivergent := StateHash(ideaHash, false)
+	tombstoneDivergent := StateHash(ideaHash, true)
 	conflictID, err := DeriveConflictSyncID(sourceID, localDivergent, remoteDivergent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	conflictEntity := &Entity{
-		SchemaVersion: 1, SyncID: conflictID, Kind: KindNote, ParentID: "", Name: strings.TrimSuffix(ConflictFilename("idea", conflictID), ".md"),
-		Markdown:  "# Local version\n",
-		Deleted:   false,
-		UpdatedBy: "1a2b3c4d-1111-4222-8333-444455556666",
-		UpdatedAt: 1785800700000,
-	}
-	conflictEntity.ContentHash = conflictEntity.ComputeContentHash()
-	ser, err := conflictEntity.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-	entityCases = append(entityCases, entityCase{
-		Name: conflictEntity.Name, Entity: *conflictEntity, ContentHash: conflictEntity.ContentHash, CanonicalJSON: string(ser),
-	})
-	writeJSON("entities.json", map[string]any{"entities": entityCases})
-
-	// ---- note records (schema v2, V1 wire contract) ----
-	// The V1 record carries a complete portable .md path and has no kind,
-	// parentId, graph, or stored contentHash (the hash is derived). The
-	// conflict-ID case reuses the pinned v5 identity from state-hashes.json so
-	// both fixtures agree on the same conflict note. Each case pins the DERIVED
-	// content hash so later phases can assert the hash derivation is stable.
 	type noteCase struct {
 		Name          string     `json:"name"`
 		Record        NoteRecord `json:"record"`
@@ -159,21 +73,9 @@ func TestGenerateFixtures(t *testing.T) {
 		CanonicalJSON string     `json:"canonicalJson"`
 	}
 	noteRecords := []*NoteRecord{
-		{
-			SchemaVersion: NoteSchemaVersion, SyncID: "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
-			Path:     "Projects/idea.md",
-			Markdown: "---\ntags: [\"project\"]\n---\n# Idea\n",
-		},
-		{
-			SchemaVersion: NoteSchemaVersion, SyncID: "6e6e9c3d-a5b8-4c49-9409-9de566677770",
-			Path:     "Projects/Sub/deep.md",
-			Markdown: "# Nested\nbody\n",
-		},
-		{
-			SchemaVersion: NoteSchemaVersion, SyncID: "8a8a1e5f-c7da-4e6b-b62b-1f0788899992",
-			Path:    "archive/deleted.md",
-			Deleted: true,
-		},
+		ideaRecord,
+		nestedRecord,
+		tombRecord,
 		{
 			SchemaVersion: NoteSchemaVersion, SyncID: conflictID,
 			Path:     "Projects/" + ConflictFilename("idea", conflictID),
@@ -322,7 +224,10 @@ func TestGenerateFixtures(t *testing.T) {
 		FormatVersion: 1, RepositoryID: "bdbd4162-faf1-418e-895e-4221bbbb5cc5",
 		CreatedAt: 1785800000000, MinimumClientVersion: "2.0.0",
 	}
-	ser, _ = desc.Serialize()
+	ser, serr := desc.Serialize()
+	if serr != nil {
+		t.Fatal(serr)
+	}
 	repoCases := []repoCase{{Name: "standard", Descriptor: desc, CanonicalJSON: string(ser)}}
 	invalidRepo := []map[string]any{
 		{"name": "newer format", "json": `{"formatVersion":2,"repositoryId":"bdbd4162-faf1-418e-895e-4221bbbb5cc5","createdAt":1785800000000,"minimumClientVersion":"2.0.0"}`},
@@ -388,7 +293,6 @@ func TestGenerateFixtures(t *testing.T) {
 	}})
 
 	// ---- state hashes and deterministic conflict identities ----
-	tombstoneDivergent := StateHash(ideaHash, true)
 	conflictTombstoneID, err := DeriveConflictSyncID(sourceID, localDivergent, tombstoneDivergent)
 	if err != nil {
 		t.Fatal(err)
@@ -402,7 +306,7 @@ func TestGenerateFixtures(t *testing.T) {
 		{"name": "live idea", "contentHash": ideaHash, "deleted": false, "expected": StateHash(ideaHash, false)},
 		{"name": "tombstone idea", "contentHash": ideaHash, "deleted": true, "expected": StateHash(ideaHash, true)},
 		{"name": "live nested", "contentHash": nestedHash, "deleted": false, "expected": StateHash(nestedHash, false)},
-		{"name": "tombstone deleted", "contentHash": deletedHash, "deleted": true, "expected": StateHash(deletedHash, true)},
+		{"name": "tombstone deleted", "contentHash": tombHash, "deleted": true, "expected": StateHash(tombHash, true)},
 		{"name": "zero content", "contentHash": zeroHash, "deleted": false, "expected": StateHash(zeroHash, false)},
 	}
 	conflictCases := []map[string]string{
@@ -431,79 +335,6 @@ func TestGenerateFixtures(t *testing.T) {
 			},
 		},
 	})
-
-	// ---- malformed input ----
-	invalidEnt := []map[string]any{
-		{"name": "newer schema", "entity": map[string]any{
-			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
-			"kind": "note", "parentId": "", "name": "idea", "markdown": "x",
-			"contentHash": "", "deleted": false, "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666", "updatedAt": 1,
-		}},
-		{"name": "bad sync uuid", "entity": map[string]any{
-			"schemaVersion": 1, "syncId": "not-a-uuid", "kind": "note", "parentId": "",
-			"name": "idea", "markdown": "x", "contentHash": "", "deleted": false,
-			"updatedBy": "1a2b3c4d-1111-4222-8333-444455556666", "updatedAt": 1,
-		}},
-		{"name": "traversal name", "entity": map[string]any{
-			"schemaVersion": 1, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8", "kind": "note",
-			"parentId": "", "name": "../evil", "markdown": "x", "contentHash": "", "deleted": false,
-			"updatedBy": "1a2b3c4d-1111-4222-8333-444455556666", "updatedAt": 1,
-		}},
-		{"name": "folder with markdown", "entity": map[string]any{
-			"schemaVersion": 1, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8", "kind": "folder",
-			"parentId": "", "name": "Projects", "markdown": "x", "contentHash": "", "deleted": false,
-			"updatedBy": "1a2b3c4d-1111-4222-8333-444455556666", "updatedAt": 1,
-		}},
-		{"name": "invalid media key", "entity": map[string]any{
-			"schemaVersion": 1, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8", "kind": "note",
-			"parentId": "", "name": "idea", "markdown": "![x](memodump-media:not-a-key)", "contentHash": "",
-			"deleted": false, "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666", "updatedAt": 1,
-		}},
-		{"name": "empty media key", "entity": map[string]any{
-			"schemaVersion": 1, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8", "kind": "note",
-			"parentId": "", "name": "idea", "markdown": "![x](memodump-media:)", "contentHash": "",
-			"deleted": false, "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666", "updatedAt": 1,
-		}},
-		{"name": "missing contentHash", "entity": map[string]any{
-			"schemaVersion": 1, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8", "kind": "note",
-			"parentId": "", "name": "idea", "markdown": "x",
-			"deleted": false, "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666", "updatedAt": 1,
-		}},
-		{"name": "missing updatedAt", "entity": map[string]any{
-			"schemaVersion": 1, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8", "kind": "note",
-			"parentId": "", "name": "idea", "markdown": "x", "contentHash": "",
-			"deleted": false, "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666",
-		}},
-		{"name": "zero updatedAt", "entity": map[string]any{
-			"schemaVersion": 1, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8", "kind": "note",
-			"parentId": "", "name": "idea", "markdown": "x", "contentHash": "",
-			"deleted": false, "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666", "updatedAt": 0,
-		}},
-		{"name": "bad content hash format", "entity": map[string]any{
-			"schemaVersion": 1, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8", "kind": "note",
-			"parentId": "", "name": "idea", "markdown": "x", "contentHash": "deadbeef",
-			"deleted": false, "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666", "updatedAt": 1,
-		}},
-		{"name": "updatedAt beyond safe integer", "entity": map[string]any{
-			"schemaVersion": 1, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8", "kind": "note",
-			"parentId": "", "name": "idea", "markdown": "x", "contentHash": "",
-			"deleted": false, "updatedBy": "1a2b3c4d-1111-4222-8333-444455556666",
-			"updatedAt": int64(1<<53) + 1,
-		}},
-	}
-	rawCases := []map[string]any{
-		{"name": "trailing json value", "json": `{"schemaVersion":1,"syncId":"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8","kind":"note","parentId":"","name":"idea","markdown":"x","contentHash":"` + ContentHash(KindNote, "", "idea", "x") + `","deleted":false,"updatedBy":"1a2b3c4d-1111-4222-8333-444455556666","updatedAt":1}{"x":1}`},
-		{"name": "invalid utf-8", "base64": base64.StdEncoding.EncodeToString([]byte{
-			'{', '"', 's', 'c', 'h', 'e', 'm', 'a', 'V', 'e', 'r', 's', 'i', 'o', 'n', '"', ':', '1', ',',
-			'"', 's', 'y', 'n', 'c', 'I', 'd', '"', ':', '"', '5', 'd', '5', 'd', '8', 'b', '2', 'c',
-			'-', '9', '4', 'f', '7', '-', '4', 'a', '3', '8', '-', '8', '3', '1', '8', '-', '8', 'c', 'd', '4', 'c', 'b', '5', '3', 'd', 'f', 'a', '8', '"',
-			',', '"', 'k', 'i', 'n', 'd', '"', ':', '"', 'n', 'o', 't', 'e', '"',
-			',', '"', 'n', 'a', 'm', 'e', '"', ':', '"', 0xff, '"', '}',
-		})},
-		{"name": "unknown field", "json": `{"schemaVersion":1,"syncId":"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8","kind":"note","parentId":"","name":"idea","markdown":"x","contentHash":"","deleted":false,"updatedBy":"1a2b3c4d-1111-4222-8333-444455556666","updatedAt":1,"evil":true}`},
-		{"name": "malformed json", "json": `{"schemaVersion":1,`},
-	}
-	writeJSON("malformed-input.json", map[string]any{"entityCases": invalidEnt, "rawCases": rawCases})
 
 	// ---- retry classes ----
 	writeJSON("retry-classes.json", map[string]any{"cases": []map[string]any{

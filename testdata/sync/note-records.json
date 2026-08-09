@@ -275,16 +275,16 @@
       "canonicalJson": "{\"deleted\":true,\"path\":\"archive/deleted.md\",\"schemaVersion\":2,\"syncId\":\"8a8a1e5f-c7da-4e6b-b62b-1f0788899992\"}\n"
     },
     {
-      "name": "Projects/idea (conflict 04b2cbe619cf).md",
+      "name": "Projects/idea (conflict 1b98a1cb96a6).md",
       "record": {
         "schemaVersion": 2,
-        "syncId": "04b2cbe6-19cf-584f-bad4-55fa03d9c05a",
-        "path": "Projects/idea (conflict 04b2cbe619cf).md",
+        "syncId": "1b98a1cb-96a6-5152-ae29-8ae3636bf468",
+        "path": "Projects/idea (conflict 1b98a1cb96a6).md",
         "markdown": "# Local version\n",
         "deleted": false
       },
-      "contentHash": "3e68b023018a8737152c163c91120a7b3fbd09f3e6c0c927dc864de99f3be09c",
-      "canonicalJson": "{\"deleted\":false,\"markdown\":\"# Local version\\n\",\"path\":\"Projects/idea (conflict 04b2cbe619cf).md\",\"schemaVersion\":2,\"syncId\":\"04b2cbe6-19cf-584f-bad4-55fa03d9c05a\"}\n"
+      "contentHash": "5fc633e64a889642495ed9f3e441bfbc55241c9e8b7925040ee28ad4e357bd9b",
+      "canonicalJson": "{\"deleted\":false,\"markdown\":\"# Local version\\n\",\"path\":\"Projects/idea (conflict 1b98a1cb96a6).md\",\"schemaVersion\":2,\"syncId\":\"1b98a1cb-96a6-5152-ae29-8ae3636bf468\"}\n"
     },
     {
       "name": "你好/笔记.md",

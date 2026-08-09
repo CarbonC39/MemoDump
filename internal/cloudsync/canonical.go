@@ -116,24 +116,7 @@ func writeCanonicalString(sb *strings.Builder, s string) {
 	sb.WriteByte('"')
 }
 
-// ContentHash is the canonical digest over kind, parentId, name, and markdown,
-// as defined by the shared golden fixtures. It is the content identity of an
-// entity, independent of the provider's ETag/version.
-func ContentHash(kind, parentId, name, markdown string) string {
-	data, err := canonicalBytes(map[string]any{
-		"kind":     kind,
-		"parentId": parentId,
-		"name":     name,
-		"markdown": markdown,
-	})
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
-// StateHash is the canonical digest of an entity's complete state: the tuple
+// StateHash is the canonical digest of a note's complete state: the tuple
 // (contentHash, deleted). Two states are equal only when both the content hash
 // and the deleted bit match, and this is the digest used for the disposable
 // device snapshot and for deterministic conflict derivation. It reuses the same

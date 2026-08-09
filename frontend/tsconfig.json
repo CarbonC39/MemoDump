@@ -13,5 +13,5 @@
     "resolveJsonModule": true,
     "types": []
   },
-  "include": ["src/sync/**/*.ts"]
+  "include": ["src/**/*.js", "src/**/*.ts"]
 }

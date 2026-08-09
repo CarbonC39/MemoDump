@@ -312,3 +312,17 @@ func TestNoteCoordinatorNestedRemoteOnlyPull(t *testing.T) {
 		t.Fatal("B did not create the parent directories for a remote-only nested note")
 	}
 }
+
+// writeFiles writes note bodies into a vault, creating parent directories.
+func writeFiles(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for p, md := range files {
+		abs := filepath.Join(root, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, []byte(md), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

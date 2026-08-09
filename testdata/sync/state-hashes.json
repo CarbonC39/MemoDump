@@ -1,51 +1,51 @@
 {
   "conflictIds": [
     {
-      "expected": "04b2cbe6-19cf-584f-bad4-55fa03d9c05a",
-      "localStateHash": "7aadc1fb841ce2704f71f02e72c7b9b947892d9f820e7fd7c990361534bcb4a4",
+      "expected": "1b98a1cb-96a6-5152-ae29-8ae3636bf468",
+      "localStateHash": "54ec244cfcd78d8a074421a20a77b537f7ce846d3817b02963498784a5072aaa",
       "name": "divergent note",
-      "remoteStateHash": "5049fc11930e2cb62fdf2b8d615a5dd92476064b284a0391d5c7abe4e0636dae",
+      "remoteStateHash": "0bb58f3c8e8e5094238204e7951d1e97ecd8790064ea12bce10bcec4a5740b6a",
       "sourceSyncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
     },
     {
-      "expected": "f4a414ee-aeba-5003-a061-8a383215343f",
-      "localStateHash": "7aadc1fb841ce2704f71f02e72c7b9b947892d9f820e7fd7c990361534bcb4a4",
+      "expected": "64b1dce5-ab83-552a-9460-11bfbab8c253",
+      "localStateHash": "54ec244cfcd78d8a074421a20a77b537f7ce846d3817b02963498784a5072aaa",
       "name": "edit vs tombstone",
-      "remoteStateHash": "2dc76bea7c431f6cd9d7c97e9a4ca72b358f48d56b7f5ffa7a982062b89d7b9e",
+      "remoteStateHash": "e78afb45c5c18a7877b7732feca801c3cb65325459bb70d03e3b6b88eda3dd06",
       "sourceSyncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
     },
     {
-      "expected": "e9d315a5-2b09-5190-ba0c-c3b0233bf39b",
-      "localStateHash": "5049fc11930e2cb62fdf2b8d615a5dd92476064b284a0391d5c7abe4e0636dae",
+      "expected": "78a6d393-b723-598c-b237-3d5fbb80f4fc",
+      "localStateHash": "0bb58f3c8e8e5094238204e7951d1e97ecd8790064ea12bce10bcec4a5740b6a",
       "name": "swapped roles differ",
-      "remoteStateHash": "7aadc1fb841ce2704f71f02e72c7b9b947892d9f820e7fd7c990361534bcb4a4",
+      "remoteStateHash": "54ec244cfcd78d8a074421a20a77b537f7ce846d3817b02963498784a5072aaa",
       "sourceSyncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
     }
   ],
   "namespace": "7f139d22-a0f6-50fe-855c-c416516180f0",
   "stateHashes": [
     {
-      "contentHash": "a8c3ecb05369ef3ee1ed8909eb42e327c9071b546fe952c2e82f7233da2a1935",
+      "contentHash": "f5919a374551fa11bed03ec2a65abb80e9ff004c6f00922663607c007b81a6fe",
       "deleted": false,
-      "expected": "5049fc11930e2cb62fdf2b8d615a5dd92476064b284a0391d5c7abe4e0636dae",
+      "expected": "0bb58f3c8e8e5094238204e7951d1e97ecd8790064ea12bce10bcec4a5740b6a",
       "name": "live idea"
     },
     {
-      "contentHash": "a8c3ecb05369ef3ee1ed8909eb42e327c9071b546fe952c2e82f7233da2a1935",
+      "contentHash": "f5919a374551fa11bed03ec2a65abb80e9ff004c6f00922663607c007b81a6fe",
       "deleted": true,
-      "expected": "2dc76bea7c431f6cd9d7c97e9a4ca72b358f48d56b7f5ffa7a982062b89d7b9e",
+      "expected": "e78afb45c5c18a7877b7732feca801c3cb65325459bb70d03e3b6b88eda3dd06",
       "name": "tombstone idea"
     },
     {
-      "contentHash": "98aa3bdc8f48dc0bb8622c2aecb7573b7ac018090a1f9ef54ccf63b897842d7c",
+      "contentHash": "7840c601349ce9fb071e0390398c3ea0266e37700c5378c72b44fddd671acf28",
       "deleted": false,
-      "expected": "7aadc1fb841ce2704f71f02e72c7b9b947892d9f820e7fd7c990361534bcb4a4",
+      "expected": "54ec244cfcd78d8a074421a20a77b537f7ce846d3817b02963498784a5072aaa",
       "name": "live nested"
     },
     {
-      "contentHash": "7991c57823feb93dde28a8376236b8caf85daddb3630fe4103e6e2d339d61543",
+      "contentHash": "082ac8e8e2394d2e06354d2d8d82cd678c7692918901f4974206c37ee825f289",
       "deleted": true,
-      "expected": "62a00979bb8296268cc1c412721cbddf35d30d2516e90260ecd55475e1b73c8d",
+      "expected": "acdadc6e0ee6ef6a945956a61b2d3857b566fa98395e70e58e8e548bd32e459b",
       "name": "tombstone deleted"
     },
     {
@@ -65,7 +65,7 @@
     ],
     "invalidV5AsRepositoryOrDevice": [
       "7f139d22-a0f6-50fe-855c-c416516180f0",
-      "04b2cbe6-19cf-584f-bad4-55fa03d9c05a"
+      "1b98a1cb-96a6-5152-ae29-8ae3636bf468"
     ],
     "validV4": [
       "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
@@ -74,8 +74,8 @@
     ],
     "validV5": [
       "7f139d22-a0f6-50fe-855c-c416516180f0",
-      "04b2cbe6-19cf-584f-bad4-55fa03d9c05a",
-      "f4a414ee-aeba-5003-a061-8a383215343f"
+      "1b98a1cb-96a6-5152-ae29-8ae3636bf468",
+      "64b1dce5-ab83-552a-9460-11bfbab8c253"
     ]
   }
 }

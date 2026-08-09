@@ -7,6 +7,12 @@ import (
 	"testing"
 )
 
+const (
+	testVaultID   = "11111111-1111-4111-8111-111111111111"
+	testReplicaID = "22222222-2222-4222-8222-222222222222"
+	testRepoID    = "33333333-3333-4333-8333-333333333333"
+)
+
 func validSnapshotV2() *SnapshotV2 {
 	return &SnapshotV2{
 		SchemaVersion:   SnapshotV2SchemaVersion,
@@ -386,4 +392,20 @@ func TestSnapshotStoreV2ReplacePerformsOneRewrite(t *testing.T) {
 	if c.writes != 2 || c.syncs != 2 {
 		t.Fatalf("two replaces performed %d writes / %d syncs", c.writes, c.syncs)
 	}
+}
+
+type countingFsIO struct {
+	fsIO
+	writes int
+	syncs  int
+}
+
+func (c *countingFsIO) WriteAll(f *os.File, b []byte) error {
+	c.writes++
+	return c.fsIO.WriteAll(f, b)
+}
+
+func (c *countingFsIO) Sync(f *os.File) error {
+	c.syncs++
+	return c.fsIO.Sync(f)
 }

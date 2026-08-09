@@ -7,6 +7,62 @@ import (
 	"path/filepath"
 )
 
+// ExpectedIdentity is the set of identities a snapshot must match to be
+// usable for the current cycle: the Vault and Replica IDs plus the selected
+// provider profile and the Repository ID discovered from the remote repo.json.
+type ExpectedIdentity struct {
+	VaultID         string
+	ReplicaID       string
+	ProviderProfile string
+	RepositoryID    string
+}
+
+// DiscardReason explains why a snapshot cannot be used. The zero value means
+// the snapshot is usable; every discard outcome is an explicit classification
+// so the coordinator never guesses about durable state.
+type DiscardReason int
+
+const (
+	// NoDiscard: the snapshot loaded and matches the expected identity.
+	NoDiscard DiscardReason = iota
+	// DiscardMissing: no state.json exists (never synced, or AppData lost).
+	DiscardMissing
+	// DiscardCorrupt: malformed JSON, an invalid field, an unknown schema, or
+	// a wrong Vault/Replica ID. The coordinator ignores it and performs
+	// conservative onboarding with a full remote listing.
+	DiscardCorrupt
+	// DiscardUnsupportedPrototype: the file is the schema-v1 prototype device
+	// snapshot, which never shipped with a production provider. It is never
+	// loaded as a baseline and is not ordinary corruption: the device must
+	// explicitly re-enable sync.
+	DiscardUnsupportedPrototype
+	// DiscardProfileMismatch: the provider fingerprint differs. This is a
+	// reconnect/provider switch and requires explicit confirmation; it is
+	// never silently reinterpreted as an empty repository.
+	DiscardProfileMismatch
+	// DiscardRepositoryMismatch: the Repository ID differs. Always stops.
+	DiscardRepositoryMismatch
+)
+
+func (d DiscardReason) String() string {
+	switch d {
+	case NoDiscard:
+		return "usable"
+	case DiscardMissing:
+		return "missing"
+	case DiscardCorrupt:
+		return "corrupt"
+	case DiscardUnsupportedPrototype:
+		return "unsupported-prototype"
+	case DiscardProfileMismatch:
+		return "provider-profile-mismatch"
+	case DiscardRepositoryMismatch:
+		return "repository-id-mismatch"
+	default:
+		return "unknown"
+	}
+}
+
 // SnapshotStoreV2 owns one replica's disposable note snapshot file. There is no
 // backup, append, partial update, compactor, or background goroutine: Replace
 // rewrites the whole file once and Load reads it whole. The store is bound to

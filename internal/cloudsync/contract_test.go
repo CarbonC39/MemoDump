@@ -1,7 +1,6 @@
 package cloudsync
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"os"
 	"strings"
@@ -18,44 +17,6 @@ func loadFixture(t *testing.T, name string) []byte {
 		t.Fatal(err)
 	}
 	return data
-}
-
-// TestCanonicalEntityMatchesFixture is the shared-contract test: both Go and
-// TypeScript must produce the exact canonical bytes and content hashes the
-// fixture pins.
-func TestCanonicalEntityMatchesFixture(t *testing.T) {
-	var fixture struct {
-		Entities []struct {
-			Entity        Entity `json:"entity"`
-			ContentHash   string `json:"contentHash"`
-			CanonicalJSON string `json:"canonicalJson"`
-		} `json:"entities"`
-	}
-	if err := json.Unmarshal(loadFixture(t, "entities.json"), &fixture); err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range fixture.Entities {
-		e := tc.Entity
-		if got := e.ComputeContentHash(); got != tc.ContentHash {
-			t.Errorf("%s: hash = %s, want %s", e.Name, got, tc.ContentHash)
-		}
-		ser, err := e.Serialize()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(ser) != tc.CanonicalJSON {
-			t.Errorf("%s: serialization mismatch\n got %q\nwant %q", e.Name, ser, tc.CanonicalJSON)
-		}
-		// Round-trip: parsing the canonical bytes must reproduce them exactly.
-		parsed, err := ParseEntity([]byte(tc.CanonicalJSON))
-		if err != nil {
-			t.Fatalf("%s: parse error: %v", e.Name, err)
-		}
-		ser2, _ := parsed.Serialize()
-		if string(ser2) != tc.CanonicalJSON {
-			t.Errorf("%s: round-trip mismatch", e.Name)
-		}
-	}
 }
 
 func TestRepositoryDescriptorMatchesFixture(t *testing.T) {
@@ -87,98 +48,6 @@ func TestRepositoryDescriptorMatchesFixture(t *testing.T) {
 		if _, err := ParseRepositoryDescriptor([]byte(tc.JSON)); err == nil {
 			t.Errorf("invalid descriptor accepted: %s", tc.JSON)
 		}
-	}
-}
-
-func TestMalformedEntitiesRejected(t *testing.T) {
-	var fixture struct {
-		EntityCases []struct {
-			Name   string         `json:"name"`
-			Entity map[string]any `json:"entity"`
-		} `json:"entityCases"`
-		RawCases []struct {
-			Name   string `json:"name"`
-			Base64 string `json:"base64,omitempty"`
-			JSON   string `json:"json,omitempty"`
-		} `json:"rawCases"`
-	}
-	if err := json.Unmarshal(loadFixture(t, "malformed-input.json"), &fixture); err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range fixture.EntityCases {
-		raw, err := json.Marshal(tc.Entity)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := ParseEntity(raw); err == nil {
-			t.Errorf("%s: malformed entity accepted", tc.Name)
-		}
-	}
-	for _, tc := range fixture.RawCases {
-		var raw []byte
-		if tc.Base64 != "" {
-			raw, _ = base64.StdEncoding.DecodeString(tc.Base64)
-		} else {
-			raw = []byte(tc.JSON)
-		}
-		if _, err := ParseEntity(raw); err == nil {
-			t.Errorf("%s: malformed raw input accepted", tc.Name)
-		}
-	}
-}
-
-func TestOversizedEntityRejected(t *testing.T) {
-	e := Entity{
-		SchemaVersion: 1, SyncID: "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
-		Kind: KindNote, Name: "big", Markdown: strings.Repeat("x", MaxEntityBytes),
-		UpdatedBy: "1a2b3c4d-1111-4222-8333-444455556666", UpdatedAt: 1,
-	}
-	ser, _ := e.Serialize()
-	if _, err := ParseEntity(ser); err != ErrOversized {
-		t.Fatalf("err = %v, want ErrOversized", err)
-	}
-}
-
-func TestParentCyclesAndMissingParentsRejected(t *testing.T) {
-	a := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	b := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-	n := "nnnnnnnn-nnnn-4nnn-8nnn-nnnnnnnnnnnn"
-	by := "1a2b3c4d-1111-4222-8333-444455556666"
-	folder := func(id, parent string) *Entity {
-		e := &Entity{
-			SchemaVersion: 1, SyncID: id, Kind: KindFolder, ParentID: parent, Name: id[:4],
-			UpdatedBy: by, UpdatedAt: 1,
-		}
-		e.ContentHash = e.ComputeContentHash()
-		return e
-	}
-	// Missing parent: b is referenced but not in the map (keyed by syncId).
-	missing := map[string]*Entity{a: folder(a, b)}
-	if err := ValidateEntities(missing); err == nil {
-		t.Fatal("missing parent accepted")
-	}
-	// Cycle a -> b -> a. The map is keyed by syncId, so the parent lookups
-	// resolve and the DFS reaches the cycle branch.
-	cycle := map[string]*Entity{
-		a: folder(a, b),
-		b: folder(b, a),
-	}
-	if err := ValidateEntities(cycle); err == nil {
-		t.Fatal("parent cycle accepted")
-	}
-	// A note parented to a note is rejected.
-	note := func(id, parent string) *Entity {
-		e := &Entity{SchemaVersion: 1, SyncID: id, Kind: KindNote, ParentID: parent, Name: id[:1],
-			UpdatedBy: by, UpdatedAt: 1}
-		e.ContentHash = e.ComputeContentHash()
-		return e
-	}
-	bad := map[string]*Entity{
-		a: note(a, ""),
-		n: note(n, a),
-	}
-	if err := ValidateEntities(bad); err == nil {
-		t.Fatal("note parented to a note accepted")
 	}
 }
 
@@ -355,32 +224,14 @@ func TestSyncIDValidationFixture(t *testing.T) {
 	}
 }
 
-func TestV5EntityAcceptedAndV5UpdatedByRejected(t *testing.T) {
-	by := "1a2b3c4d-1111-4222-8333-444455556666"
-	mk := func(syncID, parentID string) *Entity {
-		e := &Entity{
-			SchemaVersion: 1, SyncID: syncID, Kind: KindNote, ParentID: parentID, Name: "conflict",
-			Markdown: "# Local version\n", UpdatedBy: by, UpdatedAt: 1,
-		}
-		e.ContentHash = e.ComputeContentHash()
-		return e
-	}
-	// A conflict record may use a v5 Sync ID and a v5 folder parent.
+// TestRepositoryDescriptorRejectsV5ID pins that Repository IDs stay
+// version-4 only, even on a conflict identity.
+func TestRepositoryDescriptorRejectsV5ID(t *testing.T) {
 	conflictID, err := DeriveConflictSyncID("5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
 		StateHash("a", false), StateHash("b", false))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ParseEntity(mustSerialize(t, mk(conflictID, ConflictNamespace))); err != nil {
-		t.Errorf("v5 entity rejected: %v", err)
-	}
-	// updatedBy must stay version-4 only, even on a conflict record.
-	bad := mk(conflictID, "")
-	bad.UpdatedBy = conflictID
-	if err := bad.Validate(); err == nil {
-		t.Errorf("v5 updatedBy accepted")
-	}
-	// Repository IDs stay version-4 only.
 	desc := RepositoryDescriptor{FormatVersion: 1, RepositoryID: conflictID, CreatedAt: 1, MinimumClientVersion: "2.0.0"}
 	data, err := desc.Serialize()
 	if err != nil {
@@ -389,15 +240,6 @@ func TestV5EntityAcceptedAndV5UpdatedByRejected(t *testing.T) {
 	if _, err := ParseRepositoryDescriptor(data); err == nil {
 		t.Errorf("v5 repositoryId accepted")
 	}
-}
-
-func mustSerialize(t *testing.T, e *Entity) []byte {
-	t.Helper()
-	data, err := e.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
 }
 
 func TestRetryClassesFixture(t *testing.T) {

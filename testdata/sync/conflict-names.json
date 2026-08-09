@@ -1,14 +1,14 @@
 {
   "cases": [
     {
-      "conflictSyncId": "04b2cbe6-19cf-584f-bad4-55fa03d9c05a",
-      "expected": "idea (conflict 04b2cbe619cf).md",
+      "conflictSyncId": "1b98a1cb-96a6-5152-ae29-8ae3636bf468",
+      "expected": "idea (conflict 1b98a1cb96a6).md",
       "name": "basic",
       "stem": "idea"
     },
     {
-      "conflictSyncId": "04b2cbe6-19cf-584f-bad4-55fa03d9c05a",
-      "expected": "你好 (conflict 04b2cbe619cf).md",
+      "conflictSyncId": "1b98a1cb-96a6-5152-ae29-8ae3636bf468",
+      "expected": "你好 (conflict 1b98a1cb96a6).md",
       "name": "unicode stem",
       "stem": "你好"
     },

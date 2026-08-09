@@ -712,3 +712,13 @@ func TestNoteStoreCreate(t *testing.T) {
 		t.Fatalf("CreateNoteStore on prototype = %v, want ErrUnsupportedSchema", err)
 	}
 }
+
+// readVault reads a note body from a vault root.
+func readVault(t *testing.T, root, rel string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}

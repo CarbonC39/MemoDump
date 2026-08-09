@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"unicode/utf8"
 
 	"memodump/internal/cloudsync"
@@ -16,6 +17,27 @@ import (
 // (the "notes" key), carries no cursor, and reuses SnapshotEntity's
 // {contentHash, remoteVersion, deleted} per note.
 const SnapshotV2SchemaVersion = 2
+
+// SnapshotName is the per-replica snapshot file inside its state directory:
+// <stateRoot>/<vaultId>/<replicaId>/state.json.
+const SnapshotName = "state.json"
+
+// ErrSnapshotInvalid reports a snapshot that fails structural validation.
+var ErrSnapshotInvalid = fmt.Errorf("invalid snapshot")
+
+// hex64Re matches a lowercase 64-hex digest, used for both provider-profile
+// fingerprints and content hashes.
+var hex64Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// SnapshotEntity is the complete canonical state of one note at the last
+// known-equal moment: the remote contentHash, the deleted bit, and the
+// provider's opaque version/etag. Both the content hash and the deleted bit
+// must match for two states to be equal.
+type SnapshotEntity struct {
+	ContentHash   string `json:"contentHash"`
+	RemoteVersion string `json:"remoteVersion"`
+	Deleted       bool   `json:"deleted"`
+}
 
 // ErrUnsupportedPrototype reports a snapshot that is the schema-v1 prototype
 // device state, which never shipped with a production provider. It must be
