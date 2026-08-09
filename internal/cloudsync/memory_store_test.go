@@ -228,15 +228,11 @@ func TestMemoryStoreCursorRejectAndIncompleteListFaults(t *testing.T) {
 		t.Fatalf("cursor-reject did not fall back to a full baseline: %+v", page.Changes)
 	}
 
-	// An incomplete-list fault silently omits keys: the caller must detect the
-	// incomplete full listing and re-list.
+	// An incomplete-list fault is a typed error, never a silent partial
+	// listing: the engine stops on it.
 	s.ArmIncompleteList(1)
-	page, err = s.List(testCtx, "a", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(page.Changes) != 2 {
-		t.Fatalf("incomplete listing returned %d changes, want 2", len(page.Changes))
+	if _, err := s.List(testCtx, "a", ""); !IsStoreError(err, ErrIncompleteList) {
+		t.Fatalf("incomplete listing error = %v, want ErrIncompleteList", err)
 	}
 	// Without the fault the full listing is complete.
 	page, err = s.List(testCtx, "a", "")

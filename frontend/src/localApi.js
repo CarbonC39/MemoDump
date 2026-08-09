@@ -501,6 +501,15 @@ const localApi = {
     const rec = await createMarkdownRec({ name: base, folder: folder || '', markdown: text })
     return { data: toFull(rec) }
   },
+  // Cloud sync is a server feature; the pure-frontend build has no provider.
+  syncStatus() {
+    return Promise.resolve({ data: { enabled: false, connected: false, experimental: false, noE2EE: false, recoveryCount: 0 } })
+  },
+  syncEnable() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
+  syncRun() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
+  syncDisable() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
+  syncTest() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
+  syncRecovery() { return Promise.resolve({ data: { recovery: [] } }) },
 }
 
 // Persist a brand-new note, avoiding clobbering an existing path. The full

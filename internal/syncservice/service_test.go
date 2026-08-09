@@ -152,6 +152,59 @@ func TestServiceListFailureNeverSynced(t *testing.T) {
 	}
 }
 
+// TestServiceIncompleteListNeverSynced: a typed incomplete-list error from the
+// provider stops the first sync (even with no baseline) and is never reported
+// "synced".
+func TestServiceIncompleteListNeverSynced(t *testing.T) {
+	ctx := context.Background()
+	store := cloudsync.NewMemoryStore()
+	seedNote(t, store, "11111111-1111-4111-8111-111111111111", "a.md", "# A\n")
+	root, state := t.TempDir(), t.TempDir()
+	if _, err := syncindex.EnableNoteStore(root); err != nil {
+		t.Fatal(err)
+	}
+	store.ArmIncompleteList(1)
+	s := newService(root, state, store)
+	res, err := s.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Synced {
+		t.Fatalf("incomplete listing reported synced: %+v", res)
+	}
+	if res.LastError != "incomplete-list" {
+		t.Fatalf("LastError = %q, want incomplete-list", res.LastError)
+	}
+	// The note is not silently missed-and-committed: nothing was pulled.
+	if _, rerr := os.Stat(filepath.Join(root, "a.md")); !os.IsNotExist(rerr) {
+		t.Fatal("note pulled despite the incomplete listing")
+	}
+}
+
+// TestServiceListingErrorNeverSynced: a listing transport error stops the cycle
+// and is never reported "synced".
+func TestServiceListingErrorNeverSynced(t *testing.T) {
+	ctx := context.Background()
+	store := cloudsync.NewMemoryStore()
+	seedNote(t, store, "11111111-1111-4111-8111-111111111111", "a.md", "# A\n")
+	root, state := t.TempDir(), t.TempDir()
+	if _, err := syncindex.EnableNoteStore(root); err != nil {
+		t.Fatal(err)
+	}
+	store.ArmFault("list", &cloudsync.StoreError{Kind: cloudsync.ErrPermission, Message: "denied"})
+	s := newService(root, state, store)
+	res, err := s.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Synced {
+		t.Fatal("listing error reported synced")
+	}
+	if res.LastError != "permission" {
+		t.Fatalf("LastError = %q, want permission", res.LastError)
+	}
+}
+
 // TestServiceConcurrentRunsSerializedByLock: two Services on the same replica
 // cannot run concurrently — one wins the OS lock, the other is refused.
 func TestServiceConcurrentRunsSerializedByLock(t *testing.T) {

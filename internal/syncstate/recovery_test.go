@@ -37,11 +37,11 @@ func TestRecoveryStoreWriteReadIdempotent(t *testing.T) {
 		t.Fatalf("idempotent rewrite changed the file: %v -> %v", info1, info2)
 	}
 
-	md, ok, err := s.Read(syncID, hash)
+	md, _, ok, err := s.Read(syncID, hash)
 	if err != nil || !ok || md != "# v1\n" {
 		t.Fatalf("read = %q, %v, %v", md, ok, err)
 	}
-	if _, ok, err := s.Read(syncID, strings.Repeat("b", 64)); err != nil || ok {
+	if _, _, ok, err := s.Read(syncID, strings.Repeat("b", 64)); err != nil || ok {
 		t.Fatalf("missing hash read = %v, %v", ok, err)
 	}
 }

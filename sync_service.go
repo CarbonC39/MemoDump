@@ -1,9 +1,10 @@
 package main
 
 import (
-	"fmt"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"memodump/internal/cloudsync"
@@ -31,19 +32,31 @@ var syncProvider syncservice.Provider
 // in this experimental phase.
 var syncMemoryRemote = cloudsync.NewMemoryStore()
 
+// syncOpMu serializes the state-mutating sync API operations (enable, run,
+// disable) within the process. Each request builds its own Service, so the
+// service's instance mutex cannot serialize lifecycle operations; this
+// package-level lock does. The replica OS lock still serializes across
+// processes.
+var syncOpMu sync.Mutex
+
 // syncLastRun is the most recent manual-run outcome (redacted) and when it
-// completed. Runs are serialized by the sync service itself.
-var syncLastRun = struct {
-	Result    syncservice.Result
-	Completed time.Time
-}{}
+// completed, guarded by syncLastRunMu because Status reads it concurrently with
+// Run writing it.
+var (
+	syncLastRunMu sync.RWMutex
+	syncLastRun   struct {
+		Result    syncservice.Result
+		Completed time.Time
+	}
+)
 
 func init() {
 	syncProvider = func() (cloudsync.RemoteStore, error) { return syncMemoryRemote, nil }
 }
 
 // syncStateRoot resolves the empty default state root to the OS app-data
-// location, matching the other syncstate helpers.
+// location, matching the other syncstate helpers. All stores must receive the
+// resolved path so the lock, index, snapshot, and recovery agree on one root.
 func syncStateRoot() (string, error) {
 	if syncRoot != "" {
 		return syncRoot, nil
@@ -51,56 +64,77 @@ func syncStateRoot() (string, error) {
 	return syncstate.DefaultStateRoot()
 }
 
-// syncVaultID returns the vault ID from the enabled note-only index, or "" when
-// sync is not enabled.
-func syncVaultID() string {
+// syncVaultID returns the vault ID from the enabled note-only index, or an
+// error when sync is not enabled, the index is corrupt, or reading it fails.
+// Callers must distinguish ErrNotEnabled (never enabled → benign) from corrupt
+// and I/O errors (which must be reported, never treated as "no sync").
+func syncVaultID() (string, error) {
 	store, err := syncindex.LoadNoteStore(dataDir)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return store.Index.VaultID
+	return store.Index.VaultID, nil
 }
 
-// syncIdentity returns the vault and replica IDs for the current data dir,
-// resolving the replica through the device registry.
-func syncIdentity() (vaultID, replicaID string, err error) {
-	vaultID = syncVaultID()
-	if vaultID == "" {
-		return "", "", fmt.Errorf("sync is not enabled")
-	}
-	_, replica, err := syncstate.Resolve(syncRoot, dataDir, vaultID)
+// syncIdentity returns the vault and replica IDs plus the resolved state root
+// for the current data dir, resolving the replica through the device registry.
+func syncIdentity() (vaultID, replicaID, stateRoot string, err error) {
+	stateRoot, err = syncStateRoot()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return vaultID, string(replica), nil
+	vaultID, err = syncVaultID()
+	if err != nil {
+		return "", "", "", err
+	}
+	_, replica, err := syncstate.Resolve(stateRoot, dataDir, vaultID)
+	if err != nil {
+		return "", "", "", err
+	}
+	return vaultID, string(replica), stateRoot, nil
 }
 
-// syncConnected reports whether a completed sync connection exists for the
-// replica (a disposable snapshot on disk). Disable removes it, so the vault
-// stays enabled but disconnected.
+// syncConnectedPath is the persistent connect marker file in a replica's state
+// directory. Its presence means the user has enabled the connection.
+func syncConnectedPath(stateRoot, vaultID, replicaID string) string {
+	return filepath.Join(syncstate.StateDir(stateRoot, vaultID, replicaID), "connected.json")
+}
+
+// syncSetConnected durably records whether sync is enabled (connected) for the
+// replica. Disable clears only this marker — the index, identity, snapshot,
+// and recovery copies are all preserved.
+func syncSetConnected(stateRoot, vaultID, replicaID string, connected bool) error {
+	path := syncConnectedPath(stateRoot, vaultID, replicaID)
+	if connected {
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
+		data, _ := json.Marshal(map[string]bool{"connected": true})
+		return os.WriteFile(path, data, 0600)
+	}
+	return os.Remove(path)
+}
+
+// syncConnected reports whether the user has enabled sync (the connect marker
+// exists).
 func syncConnected() bool {
-	vaultID, replicaID, err := syncIdentity()
+	vaultID, replicaID, stateRoot, err := syncIdentity()
 	if err != nil {
 		return false
 	}
-	root, err := syncStateRoot()
-	if err != nil {
-		return false
-	}
-	_, err = os.Stat(filepath.Join(syncstate.StateDir(root, vaultID, replicaID), syncstate.SnapshotName))
+	_, err = os.Stat(syncConnectedPath(stateRoot, vaultID, replicaID))
 	return err == nil
 }
 
-// buildSyncService assembles the sync service for the current data dir. The
-// vault must already be enabled; the caller holds no lock (the service
-// acquires the replica lock for each run).
+// buildSyncService assembles the sync service for the current data dir, with
+// the resolved state root passed to every store. The vault must be enabled.
 func buildSyncService() (*syncservice.Service, error) {
-	vaultID, replicaID, err := syncIdentity()
+	vaultID, replicaID, stateRoot, err := syncIdentity()
 	if err != nil {
 		return nil, err
 	}
 	return syncservice.New(syncservice.Config{
-		RepoRoot: dataDir, StateRoot: syncRoot,
+		RepoRoot: dataDir, StateRoot: stateRoot,
 		VaultID: vaultID, ReplicaID: replicaID,
 		RepoID: memoryRepoID, Profile: memoryProfile,
 		Provider: syncProvider,
@@ -109,9 +143,9 @@ func buildSyncService() (*syncservice.Service, error) {
 
 // recoveryStore builds the recovery store for the current replica.
 func recoveryStore() (*syncstate.RecoveryStore, error) {
-	vaultID, replicaID, err := syncIdentity()
+	vaultID, replicaID, stateRoot, err := syncIdentity()
 	if err != nil {
 		return nil, err
 	}
-	return syncstate.NewRecoveryStore(syncRoot, vaultID, replicaID)
+	return syncstate.NewRecoveryStore(stateRoot, vaultID, replicaID)
 }

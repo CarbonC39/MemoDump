@@ -86,7 +86,13 @@ func (s *Service) Run(ctx context.Context) (*Result, error) {
 	if err != nil {
 		return &Result{LastError: classify(err)}, nil
 	}
-	res.Synced = true
+	// A cycle with blocked or retried notes (including a potentially incomplete
+	// listing surfacing as remote damage) has not converged: it is never
+	// reported as "synced".
+	res.Synced = res.SnapshotCommitted && res.Blocked == 0 && res.Retry == 0
+	if !res.Synced && res.LastError == "" {
+		res.LastError = "incomplete"
+	}
 	return res, nil
 }
 
@@ -109,7 +115,7 @@ func (s *Service) runOnce(ctx context.Context, remote cloudsync.RemoteStore, loc
 		return nil, err
 	}
 	co := syncrun.NewNoteCoordinator(repo, idx, snaps, recovery, remote, syncrun.NoteConfig{
-		VaultID: s.cfg.VaultID, ReplicaID: s.cfg.ReplicaID,
+		VaultID: s.cfg.VaultID, ReplicaID: s.cfg.ReplicaID, StateRoot: s.cfg.StateRoot,
 		RepoID: s.cfg.RepoID, Profile: s.cfg.Profile, Lock: lock,
 	})
 	st, err := co.Run(ctx)
@@ -158,6 +164,8 @@ func classify(err error) string {
 			return "invalid-response"
 		case cloudsync.ErrUnsupportedCapability:
 			return "unsupported"
+		case cloudsync.ErrIncompleteList:
+			return "incomplete-list"
 		default:
 			return "provider-error"
 		}

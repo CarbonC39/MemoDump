@@ -56,9 +56,10 @@ func noteRecordHash(syncID, path, markdown string, deleted bool) string {
 }
 
 // writeRecovery copies the current local Markdown for a note to the recovery
-// area keyed by (Sync ID, local state hash), atomically and idempotently,
-// BEFORE a delete. A failure prevents the delete. A note already gone has
-// nothing to recover.
+// area keyed by (Sync ID, local state hash), along with the original note path
+// so a restore survives the index-mapping cleanup on a converged deletion,
+// atomically and idempotently, BEFORE a delete. A failure prevents the delete.
+// A note already gone has nothing to recover.
 func (c *NoteCoordinator) writeRecovery(syncID, path string) error {
 	md, _, err := c.repo.ReadVerbatim(path)
 	if err != nil {
@@ -68,5 +69,5 @@ func (c *NoteCoordinator) writeRecovery(syncID, path string) error {
 		return err
 	}
 	hash := noteRecordHash(syncID, path, cloudsync.NormalizeMarkdown(md), false)
-	return c.recovery.Write(syncID, cloudsync.StateHash(hash, false), md)
+	return c.recovery.WriteWithPath(syncID, cloudsync.StateHash(hash, false), path, md)
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"memodump/internal/cloudsync"
 	"memodump/internal/syncindex"
@@ -25,6 +26,10 @@ func setSyncEnv(t *testing.T, dir, stateRoot string, provider syncservice.Provid
 		provider = oldProvider
 	}
 	dataDir, syncRoot, syncProvider = dir, stateRoot, provider
+	syncLastRunMu.Lock()
+	syncLastRun.Result = syncservice.Result{}
+	syncLastRun.Completed = time.Time{}
+	syncLastRunMu.Unlock()
 	t.Cleanup(func() { dataDir, syncRoot, syncProvider = oldDataDir, oldSyncRoot, oldProvider })
 }
 
@@ -67,6 +72,60 @@ func decodeSync[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
 
 // syncRunJSON mirrors the syncservice.Result wire shape (Go default field
 // names) for assertions.
+// TestSyncApiRecoveryListReportsRealErrors: a vault that has never enabled sync
+// returns an empty recovery list, but a real state error (corrupt recovery
+// area) is reported as 500 — never a misleading empty list.
+func TestSyncApiRecoveryListReportsRealErrors(t *testing.T) {
+	dir, state := t.TempDir(), t.TempDir()
+	setSyncEnv(t, dir, state, nil)
+
+	// Not enabled yet: empty list, not an error.
+	list := decodeSync[map[string]any](t, doJSON(t, "GET", "/api/sync/recovery", nil))
+	if items, _ := list["recovery"].([]any); len(items) != 0 {
+		t.Fatalf("not-enabled recovery = %+v, want empty", list)
+	}
+
+	// Enabled, then the recovery area becomes corrupt: 500, not [].
+	doJSON(t, "POST", "/api/sync/enable", nil)
+	vaultID, replicaID, stateRoot, err := syncIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryDir := filepath.Join(syncstate.StateDir(stateRoot, vaultID, replicaID), syncstate.RecoveryDirName)
+	if err := os.MkdirAll(filepath.Dir(recoveryDir), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(recoveryDir, []byte("not a directory"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	handleSyncRecoveryList(rec, httptest.NewRequest(http.MethodGet, "/api/sync/recovery", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("corrupt recovery list status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSyncApiRecoveryListReportsCorruptIndex: a corrupt sync index is a real
+// error, never disguised as "no recovery copies".
+func TestSyncApiRecoveryListReportsCorruptIndex(t *testing.T) {
+	dir, state := t.TempDir(), t.TempDir()
+	setSyncEnv(t, dir, state, nil)
+	doJSON(t, "POST", "/api/sync/enable", nil)
+
+	// Corrupt both the primary index and its backup.
+	corrupt := []byte(`{not json`)
+	for _, name := range []string{"sync-index.json", "sync-index.json.bak"} {
+		if err := os.WriteFile(filepath.Join(dir, ".memodump", name), corrupt, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := httptest.NewRecorder()
+	handleSyncRecoveryList(rec, httptest.NewRequest(http.MethodGet, "/api/sync/recovery", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("corrupt index recovery list status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
 type syncRunJSON struct {
 	Synced            bool
 	Scanned           int
@@ -110,11 +169,16 @@ func TestSyncApiEnableRunStatusDisable(t *testing.T) {
 		t.Fatalf("disable = %+v", ds)
 	}
 	st = decodeSync[map[string]any](t, doJSON(t, "GET", "/api/sync/status", nil))
-	if st["enabled"] != true || st["connected"] != false {
-		t.Fatalf("status after disable = %+v, want enabled but disconnected", st)
+	if st["enabled"] != false || st["connected"] != false {
+		t.Fatalf("status after disable = %+v, want disabled", st)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "idea.md")); err != nil {
 		t.Fatal("disable deleted the local note")
+	}
+	// While disabled, a manual run is refused.
+	runAfter := decodeSync[map[string]any](t, doJSON(t, "POST", "/api/sync/run", nil))
+	if runAfter["error"] == nil {
+		t.Fatalf("run while disabled = %+v, want refused", runAfter)
 	}
 }
 
@@ -186,7 +250,7 @@ func TestSyncApiRecoveryListRestore(t *testing.T) {
 	doJSON(t, "POST", "/api/sync/enable", nil)
 
 	// Seed a recovery copy for a sync ID whose indexed path is a.md.
-	vaultID, replicaID, err := syncIdentity()
+	vaultID, replicaID, _, err := syncIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}

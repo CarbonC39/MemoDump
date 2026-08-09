@@ -16,6 +16,7 @@ const state = reactive({
   lastRun: null,
   lastCompleted: null,
   recovery: [],
+  recoveryError: '',
   busy: false,
 })
 
@@ -38,7 +39,21 @@ export async function refreshSyncSettings() {
     state.noE2EE = !!d.noE2EE
     state.lastRun = d.lastRun || null
     state.lastCompleted = d.lastCompleted || null
-    state.recovery = d.recovery || []
+    // The status carries only the count; fetch the detailed copies when the
+    // vault is enabled, and surface a failure instead of faking an empty list.
+    if (state.enabled) {
+      try {
+        const rec = await apiClient.syncRecovery()
+        state.recovery = (rec.data && rec.data.recovery) || []
+        state.recoveryError = ''
+      } catch (e) {
+        state.recovery = []
+        state.recoveryError = e?.response?.data?.error || 'recovery-unavailable'
+      }
+    } else {
+      state.recovery = []
+      state.recoveryError = ''
+    }
   } catch (_) {
     // A pre-login 401 redirects to Login; leave initialization retryable.
     return
@@ -77,6 +92,7 @@ export async function disableSync() {
   return withBusy(async () => {
     const { data } = await apiClient.syncDisable()
     state.connected = false
+    state.enabled = false
     return data
   })
 }
@@ -84,6 +100,13 @@ export async function disableSync() {
 export async function testSync() {
   return withBusy(async () => {
     const { data } = await apiClient.syncTest()
+    return data
+  })
+}
+
+export async function restoreRecovery(syncId, stateHash) {
+  return withBusy(async () => {
+    const { data } = await apiClient.syncRecoveryRestore({ syncId, stateHash })
     return data
   })
 }

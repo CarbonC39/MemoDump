@@ -191,11 +191,17 @@ func notePathConflicts(local map[string]cloudsync.NoteLocalObservation, remote m
 	return blocked
 }
 
-// listNoteKeys enumerates the complete set of remote note keys. A transport or
-// listing error stops the cycle: a partial remote view must never drive
-// decisions. Unrelated valid notes synchronize only when the listing is
-// complete.
+// listNoteKeys enumerates the complete set of remote note keys in one full
+// (paginated) listing. A transport, listing, or typed incomplete-list error
+// stops the cycle: the provider must signal an incomplete listing explicitly
+// (ErrIncompleteList), so a partial remote view never drives decisions and a
+// full listing is not repeated to guess at completeness.
 func listNoteKeys(ctx context.Context, remote cloudsync.RemoteStore) (map[string]bool, error) {
+	return listNoteKeysOnce(ctx, remote)
+}
+
+// listNoteKeysOnce performs one full (paginated) listing of note keys.
+func listNoteKeysOnce(ctx context.Context, remote cloudsync.RemoteStore) (map[string]bool, error) {
 	keys := make(map[string]bool)
 	page, err := remote.List(ctx, cloudsync.NoteKeyPrefix, "")
 	if err != nil {

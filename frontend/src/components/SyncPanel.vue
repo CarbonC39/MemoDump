@@ -1,5 +1,5 @@
 <template>
-  <div class="settings-section">
+  <div v-if="!isLocalBuild" class="settings-section">
     <div class="settings-section-header-row">
       <button
         type="button"
@@ -46,8 +46,24 @@
       <div v-if="state.lastRun" class="sync-status">
         <div>{{ t('settings.syncLastRun') }}: {{ state.lastRun.Synced ? t('settings.syncOk') : t('settings.syncFailed') }}</div>
         <div v-if="state.lastRun.LastError">{{ t('settings.syncError') }}: {{ state.lastRun.LastError }}</div>
+        <div v-if="state.lastCompleted">{{ t('settings.syncLastCompleted') }}: {{ formatTime(state.lastCompleted) }}</div>
         <div>{{ t('settings.syncConflicts') }}: {{ state.lastRun.Conflicts || 0 }}</div>
         <div>{{ t('settings.syncRecoveryCount') }}: {{ state.recovery.length }}</div>
+      </div>
+
+      <div v-if="state.recovery.length" class="sync-recovery">
+        <div class="setting-row-label">{{ t('settings.syncRecoveryCopies') }}</div>
+        <ul class="sync-recovery-list">
+          <li v-for="(copy, i) in state.recovery" :key="copy.syncId + copy.stateHash">
+            <span>{{ copy.path || copy.syncId }} ({{ copy.size }} B)</span>
+            <button type="button" class="btn btn-sm btn-outline" :disabled="state.busy" @click="onRestore(i)">
+              {{ t('settings.syncRestore') }}
+            </button>
+          </li>
+        </ul>
+      </div>
+      <div v-else-if="state.recoveryError" class="setting-row">
+        <span class="setting-row-label error-text">{{ t('settings.syncRecoveryError') }}: {{ state.recoveryError }}</span>
       </div>
 
       <div v-if="syncMessage" class="setting-row">
@@ -61,12 +77,14 @@
 import { onMounted, ref } from 'vue'
 import { useI18n } from '../i18n'
 import {
+  isLocalBuild,
   initSyncSettings,
   getSyncSettings,
   enableSync,
   runSync,
   disableSync,
   testSync,
+  restoreRecovery,
 } from '../composables/useSyncSettings'
 
 const { t } = useI18n()
@@ -76,6 +94,11 @@ const syncMessage = ref('')
 const syncError = ref(false)
 
 onMounted(() => initSyncSettings())
+
+function formatTime(value) {
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString()
+}
 
 async function onEnable() {
   syncMessage.value = ''
@@ -121,6 +144,19 @@ async function onTest() {
     syncError.value = false
   } catch (e) {
     syncMessage.value = e?.response?.data?.error || t('settings.syncTestFailed')
+    syncError.value = true
+  }
+}
+
+async function onRestore(index) {
+  const copy = state.recovery[index]
+  syncMessage.value = ''
+  try {
+    await restoreRecovery(copy.syncId, copy.stateHash)
+    syncMessage.value = t('settings.syncRestoredOk')
+    syncError.value = false
+  } catch (e) {
+    syncMessage.value = e?.response?.data?.error || t('settings.syncFailed')
     syncError.value = true
   }
 }

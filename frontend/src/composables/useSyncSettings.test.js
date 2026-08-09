@@ -7,6 +7,7 @@ vi.mock('../api', () => ({
     syncRun: vi.fn(),
     syncDisable: vi.fn(),
     syncTest: vi.fn(),
+    syncRecovery: vi.fn(),
   },
 }))
 
@@ -15,6 +16,7 @@ import {
   enableSync,
   getSyncSettings,
   initSyncSettings,
+  refreshSyncSettings,
   runSync,
   disableSync,
   testSync,
@@ -30,8 +32,11 @@ describe('sync settings', () => {
         noE2EE: true,
         lastRun: { Synced: true, Conflicts: 1, LastError: '' },
         lastCompleted: '2026-08-08T00:00:00Z',
-        recovery: [{ syncId: 'x', stateHash: 'a' }],
+        recoveryCount: 1,
       },
+    })
+    apiClient.syncRecovery.mockResolvedValue({
+      data: { recovery: [{ syncId: 'x', stateHash: 'a', path: 'a.md', size: 9 }] },
     })
     apiClient.syncEnable.mockResolvedValue({ data: { enabled: true } })
     apiClient.syncRun.mockResolvedValue({ data: { Synced: true, Conflicts: 0 } })
@@ -58,7 +63,16 @@ describe('sync settings', () => {
     expect(getSyncSettings().lastCompleted).toBeTruthy()
     await disableSync()
     expect(getSyncSettings().connected).toBe(false)
+    expect(getSyncSettings().enabled).toBe(false)
     await testSync()
     expect(apiClient.syncTest).toHaveBeenCalled()
+  })
+
+  it('surfaces a recovery error instead of faking an empty list', async () => {
+    apiClient.syncRecovery.mockRejectedValue({ response: { data: { error: 'sync index corrupt' } } })
+    await refreshSyncSettings()
+    const s = getSyncSettings()
+    expect(s.recovery).toHaveLength(0)
+    expect(s.recoveryError).toContain('sync index corrupt')
   })
 })

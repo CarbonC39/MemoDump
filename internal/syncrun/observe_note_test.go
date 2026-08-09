@@ -238,26 +238,15 @@ func TestObserveRemoteUnionIncompleteListing(t *testing.T) {
 		t.Fatalf("idR2 remote = %+v, want live", r)
 	}
 
-	// An incomplete listing hides idR2: it is RemoteMissing, and with a baseline
-	// the decision blocks instead of deleting anything.
+	// A silently incomplete listing is a typed error from the provider: the
+	// cycle stops instead of driving decisions from a partial remote view.
 	s.ArmIncompleteList(1)
-	keys, err = listNoteKeys(ctx, s)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := listNoteKeys(ctx, s); !cloudsync.IsStoreError(err, cloudsync.ErrIncompleteList) {
+		t.Fatalf("incomplete listing error = %v, want ErrIncompleteList", err)
 	}
-	if len(keys) != 1 {
-		t.Fatalf("incomplete listing returned %d keys, want 1", len(keys))
-	}
-	remotes, err = noteRemoteObservations(ctx, s, keys, ids)
-	if r := remotes[idR2]; r.State != cloudsync.RemoteMissing {
-		t.Fatalf("hidden note = %+v, want missing (not a tombstone)", r)
-	}
-	local := map[string]cloudsync.NoteLocalObservation{
-		idR1: {SyncID: idR1, State: cloudsync.LocalLive, Path: "a.md"},
-		idR2: {SyncID: idR2, State: cloudsync.LocalAbsent},
-	}
-	d := cloudsync.DecideNote(local[idR2], remotes[idR2], &cloudsync.Baseline{ContentHash: strings.Repeat("b", 64), RemoteVersion: "1"}, false)
-	if d.Kind != cloudsync.NoteBlock {
-		t.Fatalf("baseline note with a hidden remote = %s, want block", d.Kind)
+	// A listing transport error also stops the cycle.
+	s.ArmFault("list", &cloudsync.StoreError{Kind: cloudsync.ErrPermission, Message: "denied"})
+	if _, err := listNoteKeys(ctx, s); err == nil {
+		t.Fatal("listing transport error must stop the cycle")
 	}
 }

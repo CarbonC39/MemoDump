@@ -119,7 +119,12 @@
     "syncRunFailed": "Sync failed.",
     "syncDisabledOk": "Sync disabled.",
     "syncTestOk": "Provider reachable.",
-    "syncTestFailed": "Provider test failed."
+    "syncTestFailed": "Provider test failed.",
+    "syncLastCompleted": "Last completed",
+    "syncRecoveryCopies": "Recoverable copies",
+    "syncRestore": "Restore",
+    "syncRestoredOk": "Restored.",
+    "syncRecoveryError": "Could not load recovery copies"
   },
   "media": {
     "imageOff": "Image upload is not configured — set it up in Settings first.",

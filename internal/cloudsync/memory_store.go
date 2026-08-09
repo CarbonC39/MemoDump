@@ -42,8 +42,8 @@ type logEntry struct {
 //     caller cannot know whether the write landed and must re-read;
 //   - CursorReject: List ignores even a valid cursor and returns a full
 //     baseline (as if the cursor were rejected by the provider);
-//   - IncompleteSkip: List omits the last N keys from an otherwise complete
-//     listing, simulating an incomplete scan.
+//   - IncompleteSkip: List fails with a typed ErrIncompleteList error instead
+//     of returning a partial listing (the engine stops on it).
 type Fault struct {
 	Op             string
 	Error          *StoreError
@@ -374,14 +374,10 @@ func (s *MemoryStore) List(ctx context.Context, prefix, cursor string) (ChangePa
 	}
 
 	if fault != nil && fault.IncompleteSkip > 0 && !delta {
-		// Damage: the listing silently omits the last keys. Never report this
-		// as "everything is fine" — the caller treats an incomplete full list
-		// as suspect and re-lists.
-		if len(pending) > fault.IncompleteSkip {
-			pending = pending[:len(pending)-fault.IncompleteSkip]
-		} else {
-			pending = nil
-		}
+		// A full listing that does not enumerate the complete key set is a
+		// typed incomplete-list error: the engine must stop rather than drive
+		// decisions from a partial remote view. It is never a silent omission.
+		return ChangePage{}, &StoreError{Kind: ErrIncompleteList, Message: "incomplete listing"}
 	}
 
 	const pageSize = 100

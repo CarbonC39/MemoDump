@@ -148,6 +148,9 @@ const remoteApi = {
     syncRecovery() {
         return api.get('/sync/recovery')
     },
+    syncRecoveryRestore(body) {
+        return api.post('/sync/recovery/restore', body)
+    },
 }
 
 // Select backend: localApi (IndexedDB, no server) when built with VITE_LOCAL=1,

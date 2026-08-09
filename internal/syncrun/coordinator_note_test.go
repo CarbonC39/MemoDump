@@ -55,8 +55,8 @@ func newNoteRep(t *testing.T, root, stateRoot, replicaID string, remote cloudsyn
 	}
 	t.Cleanup(func() { _ = lock.Close() })
 	co := NewNoteCoordinator(repo, idx, snaps, recovery, remote, NoteConfig{
-		VaultID: noteVaultID, ReplicaID: replicaID, RepoID: noteRepoID, Profile: noteProfile,
-		Lock: lock,
+		VaultID: noteVaultID, ReplicaID: replicaID, StateRoot: stateRoot,
+		RepoID: noteRepoID, Profile: noteProfile, Lock: lock,
 	})
 	return &noteRep{root: root, stateRoot: stateRoot, idx: idx, co: co, lock: lock}
 }
@@ -325,5 +325,57 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 		if err := os.WriteFile(abs, []byte(md), 0644); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestNoteCoordinatorRejectsWrongReplicaLock: a coordinator constructed with
+// another replica's OS lock must refuse to run — the lock guards this replica's
+// index and snapshot, and ownership must match.
+func TestNoteCoordinatorRejectsWrongReplicaLock(t *testing.T) {
+	root, state := t.TempDir(), t.TempDir()
+	repo, err := vaultfs.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx, err := syncindex.EnableNoteStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snaps, err := syncstate.NewSnapshotStoreV2(state, noteVaultID, noteRepA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := syncstate.NewRecoveryStore(state, noteVaultID, noteRepA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The lock for a DIFFERENT replica is held, but it is not this one's.
+	wrongLock, err := syncstate.AcquireReplicaLock(state, noteVaultID, noteRepB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wrongLock.Close()
+
+	co := NewNoteCoordinator(repo, idx, snaps, recovery, cloudsync.NewMemoryStore(), NoteConfig{
+		VaultID: noteVaultID, ReplicaID: noteRepA, StateRoot: state,
+		RepoID: noteRepoID, Profile: noteProfile, Lock: wrongLock,
+	})
+	if _, err := co.Run(context.Background()); err == nil {
+		t.Fatal("coordinator accepted another replica's lock")
+	}
+
+	// The same vault/replica but a DIFFERENT state root is also rejected.
+	otherState := t.TempDir()
+	otherLock, err := syncstate.AcquireReplicaLock(otherState, noteVaultID, noteRepA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer otherLock.Close()
+	co2 := NewNoteCoordinator(repo, idx, snaps, recovery, cloudsync.NewMemoryStore(), NoteConfig{
+		VaultID: noteVaultID, ReplicaID: noteRepA, StateRoot: state,
+		RepoID: noteRepoID, Profile: noteProfile, Lock: otherLock,
+	})
+	if _, err := co2.Run(context.Background()); err == nil {
+		t.Fatal("coordinator accepted a lock from a different state root")
 	}
 }

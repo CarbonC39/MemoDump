@@ -52,14 +52,33 @@ func (s *RecoveryStore) pathFor(syncID, stateHash string) (string, error) {
 // Write stores markdown for (syncID, stateHash) atomically and idempotently: a
 // unique temp file, file sync, atomic rename, and a directory sync. Writing the
 // same content twice is a no-op (no rewrite), and an old copy for a different
-// state hash is never overwritten or removed.
+// state hash is never overwritten or removed. The original note path is not
+// recorded; use WriteWithPath when the path must survive index cleanup.
 func (s *RecoveryStore) Write(syncID, stateHash, markdown string) error {
+	return s.WriteWithPath(syncID, stateHash, "", markdown)
+}
+
+// pathPath returns the sidecar path for a recovery copy's original note path.
+func (s *RecoveryStore) pathPath(syncID, stateHash string) (string, error) {
+	mdPath, err := s.pathFor(syncID, stateHash)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(mdPath, ".md") + ".path", nil
+}
+
+// WriteWithPath stores markdown plus the original note path for (syncID,
+// stateHash), atomically and idempotently. The path sidecar lets a restore find
+// the note's location even after the coordinator cleans up the index mapping on
+// a converged deletion.
+func (s *RecoveryStore) WriteWithPath(syncID, stateHash, notePath, markdown string) error {
 	path, err := s.pathFor(syncID, stateHash)
 	if err != nil {
 		return err
 	}
 	if existing, rerr := os.ReadFile(path); rerr == nil && string(existing) == markdown {
-		return nil // idempotent
+		// Content is idempotent; still ensure the path sidecar is durable.
+		return s.writePathSidecar(syncID, stateHash, notePath)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
@@ -85,23 +104,71 @@ func (s *RecoveryStore) Write(syncID, stateHash, markdown string) error {
 	if err := s.io.Rename(tmpPath, path); err != nil {
 		return err
 	}
-	return s.io.SyncDir(dir)
+	if err := s.io.SyncDir(dir); err != nil {
+		return err
+	}
+	return s.writePathSidecar(syncID, stateHash, notePath)
 }
 
-// Read returns the recovered Markdown for a (Sync ID, state hash) pair.
-func (s *RecoveryStore) Read(syncID, stateHash string) (string, bool, error) {
+// writePathSidecar durably records the original note path for a recovery copy.
+func (s *RecoveryStore) writePathSidecar(syncID, stateHash, notePath string) error {
+	side, err := s.pathPath(syncID, stateHash)
+	if err != nil {
+		return err
+	}
+	if notePath == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(side), 0755); err != nil {
+		return err
+	}
+	if existing, rerr := os.ReadFile(side); rerr == nil && string(existing) == notePath {
+		return nil // idempotent
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(side), ".recovery-path-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := tmp.WriteString(notePath); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, side); err != nil {
+		return err
+	}
+	return s.io.SyncDir(filepath.Dir(side))
+}
+
+// Read returns the recovered Markdown and the original note path ("" when the
+// copy predates path recording) for a (Sync ID, state hash) pair.
+func (s *RecoveryStore) Read(syncID, stateHash string) (markdown, notePath string, ok bool, err error) {
 	path, err := s.pathFor(syncID, stateHash)
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 	data, rerr := os.ReadFile(path)
 	if rerr != nil {
 		if os.IsNotExist(rerr) {
-			return "", false, nil
+			return "", "", false, nil
 		}
-		return "", false, rerr
+		return "", "", false, rerr
 	}
-	return string(data), true, nil
+	side, serr := s.pathPath(syncID, stateHash)
+	if serr == nil {
+		if b, e := os.ReadFile(side); e == nil {
+			notePath = string(b)
+		}
+	}
+	return string(data), notePath, true, nil
 }
 
 // List returns every recovered copy for a Sync ID as state hash -> markdown.
@@ -133,10 +200,12 @@ func (s *RecoveryStore) List(syncID string) (map[string]string, error) {
 }
 
 // RecoveryCopy is one recoverable-delete copy: the Sync ID it belongs to, the
-// state hash it was saved under, and the recovered Markdown.
+// state hash it was saved under, the original note path (when recorded), and
+// the recovered Markdown.
 type RecoveryCopy struct {
 	SyncID    string
 	StateHash string
+	Path      string
 	Markdown  string
 }
 
@@ -165,7 +234,14 @@ func (s *RecoveryStore) ListAll() ([]RecoveryCopy, error) {
 		}
 		sort.Strings(hashes)
 		for _, h := range hashes {
-			out = append(out, RecoveryCopy{SyncID: id.Name(), StateHash: h, Markdown: copies[h]})
+			_, notePath, ok, err := s.Read(id.Name(), h)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
+			out = append(out, RecoveryCopy{SyncID: id.Name(), StateHash: h, Path: notePath, Markdown: copies[h]})
 		}
 	}
 	return out, nil

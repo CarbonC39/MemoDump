@@ -28,6 +28,7 @@ import (
 type NoteConfig struct {
 	VaultID     string
 	ReplicaID   string
+	StateRoot   string
 	RepoID      string
 	Profile     string
 	Lock        *syncstate.Lock
@@ -75,8 +76,12 @@ func (c *NoteCoordinator) Run(ctx context.Context) (*NoteStatus, error) {
 
 	// A production coordinator must never run without verified replica-lock
 	// ownership: the lock guards the index and snapshot against a concurrent
-	// process.
-	if c.cfg.Lock == nil || !c.cfg.Lock.Held() {
+	// process, and it must be THIS replica's lock (vault, replica, and state
+	// root), not another one's.
+	if c.cfg.Lock == nil || !c.cfg.Lock.For(c.cfg.VaultID, c.cfg.ReplicaID, c.cfg.StateRoot) {
+		return st, fmt.Errorf("coordinator requires this replica's OS lock")
+	}
+	if !c.cfg.Lock.Held() {
 		return st, fmt.Errorf("coordinator requires the replica OS lock")
 	}
 

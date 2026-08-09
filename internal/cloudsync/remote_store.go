@@ -33,6 +33,10 @@ const (
 	// ErrRetryableTransport: a transient network failure that may succeed on
 	// retry.
 	ErrRetryableTransport
+	// ErrIncompleteList: a full listing did not enumerate the complete key set.
+	// This is never a silent omission — the provider must signal it — and it
+	// stops the cycle so a partial remote view never drives decisions.
+	ErrIncompleteList
 )
 
 func (k StoreErrorKind) String() string {
@@ -55,6 +59,8 @@ func (k StoreErrorKind) String() string {
 		return "unsupported-capability"
 	case ErrRetryableTransport:
 		return "retryable-transport"
+	case ErrIncompleteList:
+		return "incomplete-list"
 	default:
 		return "unknown"
 	}

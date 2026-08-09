@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"memodump/internal/cloudsync"
@@ -15,7 +16,8 @@ func (r *noteRep) recoveryDir() string {
 	return filepath.Join(r.stateRoot, noteVaultID, r.co.cfg.ReplicaID, "recovery")
 }
 
-// recoveryFiles lists the recovery copies written for a Sync ID.
+// recoveryFiles lists the recovery Markdown copies written for a Sync ID (the
+// .path sidecars are metadata, not copies).
 func (r *noteRep) recoveryFiles(t *testing.T, syncID string) []string {
 	t.Helper()
 	dir := filepath.Join(r.recoveryDir(), syncID)
@@ -28,7 +30,9 @@ func (r *noteRep) recoveryFiles(t *testing.T, syncID string) []string {
 	}
 	var out []string
 	for _, e := range entries {
-		out = append(out, e.Name())
+		if strings.HasSuffix(e.Name(), ".md") {
+			out = append(out, e.Name())
+		}
 	}
 	return out
 }
@@ -185,4 +189,47 @@ func TestNoteTombstoneRacePreservesLocalEdit(t *testing.T) {
 		t.Fatal("the racing edit was lost: no conflict note carries it")
 	}
 	_ = idA
+}
+
+// TestNoteRecoveryRestoresAfterConvergedDeletion: after a pulled tombstone
+// deletes a note and the converged-deletion cleanup drops the index mapping,
+// the recovery copy still carries the original path and can be restored.
+func TestNoteRecoveryRestoresAfterConvergedDeletion(t *testing.T) {
+	ctx := context.Background()
+	remote := cloudsync.NewMemoryStore()
+	a := newNoteRep(t, t.TempDir(), t.TempDir(), noteRepA, remote)
+	b := newNoteRep(t, t.TempDir(), t.TempDir(), noteRepB, remote)
+	writeFiles(t, a.root, map[string]string{"dir/a.md": "# recover me\n"})
+	converge(ctx, t, a, b)
+
+	// A deletes dir/a.md; B applies the pulled tombstone and its index mapping
+	// is cleaned up on the converged deletion.
+	if err := os.Remove(filepath.Join(a.root, "dir", "a.md")); err != nil {
+		t.Fatal(err)
+	}
+	converge(ctx, t, a, b)
+	if _, ok := b.idx.IDByPath("dir/a.md"); ok {
+		t.Fatal("converged deletion left the index mapping")
+	}
+
+	// The recovery copy kept the original path.
+	copies, err := b.co.recovery.ListAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(copies) != 1 || copies[0].Path != "dir/a.md" || copies[0].Markdown != "# recover me\n" {
+		t.Fatalf("recovery copies = %+v, want dir/a.md with the markdown", copies)
+	}
+
+	// Restore writes the markdown back at the recorded path.
+	repo, err := vaultfs.New(b.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Apply(copies[0].Path, copies[0].Markdown, ""); err != nil {
+		t.Fatal(err)
+	}
+	if b.noteBody("dir/a.md") != "# recover me\n" {
+		t.Fatal("restored note missing or wrong")
+	}
 }
