@@ -248,9 +248,80 @@ func TestSyncApiResetAllowsFreshSetup(t *testing.T) {
 	}
 }
 
+// TestSyncApiEnableRefusesChangedProvider: enable must also respect the pinned
+// provider profile — even when another remote carries a byte-identical
+// repo.json, switching providers is refused without touching the record.
+func TestSyncApiEnableRefusesChangedProvider(t *testing.T) {
+	dir, state := t.TempDir(), t.TempDir()
+	memA, memB := cloudsync.NewMemoryStore(), cloudsync.NewMemoryStore()
+	storeA := &profileStore{RemoteStore: memA, profile: "profile-a", probeOK: true}
+	storeB := &profileStore{RemoteStore: memB, profile: "profile-b", probeOK: true}
+	cur := storeA
+	setSyncEnv(t, dir, state, func() (cloudsync.RemoteStore, error) { return cur, nil })
+
+	doJSON(t, "POST", "/api/sync/enable", nil)
+	before, err := syncReadConnected()
+	if err != nil || before == nil || !before.Connected {
+		t.Fatalf("record after enable = %+v, %v", before, err)
+	}
+	doJSON(t, "POST", "/api/sync/disable", nil)
+
+	// Provider B carries a copy of the SAME repo.json but is a different remote.
+	data, _, rerr := memA.Read(context.Background(), "repo.json")
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if err := memB.Seed("repo.json", data, "1"); err != nil {
+		t.Fatal(err)
+	}
+	cur = storeB
+
+	en := decodeSync[map[string]any](t, doJSON(t, "POST", "/api/sync/enable", nil))
+	if en["enabled"] == true {
+		t.Fatalf("enable on a changed provider = %+v, want refusal", en)
+	}
+	after, err := syncReadConnected()
+	if err != nil || after == nil {
+		t.Fatalf("record after refused enable = %+v, %v", after, err)
+	}
+	if after.Connected {
+		t.Fatal("refused enable still connected the vault")
+	}
+	if after.Profile != before.Profile || after.RepoID != before.RepoID {
+		t.Fatalf("refused enable mutated the record: before %+v, after %+v", before, after)
+	}
+}
+
+// TestSyncApiResetBlockedByLock: the reset flow holds the replica OS lock, so
+// it is refused while a cycle in another process (or another handle) holds it —
+// a snapshot delete can never race an in-flight commit.
+func TestSyncApiResetBlockedByLock(t *testing.T) {
+	dir, state := t.TempDir(), t.TempDir()
+	setSyncEnv(t, dir, state, nil)
+	doJSON(t, "POST", "/api/sync/enable", nil)
+	vaultID, replicaID, stateRoot, err := syncIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := syncstate.AcquireReplicaLock(stateRoot, vaultID, replicaID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+
+	rs := decodeSync[map[string]any](t, doJSON(t, "POST", "/api/sync/reset", nil))
+	if rs["reset"] == true {
+		t.Fatalf("reset while a cycle holds the lock = %+v, want refusal", rs)
+	}
+	if rs["error"] == nil {
+		t.Fatal("reset must report the lock contention")
+	}
+}
+
 // TestSyncStatusSurfacesCorruptConnectionRecord: a corrupt connection record is
 // exposed as connectionError in the status instead of silently reporting
-// "disabled".
+// "disabled", and the record still counts as present so the reset affordance is
+// available.
 func TestSyncStatusSurfacesCorruptConnectionRecord(t *testing.T) {
 	dir, state := t.TempDir(), t.TempDir()
 	setSyncEnv(t, dir, state, nil)
@@ -268,6 +339,9 @@ func TestSyncStatusSurfacesCorruptConnectionRecord(t *testing.T) {
 	st := decodeSync[map[string]any](t, doJSON(t, "GET", "/api/sync/status", nil))
 	if st["connectionError"] == nil {
 		t.Fatalf("status = %+v, want connectionError surfaced", st)
+	}
+	if st["connection"] != true {
+		t.Fatalf("status = %+v, want connection=true so reset is available", st)
 	}
 }
 

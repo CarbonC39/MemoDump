@@ -117,11 +117,15 @@ func syncRepoIdentity(ctx context.Context, remote cloudsync.RemoteStore) (repoID
 // EXPLICIT enable flow — the only place repo.json is ever created. A missing
 // descriptor is created only-if-absent; a lost concurrent create race re-reads
 // the winner. A vault pinned to a repository (the connection record carries a
-// RepoID, whether connected or disabled) must match it; a changed or lost
-// repository is refused instead of silently re-initializing. The deliberate
-// switch happens through the reset/reconnect flow.
+// RepoID) must match it, and a vault pinned to a provider (the record carries a
+// Profile) must still be on that provider: a changed provider or repository is
+// refused without modifying the record. The deliberate switch happens through
+// the reset/reconnect flow.
 func syncRepoSetup(ctx context.Context, remote cloudsync.RemoteStore, prev *syncConnectionRecord) (repoID, profile string, err error) {
 	profile = providerProfile(remote)
+	if prev != nil && prev.Profile != "" && prev.Profile != profile {
+		return "", "", fmt.Errorf("sync provider changed (was %s, now %s); reset and re-enable sync to switch", shortID(prev.Profile), shortID(profile))
+	}
 	data, _, rerr := remote.Read(ctx, "repo.json")
 	if rerr == nil {
 		parsed, perr := cloudsync.ParseRepositoryDescriptor(data)
@@ -324,19 +328,45 @@ func syncConnected() bool {
 	return err == nil && rec != nil && rec.Connected
 }
 
-// syncReplicaReset is the explicit reconnect/reset flow. It discards the
-// replica's disposable snapshot and clears the connection record (identity
-// pin), so the next enable starts a fresh setup — the ONLY deliberate way to
-// switch repositories or recreate a lost one. Recovery copies and local notes
-// are never touched.
-func syncReplicaReset() error {
+// syncConnectionExists reports whether a connection-record file exists for this
+// replica, even when it is corrupt or unreadable — the status uses it so a
+// corrupt record still surfaces the reset/reconnect affordance.
+func syncConnectionExists() bool {
 	vaultID, replicaID, stateRoot, err := syncIdentity()
 	if err != nil {
-		if errors.Is(err, syncindex.ErrNotEnabled) {
-			return nil // never enabled: nothing to reset
+		return false
+	}
+	_, rerr := os.Stat(syncConnectedPath(stateRoot, vaultID, replicaID))
+	return rerr == nil
+}
+
+// withSyncLifecycleLock runs fn while holding the replica's OS lock, so the
+// connection record and the disposable snapshot are never mutated concurrently
+// with a running cycle in another process (which commits the snapshot and
+// re-reads the record). The lock is non-blocking: a run in flight refuses the
+// lifecycle op with a descriptive error instead of queueing behind it.
+func withSyncLifecycleLock(fn func(vaultID, replicaID, stateRoot string) error) error {
+	vaultID, replicaID, stateRoot, err := syncIdentity()
+	if err != nil {
+		return err
+	}
+	lock, err := syncstate.AcquireReplicaLock(stateRoot, vaultID, replicaID)
+	if err != nil {
+		if errors.Is(err, syncstate.ErrLocked) {
+			return fmt.Errorf("sync is running in another process; try again")
 		}
 		return err
 	}
+	defer lock.Close()
+	return fn(vaultID, replicaID, stateRoot)
+}
+
+// syncReplicaResetAt is the destructive part of the reset flow, run under the
+// replica OS lock. It discards the replica's disposable snapshot and clears the
+// connection record (identity pin), so the next enable starts a fresh setup —
+// the ONLY deliberate way to switch repositories or recreate a lost one.
+// Recovery copies and local notes are never touched.
+func syncReplicaResetAt(vaultID, replicaID, stateRoot string) error {
 	snaps, err := syncstate.NewSnapshotStoreV2(stateRoot, vaultID, replicaID)
 	if err != nil {
 		return err

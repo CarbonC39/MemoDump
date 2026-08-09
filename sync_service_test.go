@@ -116,6 +116,27 @@ func TestSyncRepoSetupKnownLostRefusesCreate(t *testing.T) {
 	}
 }
 
+// TestSyncRepoSetupProviderMismatchRefuses: enable must respect the pinned
+// provider profile — even a different remote carrying a byte-identical
+// repo.json is refused, so the connection never silently moves to another
+// provider with a stale snapshot profile.
+func TestSyncRepoSetupProviderMismatchRefuses(t *testing.T) {
+	ctx := context.Background()
+	prev := &syncConnectionRecord{Connected: false, Profile: "profile-a", RepoID: "11111111-1111-4111-8111-111111111111"}
+	mem := cloudsync.NewMemoryStore()
+	desc := cloudsync.RepositoryDescriptor{
+		FormatVersion: 1, RepositoryID: prev.RepoID, CreatedAt: 1, MinimumClientVersion: "2.0.0",
+	}
+	ser, _ := desc.Serialize()
+	if err := mem.Seed("repo.json", ser, "1"); err != nil {
+		t.Fatal(err)
+	}
+	remote := &profileStore{RemoteStore: mem, profile: "profile-b", probeOK: true}
+	if _, _, err := syncRepoSetup(ctx, remote, prev); err == nil {
+		t.Fatal("adopted a changed provider despite the pinned profile")
+	}
+}
+
 // TestSyncDefaultProviderSelectsS3WhenConfigured: the production provider is an
 // S3 client when MEMODUMP_SYNC_* is configured; a partial config is an error,
 // and the memory remote is available only behind the explicit dev switch.

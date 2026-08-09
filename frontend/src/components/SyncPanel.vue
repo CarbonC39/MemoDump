@@ -45,7 +45,7 @@
           {{ t('settings.syncTest') }}
         </button>
         <button
-          v-if="state.connection"
+          v-if="state.connection || state.connectionError"
           type="button"
           class="btn btn-sm btn-outline"
           :disabled="state.busy"

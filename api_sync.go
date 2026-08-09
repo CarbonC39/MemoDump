@@ -28,7 +28,7 @@ func handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"enabled":       connected,
 		"connected":     connected,
-		"connection":    rec != nil,
+		"connection":    syncConnectionExists(),
 		"experimental":  true,
 		"noE2EE":        true,
 		"recoveryCount": 0,
@@ -63,7 +63,9 @@ func lastRunSnapshot() (syncserviceResult, time.Time) {
 // service that ignores conditional writes is refused), establishes or re-adopts
 // the remote repository — the only place repo.json is ever created — and records
 // the connection with the verified provider profile and pinned repository ID.
-// It never modifies existing Markdown.
+// The whole enable holds the replica OS lock so the connection record is never
+// written while another process runs a cycle (which commits the snapshot and
+// re-reads the record). It never modifies existing Markdown.
 func handleSyncEnable(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
@@ -71,33 +73,29 @@ func handleSyncEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	vaultID, replicaID, _, err := syncIdentity()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	prev, err := syncReadConnected()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	remote, err := syncProvider()
+	var vaultID, replicaID, repoID string
+	err := withSyncLifecycleLock(func(v, rep, stateRoot string) error {
+		vaultID, replicaID = v, rep
+		prev, err := syncReadConnected()
+		if err != nil {
+			return err
+		}
+		remote, err := syncProvider()
+		if err != nil {
+			return err
+		}
+		caps, err := remote.Test(r.Context())
+		if err != nil || !caps.ConditionalWrites || !caps.PagedListing {
+			return errors.New("sync provider probe failed; sync not enabled")
+		}
+		repoID, profile, err := syncRepoSetup(r.Context(), remote, prev)
+		if err != nil {
+			return err
+		}
+		return syncWriteConnected(&syncConnectionRecord{Connected: true, Profile: profile, RepoID: repoID})
+	})
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	caps, err := remote.Test(r.Context())
-	if err != nil || !caps.ConditionalWrites || !caps.PagedListing {
-		writeErr(w, http.StatusBadRequest, "sync provider probe failed; sync not enabled")
-		return
-	}
-	repoID, profile, err := syncRepoSetup(r.Context(), remote, prev)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := syncWriteConnected(&syncConnectionRecord{Connected: true, Profile: profile, RepoID: repoID}); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -192,39 +190,57 @@ func clearLastRun() {
 }
 
 // handleSyncDisable disconnects sync for the replica: it flips only the
-// Connected flag in the connection record. The verified provider profile and
-// pinned repository ID are preserved, so re-enabling with the same provider
-// reconnects cleanly and a normal run never sees an identity mismatch. It never
-// deletes local notes, remote records, the identity index, the snapshot, or
-// recovery copies. Switching repositories is the explicit reset flow.
+// Connected flag in the connection record, under the replica OS lock so it
+// never interleaves with a cycle in another process. The verified provider
+// profile and pinned repository ID are preserved, so re-enabling with the same
+// provider reconnects cleanly and a normal run never sees an identity mismatch.
+// It never deletes local notes, remote records, the identity index, the
+// snapshot, or recovery copies. Switching repositories is the explicit reset
+// flow.
 func handleSyncDisable(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
-	rec, err := syncReadConnected()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if rec != nil {
+	err := withSyncLifecycleLock(func(v, rep, stateRoot string) error {
+		rec, err := syncReadConnected()
+		if err != nil {
+			return err
+		}
+		if rec == nil {
+			return nil
+		}
 		rec.Connected = false
-		if err := syncWriteConnected(rec); err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+		return syncWriteConnected(rec)
+	})
+	if err != nil {
+		if errors.Is(err, syncindex.ErrNotEnabled) {
+			clearLastRun()
+			writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "disconnected": true})
 			return
 		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	clearLastRun()
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "disconnected": true})
 }
 
-// handleSyncReset is the explicit reconnect/reset flow: it discards the
-// replica's disposable snapshot and clears the connection record (identity
-// pin), so the next enable starts a fresh setup. This is the ONLY deliberate
-// way to switch repositories or recreate a lost one. Local notes and recovery
-// copies are preserved.
+// handleSyncReset is the explicit reconnect/reset flow, serialized with any
+// running cycle by the replica OS lock: it discards the replica's disposable
+// snapshot and clears the connection record (identity pin), so the next enable
+// starts a fresh setup. This is the ONLY deliberate way to switch repositories
+// or recreate a lost one. Local notes and recovery copies are preserved.
 func handleSyncReset(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
-	if err := syncReplicaReset(); err != nil {
+	err := withSyncLifecycleLock(func(v, rep, stateRoot string) error {
+		return syncReplicaResetAt(v, rep, stateRoot)
+	})
+	if err != nil {
+		if errors.Is(err, syncindex.ErrNotEnabled) {
+			clearLastRun()
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reset": true})
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
