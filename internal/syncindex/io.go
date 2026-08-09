@@ -2,6 +2,7 @@ package syncindex
 
 import (
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -27,17 +28,19 @@ func (osIndexIO) SyncDir(dir string) error             { return syncDir(dir) }
 
 // faultIndexIO wraps an indexIO and injects failures at named durability steps.
 // A test arms a one-shot write failure for a target file name (the primary
-// index or the backup) or a persistent directory-sync failure.
+// index or the backup), a one-shot read failure for a target file name, or a
+// persistent directory-sync failure.
 type faultIndexIO struct {
 	inner indexIO
 	mu    sync.Mutex
 
 	failWrite map[string]error // target name → fail the NEXT write to it
+	failRead  map[string]error // target name → fail the NEXT read of it
 	failSync  error            // every SyncDir fails with this
 }
 
 func newFaultIndexIO(inner indexIO) *faultIndexIO {
-	return &faultIndexIO{inner: inner, failWrite: make(map[string]error)}
+	return &faultIndexIO{inner: inner, failWrite: make(map[string]error), failRead: make(map[string]error)}
 }
 
 // armWriteFail makes the next WriteFileAtomic to name fail with err.
@@ -45,6 +48,13 @@ func (f *faultIndexIO) armWriteFail(name string, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.failWrite[name] = err
+}
+
+// armReadFail makes the next ReadFile of name fail with err.
+func (f *faultIndexIO) armReadFail(name string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failRead[name] = err
 }
 
 // armSyncFail makes every SyncDir fail with err until cleared.
@@ -65,7 +75,16 @@ func (f *faultIndexIO) WriteFileAtomic(dir, name string, data []byte) error {
 	return f.inner.WriteFileAtomic(dir, name, data)
 }
 
-func (f *faultIndexIO) ReadFile(path string) ([]byte, error) { return f.inner.ReadFile(path) }
+func (f *faultIndexIO) ReadFile(path string) ([]byte, error) {
+	f.mu.Lock()
+	if err, ok := f.failRead[filepath.Base(path)]; ok {
+		delete(f.failRead, filepath.Base(path))
+		f.mu.Unlock()
+		return nil, err
+	}
+	f.mu.Unlock()
+	return f.inner.ReadFile(path)
+}
 
 func (f *faultIndexIO) SyncDir(dir string) error {
 	f.mu.Lock()
