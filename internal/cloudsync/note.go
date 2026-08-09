@@ -17,6 +17,25 @@ import (
 // carries a complete portable path and has no kind, parentId, or graph.
 const NoteSchemaVersion = 2
 
+// NoteKeyPrefix is the remote key prefix for note records: notes/<syncId>.json.
+const NoteKeyPrefix = "notes/"
+
+// NoteKey returns the remote key for a note record.
+func NoteKey(syncID string) string { return NoteKeyPrefix + syncID + ".json" }
+
+// ParseNoteKey extracts the Sync ID from a note key, reporting whether the key
+// is a well-formed note key.
+func ParseNoteKey(key string) (string, bool) {
+	if !strings.HasPrefix(key, NoteKeyPrefix) || !strings.HasSuffix(key, ".json") {
+		return "", false
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(key, NoteKeyPrefix), ".json")
+	if !IsSyncID(id) {
+		return "", false
+	}
+	return id, true
+}
+
 // ErrInvalidNote reports a remote note record failing structural validation.
 var ErrInvalidNote = errors.New("invalid note record")
 
