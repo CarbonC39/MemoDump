@@ -80,6 +80,34 @@ func TestS3Live(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(rootB, "idea.md")); err != nil || string(data) != "# Live\n" {
 		t.Fatalf("B did not pull the live note: %q, %v", data, err)
 	}
+
+	// Edit: A edits, B follows through the live provider.
+	if err := os.WriteFile(filepath.Join(rootA, "idea.md"), []byte("# Live edited\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := a.svc.Run(ctx); err != nil || !res.Synced {
+		t.Fatalf("A live edit run = %+v, %v", res, err)
+	}
+	if res, err := b.svc.Run(ctx); err != nil || !res.Synced {
+		t.Fatalf("B live edit run = %+v, %v", res, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(rootB, "idea.md")); err != nil || string(data) != "# Live edited\n" {
+		t.Fatalf("B did not follow the live edit: %q, %v", data, err)
+	}
+
+	// Delete: A deletes, B applies the tombstone through the live provider.
+	if err := os.Remove(filepath.Join(rootA, "idea.md")); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := a.svc.Run(ctx); err != nil || !res.Synced {
+		t.Fatalf("A live delete run = %+v, %v", res, err)
+	}
+	if res, err := b.svc.Run(ctx); err != nil || !res.Synced {
+		t.Fatalf("B live delete run = %+v, %v", res, err)
+	}
+	if _, err := os.Stat(filepath.Join(rootB, "idea.md")); !os.IsNotExist(err) {
+		t.Fatal("B did not apply the live tombstone")
+	}
 }
 
 // establishLiveRepo reads repo.json, creating it only-if-absent with a fresh

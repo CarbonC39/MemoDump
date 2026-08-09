@@ -65,6 +65,9 @@ func New(cfg Config) (*Client, error) {
 	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("S3 endpoint must not carry userinfo, query, or fragment")
 	}
+	if u.Path != "" && u.Path != "/" {
+		return nil, fmt.Errorf("S3 endpoint must not carry a path")
+	}
 	if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
 		return nil, fmt.Errorf("plain HTTP S3 endpoint is only allowed for localhost/loopback development")
 	}
@@ -196,45 +199,24 @@ func (c *Client) Read(ctx context.Context, key string) ([]byte, string, error) {
 	return data, version, nil
 }
 
-// List returns one page of changes under prefix. The syncCursor argument is the
-// pagination continuation token (the engine uses full listings only). A listing
-// truncated without a continuation token is ErrIncompleteList, never a silent
-// partial view. The caller's context cancels the wait even though minio-go's
-// single-page Core method ignores ctx.
+// List returns the complete set of note keys under prefix in one page, using
+// minio's ctx-aware Client.ListObjects (which paginates internally and honors
+// caller cancellation). The syncCursor argument is ignored: the engine uses
+// full listings only. Errors from the listing surface as normalized StoreErrors.
 func (c *Client) List(ctx context.Context, prefix, syncCursor string) (cloudsync.ChangePage, error) {
-	type outcome struct {
-		page cloudsync.ChangePage
-		err  error
+	page := cloudsync.ChangePage{}
+	for obj := range c.core.Client.ListObjects(ctx, c.cfg.Bucket, minio.ListObjectsOptions{
+		Prefix: c.objectKeyPrefix() + prefix,
+	}) {
+		if obj.Err != nil {
+			return cloudsync.ChangePage{}, classifyS3Error(obj.Err)
+		}
+		rel := strings.TrimPrefix(obj.Key, c.objectKeyPrefix())
+		page.Changes = append(page.Changes, cloudsync.Change{
+			Key: rel, Type: cloudsync.ChangeCreated, Version: trimETag(obj.ETag),
+		})
 	}
-	ch := make(chan outcome, 1)
-	go func() {
-		result, err := c.core.ListObjectsV2(c.cfg.Bucket, c.objectKeyPrefix()+prefix, "", syncCursor, "", 1000)
-		if err != nil {
-			ch <- outcome{err: classifyS3Error(err)}
-			return
-		}
-		if result.IsTruncated && result.NextContinuationToken == "" {
-			ch <- outcome{err: &cloudsync.StoreError{Kind: cloudsync.ErrIncompleteList, Message: "listing truncated without a continuation token"}}
-			return
-		}
-		page := cloudsync.ChangePage{}
-		for _, obj := range result.Contents {
-			rel := strings.TrimPrefix(obj.Key, c.objectKeyPrefix())
-			page.Changes = append(page.Changes, cloudsync.Change{
-				Key: rel, Type: cloudsync.ChangeCreated, Version: trimETag(obj.ETag),
-			})
-		}
-		if result.IsTruncated {
-			page.NextCursor = result.NextContinuationToken
-		}
-		ch <- outcome{page: page}
-	}()
-	select {
-	case o := <-ch:
-		return o.page, o.err
-	case <-ctx.Done():
-		return cloudsync.ChangePage{}, ctx.Err()
-	}
+	return page, nil
 }
 
 // Create stores bytes under a key that must not already exist.

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -97,39 +98,63 @@ func providerProfile(remote cloudsync.RemoteStore) string {
 	return memoryProfile
 }
 
-// syncRepoIdentity returns the repository ID and provider profile for the
-// remote. When no repository has ever been established (known == false), a
-// missing repo.json is created only-if-absent; a lost create race re-reads the
-// winner. When a repository is KNOWN (a durable snapshot exists), a missing
-// repo.json is remote damage and stops with zero writes — never replaced.
-func syncRepoIdentity(ctx context.Context, remote cloudsync.RemoteStore, known bool) (repoID, profile string, err error) {
+// syncRepoIdentity reads the remote repository descriptor. repo.json is created
+// only by the explicit enable/setup flow; a missing descriptor here is remote
+// damage and stops with zero writes — never replaced.
+func syncRepoIdentity(ctx context.Context, remote cloudsync.RemoteStore) (repoID, profile string, err error) {
 	profile = providerProfile(remote)
 	data, _, rerr := remote.Read(ctx, "repo.json")
 	if rerr != nil {
-		if !cloudsync.IsStoreError(rerr, cloudsync.ErrNotFound) {
-			return "", "", rerr
-		}
-		if known {
+		if cloudsync.IsStoreError(rerr, cloudsync.ErrNotFound) {
 			return "", "", fmt.Errorf("remote repository lost though sync was established")
 		}
-		desc := cloudsync.RepositoryDescriptor{
-			FormatVersion: 1, RepositoryID: uuid.NewString(),
-			CreatedAt: time.Now().UnixMilli(), MinimumClientVersion: "2.0.0",
-		}
-		ser, serr := desc.Serialize()
-		if serr != nil {
-			return "", "", serr
-		}
-		if _, cerr := remote.Create(ctx, "repo.json", ser); cerr != nil {
-			if cloudsync.IsStoreError(cerr, cloudsync.ErrPreconditionFailed) {
-				// Lost a concurrent first-create race: adopt the winner.
-				return reReadRepoIdentity(ctx, remote, profile)
-			}
-			return "", "", cerr
-		}
-		return desc.RepositoryID, profile, nil
+		return "", "", rerr
 	}
 	return parseRepoIdentity(data, profile)
+}
+
+// syncRepoSetup establishes or re-adopts the remote repository during the
+// EXPLICIT enable flow — the only place repo.json is ever created. A missing
+// descriptor is created only-if-absent; a lost concurrent create race re-reads
+// the winner. When the vault is already connected, the remote must match the
+// pinned repository ID; a changed or lost repository is refused instead of
+// silently re-initializing (the user must disable and re-enable to deliberately
+// create a new repository).
+func syncRepoSetup(ctx context.Context, remote cloudsync.RemoteStore, prev *syncConnectionRecord) (repoID, profile string, err error) {
+	profile = providerProfile(remote)
+	data, _, rerr := remote.Read(ctx, "repo.json")
+	if rerr == nil {
+		parsed, perr := cloudsync.ParseRepositoryDescriptor(data)
+		if perr != nil {
+			return "", "", fmt.Errorf("invalid remote repo.json: %w", perr)
+		}
+		if prev != nil && prev.Connected && prev.RepoID != "" && parsed.RepositoryID != prev.RepoID {
+			return "", "", fmt.Errorf("remote repository changed (was %s, now %s); disable and re-enable sync to re-establish", shortID(prev.RepoID), shortID(parsed.RepositoryID))
+		}
+		return parsed.RepositoryID, profile, nil
+	}
+	if !cloudsync.IsStoreError(rerr, cloudsync.ErrNotFound) {
+		return "", "", rerr
+	}
+	if prev != nil && prev.Connected && prev.RepoID != "" {
+		return "", "", fmt.Errorf("remote repository lost though sync was enabled; disable and re-enable sync to create a new one")
+	}
+	desc := cloudsync.RepositoryDescriptor{
+		FormatVersion: 1, RepositoryID: uuid.NewString(),
+		CreatedAt: time.Now().UnixMilli(), MinimumClientVersion: "2.0.0",
+	}
+	ser, serr := desc.Serialize()
+	if serr != nil {
+		return "", "", serr
+	}
+	if _, cerr := remote.Create(ctx, "repo.json", ser); cerr != nil {
+		if cloudsync.IsStoreError(cerr, cloudsync.ErrPreconditionFailed) {
+			// Lost a concurrent first-create race: adopt the winner.
+			return reReadRepoIdentity(ctx, remote, profile)
+		}
+		return "", "", cerr
+	}
+	return desc.RepositoryID, profile, nil
 }
 
 // reReadRepoIdentity re-reads repo.json after a lost create race.
@@ -149,25 +174,12 @@ func parseRepoIdentity(data []byte, profile string) (string, string, error) {
 	return parsed.RepositoryID, profile, nil
 }
 
-// syncRepoEstablished reports whether this replica has ever completed a sync
-// (a disposable snapshot exists), meaning the remote repository is known.
-func syncRepoEstablished() (bool, error) {
-	vaultID, replicaID, stateRoot, err := syncIdentity()
-	if err != nil {
-		return false, err
+// shortID returns the first 8 characters of an ID for human-readable messages.
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
 	}
-	snaps, err := syncstate.NewSnapshotStoreV2(stateRoot, vaultID, replicaID)
-	if err != nil {
-		return false, err
-	}
-	_, rerr := os.Stat(snaps.Path())
-	if rerr != nil {
-		if os.IsNotExist(rerr) {
-			return false, nil
-		}
-		return false, rerr
-	}
-	return true, nil
+	return id
 }
 
 // syncStateRoot resolves the empty default state root to the OS app-data
@@ -210,57 +222,90 @@ func syncIdentity() (vaultID, replicaID, stateRoot string, err error) {
 	return vaultID, string(replica), stateRoot, nil
 }
 
-// syncConnectedPath is the persistent connect marker file in a replica's state
-// directory. Its presence means the user has enabled the connection.
+// syncConnectedPath is the persistent connection-record file in a replica's
+// state directory. It stores the record: connected, the verified provider
+// profile (secret-free), and the pinned repository ID. The repository ID lives
+// here — NOT in the disposable snapshot — so a lost snapshot can never make a
+// connected vault look like a fresh setup.
 func syncConnectedPath(stateRoot, vaultID, replicaID string) string {
 	return filepath.Join(syncstate.StateDir(stateRoot, vaultID, replicaID), "connected.json")
 }
 
-// syncSetConnected durably records whether sync is enabled (connected) for the
-// replica. Disable clears only this marker — the index, identity, snapshot,
-// and recovery copies are all preserved.
-func syncSetConnected(stateRoot, vaultID, replicaID string, connected bool) error {
-	path := syncConnectedPath(stateRoot, vaultID, replicaID)
-	if connected {
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return err
-		}
-		data, _ := json.Marshal(map[string]bool{"connected": true})
-		return os.WriteFile(path, data, 0600)
-	}
-	return os.Remove(path)
+// syncConnectionRecord is the durable connection record written at enable. The
+// verified provider profile and the pinned repository ID let a later run detect
+// a changed provider or repository without trusting a disposable snapshot.
+type syncConnectionRecord struct {
+	Connected bool   `json:"connected"`
+	Profile   string `json:"profile"`
+	RepoID    string `json:"repoId"`
 }
 
-// syncConnected reports whether the user has enabled sync (the connect marker
-// exists).
-func syncConnected() bool {
+// syncWriteConnected durably records the connection state for the replica.
+// Passing nil removes the marker (disable). The index, identity, snapshot, and
+// recovery copies are always preserved. Disabling a never-enabled vault is a
+// no-op.
+func syncWriteConnected(rec *syncConnectionRecord) error {
 	vaultID, replicaID, stateRoot, err := syncIdentity()
 	if err != nil {
-		return false
+		if rec == nil && errors.Is(err, syncindex.ErrNotEnabled) {
+			return nil // disabling a never-enabled vault: nothing to remove
+		}
+		return err
 	}
-	_, err = os.Stat(syncConnectedPath(stateRoot, vaultID, replicaID))
-	return err == nil
+	path := syncConnectedPath(stateRoot, vaultID, replicaID)
+	if rec == nil {
+		if rerr := os.Remove(path); rerr != nil && !os.IsNotExist(rerr) {
+			return rerr
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, _ := json.Marshal(rec)
+	return os.WriteFile(path, data, 0600)
+}
+
+// syncReadConnected returns the replica's connection record, or nil when sync
+// has never been enabled or was disabled. A corrupt record is an error, never
+// silently treated as disconnected.
+func syncReadConnected() (*syncConnectionRecord, error) {
+	vaultID, replicaID, stateRoot, err := syncIdentity()
+	if err != nil {
+		if errors.Is(err, syncindex.ErrNotEnabled) {
+			return nil, nil // never enabled: no record
+		}
+		return nil, err
+	}
+	data, rerr := os.ReadFile(syncConnectedPath(stateRoot, vaultID, replicaID))
+	if rerr != nil {
+		if os.IsNotExist(rerr) {
+			return nil, nil
+		}
+		return nil, rerr
+	}
+	var rec syncConnectionRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return nil, fmt.Errorf("corrupt sync connection record: %w", err)
+	}
+	return &rec, nil
+}
+
+// syncConnected reports whether the user has enabled sync (a connection record
+// marked connected exists).
+func syncConnected() bool {
+	rec, err := syncReadConnected()
+	return err == nil && rec != nil && rec.Connected
 }
 
 // buildSyncService assembles the sync service for the current data dir, with
-// the resolved state root passed to every store, and the repository identity
-// (repoID + secret-free profile) derived from the provider's repo.json. The
-// SAME remote instance is bound into the service so identity resolution and the
-// cycle cannot drift onto a different provider.
-func buildSyncService(ctx context.Context) (*syncservice.Service, error) {
+// the resolved state root passed to every store. The caller has already
+// resolved and verified the repository identity (repoID + secret-free profile)
+// against the connection record; the SAME remote instance is bound into the
+// service so identity resolution and the cycle cannot drift onto a different
+// provider.
+func buildSyncService(ctx context.Context, repoID, profile string, remote cloudsync.RemoteStore) (*syncservice.Service, error) {
 	vaultID, replicaID, stateRoot, err := syncIdentity()
-	if err != nil {
-		return nil, err
-	}
-	remote, err := syncProvider()
-	if err != nil {
-		return nil, err
-	}
-	known, err := syncRepoEstablished()
-	if err != nil {
-		return nil, err
-	}
-	repoID, profile, err := syncRepoIdentity(ctx, remote, known)
 	if err != nil {
 		return nil, err
 	}

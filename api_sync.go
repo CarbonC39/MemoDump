@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"time"
 
 	"memodump/internal/syncindex"
@@ -51,21 +50,26 @@ func lastRunSnapshot() (syncserviceResult, time.Time) {
 	return syncLastRun.Result, syncLastRun.Completed
 }
 
-// handleSyncEnable enables sync for the vault: it creates the note-only index
-// (assigning a stable Vault ID and Sync IDs), resolves the replica identity,
-// and records the connect marker. It never modifies existing Markdown. The
-// provider's capability probe is REQUIRED: a service that ignores conditional
-// writes is refused rather than admitted into real sync.
+// handleSyncEnable enables sync for the vault through the EXPLICIT setup flow:
+// it creates the note-only index (assigning a stable Vault ID and Sync IDs),
+// resolves the replica identity, verifies the provider's capabilities (a
+// service that ignores conditional writes is refused), establishes or re-adopts
+// the remote repository — the only place repo.json is ever created — and records
+// the connection with the verified provider profile and pinned repository ID.
+// It never modifies existing Markdown.
 func handleSyncEnable(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
-	store, err := syncindex.EnableNoteStore(dataDir)
-	if err != nil {
+	if _, err := syncindex.EnableNoteStore(dataDir); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	vaultID := store.Index.VaultID
-	_, replicaID, stateRoot, err := syncIdentity()
+	vaultID, replicaID, _, err := syncIdentity()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	prev, err := syncReadConnected()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -75,36 +79,100 @@ func handleSyncEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := remote.Test(r.Context()); err != nil {
+	caps, err := remote.Test(r.Context())
+	if err != nil || !caps.ConditionalWrites || !caps.PagedListing {
 		writeErr(w, http.StatusBadRequest, "sync provider probe failed; sync not enabled")
 		return
 	}
-	if err := syncSetConnected(stateRoot, vaultID, replicaID, true); err != nil {
+	repoID, profile, err := syncRepoSetup(r.Context(), remote, prev)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := syncWriteConnected(&syncConnectionRecord{Connected: true, Profile: profile, RepoID: repoID}); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled": true, "vaultId": vaultID, "replicaId": replicaID,
+		"enabled": true, "vaultId": vaultID, "replicaId": replicaID, "repoId": repoID,
 		"experimental": true, "noE2EE": true,
 	})
 }
 
-// handleSyncRun runs one manual note cycle and records the redacted outcome. It
-// refuses to run while sync is disabled.
+// handleSyncRun runs one manual note cycle and records the redacted outcome.
+// It refuses to run while the connection record is absent or disconnected, and
+// re-verifies the provider whenever its profile differs from the one recorded
+// at enable (a changed provider is probed again before running). repo.json is
+// only ever read here — never created. Every outcome, including build and run
+// failures, is written to syncLastRun so a refresh never surfaces a stale one.
 func handleSyncRun(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
-	if !syncConnected() {
-		writeErr(w, http.StatusBadRequest, "sync is disabled; enable it first")
+	rec, err := syncReadConnected()
+	if err != nil {
+		recordLastRunError(err)
+		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
 		return
 	}
-	svc, err := buildSyncService(r.Context())
+	if rec == nil || !rec.Connected {
+		recErr := errors.New("sync is disabled; enable it first")
+		recordLastRunError(recErr)
+		writeErr(w, http.StatusBadRequest, recErr.Error())
+		return
+	}
+	remote, err := syncProvider()
 	if err != nil {
+		recordLastRunError(err)
+		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
+		return
+	}
+	profile := providerProfile(remote)
+	if rec.Profile != profile {
+		// The provider changed since enable: re-verify before running.
+		caps, perr := remote.Test(r.Context())
+		if perr != nil || !caps.ConditionalWrites || !caps.PagedListing {
+			recErr := errors.New("sync provider changed and failed its probe; disable and re-enable sync")
+			recordLastRunError(recErr)
+			writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(recErr)})
+			return
+		}
+		rec.Profile = profile
+		if werr := syncWriteConnected(rec); werr != nil {
+			recordLastRunError(werr)
+			writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(werr)})
+			return
+		}
+	}
+	repoID, _, err := syncRepoIdentity(r.Context(), remote)
+	if err != nil {
+		recordLastRunError(err)
+		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
+		return
+	}
+	if rec.RepoID != "" && repoID != rec.RepoID {
+		recErr := errors.New("remote repository changed since enable; disable and re-enable sync")
+		recordLastRunError(recErr)
+		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(recErr)})
+		return
+	}
+	if rec.RepoID == "" {
+		// A legacy marker without a pinned repository adopts the verified one.
+		rec.RepoID = repoID
+		if werr := syncWriteConnected(rec); werr != nil {
+			recordLastRunError(werr)
+			writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(werr)})
+			return
+		}
+	}
+	svc, err := buildSyncService(r.Context(), repoID, profile, remote)
+	if err != nil {
+		recordLastRunError(err)
 		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
 		return
 	}
 	res, err := svc.Run(r.Context())
 	if err != nil {
+		recordLastRunError(err)
 		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
 		return
 	}
@@ -115,22 +183,35 @@ func handleSyncRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// recordLastRunError records a failed outcome in syncLastRun so the status
+// endpoint never surfaces a stale earlier result.
+func recordLastRunError(err error) {
+	syncLastRunMu.Lock()
+	syncLastRun.Result = syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)}
+	syncLastRun.Completed = time.Now()
+	syncLastRunMu.Unlock()
+}
+
+// clearLastRun clears the recorded run outcome (e.g. on disable).
+func clearLastRun() {
+	syncLastRunMu.Lock()
+	syncLastRun.Result = syncservice.Result{}
+	syncLastRun.Completed = time.Time{}
+	syncLastRunMu.Unlock()
+}
+
 // handleSyncDisable disconnects sync for the replica: it clears only the
-// connect marker. It never deletes local notes, remote records, the identity
+// connection record. It never deletes local notes, remote records, the identity
 // index, the snapshot, or recovery copies; re-enabling re-uses the existing
 // identities.
 func handleSyncDisable(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
-	vaultID, replicaID, stateRoot, err := syncIdentity()
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := syncSetConnected(stateRoot, vaultID, replicaID, false); err != nil && !os.IsNotExist(err) {
+	if err := syncWriteConnected(nil); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	clearLastRun()
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "disconnected": true})
 }
 

@@ -133,8 +133,7 @@ func TestSyncApiRecoveryListReportsCorruptIndex(t *testing.T) {
 // never admitted into real sync.
 func TestSyncApiEnableRequiresCapabilityProbe(t *testing.T) {
 	dir, state := t.TempDir(), t.TempDir()
-	store := cloudsync.NewMemoryStore()
-	failing := &failingProbeStore{RemoteStore: store}
+	failing := &profileStore{RemoteStore: cloudsync.NewMemoryStore(), profile: "failing-probe", probeOK: false}
 	setSyncEnv(t, dir, state, func() (cloudsync.RemoteStore, error) { return failing, nil })
 
 	en := decodeSync[map[string]any](t, doJSON(t, "POST", "/api/sync/enable", nil))
@@ -150,14 +149,44 @@ func TestSyncApiEnableRequiresCapabilityProbe(t *testing.T) {
 	}
 }
 
-// failingProbeStore wraps a store whose Test always reports unsupported
-// capabilities.
-type failingProbeStore struct {
-	cloudsync.RemoteStore
+// TestSyncApiRunReprobesChangedProvider: a provider swapped after enable is
+// probed again before its first run — a changed profile whose probe fails
+// refuses the run instead of using an unverified remote.
+func TestSyncApiRunReprobesChangedProvider(t *testing.T) {
+	dir, state := t.TempDir(), t.TempDir()
+	storeA := &profileStore{RemoteStore: cloudsync.NewMemoryStore(), profile: "profile-a", probeOK: true}
+	storeB := &profileStore{RemoteStore: cloudsync.NewMemoryStore(), profile: "profile-b", probeOK: false}
+	cur := storeA
+	setSyncEnv(t, dir, state, func() (cloudsync.RemoteStore, error) { return cur, nil })
+
+	en := decodeSync[map[string]any](t, doJSON(t, "POST", "/api/sync/enable", nil))
+	if en["enabled"] != true {
+		t.Fatalf("enable = %+v", en)
+	}
+
+	// Swap the provider: the run must re-probe and refuse.
+	cur = storeB
+	run := decodeSync[map[string]any](t, doJSON(t, "POST", "/api/sync/run", nil))
+	if run["LastError"] == nil {
+		t.Fatalf("run = %+v, want a probe refusal for the changed provider", run)
+	}
 }
 
-func (f *failingProbeStore) Test(context.Context) (cloudsync.Capabilities, error) {
-	return cloudsync.Capabilities{}, &cloudsync.StoreError{Kind: cloudsync.ErrUnsupportedCapability, Message: "ignores preconditions"}
+// profileStore wraps a store with an explicit secret-free provider profile and
+// an optional probe failure, so tests can swap providers and observe re-probing.
+type profileStore struct {
+	cloudsync.RemoteStore
+	profile string
+	probeOK bool
+}
+
+func (p *profileStore) Profile() string { return p.profile }
+
+func (p *profileStore) Test(ctx context.Context) (cloudsync.Capabilities, error) {
+	if !p.probeOK {
+		return cloudsync.Capabilities{}, &cloudsync.StoreError{Kind: cloudsync.ErrUnsupportedCapability, Message: "ignores preconditions"}
+	}
+	return p.RemoteStore.Test(ctx)
 }
 
 type syncRunJSON struct {
@@ -253,6 +282,10 @@ func TestSyncApiRunFatalErrorNeverSynced(t *testing.T) {
 	dir, state := t.TempDir(), t.TempDir()
 	setSyncEnv(t, dir, state, func() (cloudsync.RemoteStore, error) { return shared, nil })
 
+	// Enable first: the explicit setup flow establishes repo.json.
+	doJSON(t, "POST", "/api/sync/enable", nil)
+
+	// Then seed a remote note whose read will fault, targeting the cycle's read.
 	rec := &cloudsync.NoteRecord{
 		SchemaVersion: cloudsync.NoteSchemaVersion, SyncID: "11111111-1111-4111-8111-111111111111",
 		Path: "a.md", Markdown: "# A\n",
@@ -261,19 +294,8 @@ func TestSyncApiRunFatalErrorNeverSynced(t *testing.T) {
 	if err := shared.Seed(cloudsync.NoteKey(rec.SyncID), data, "1"); err != nil {
 		t.Fatal(err)
 	}
-	// Seed a valid repo.json so the repo-identity read succeeds and the armed
-	// fault targets the note read.
-	desc := cloudsync.RepositoryDescriptor{
-		FormatVersion: 1, RepositoryID: "99999999-9999-4999-8999-999999999999",
-		CreatedAt: 1, MinimumClientVersion: "2.0.0",
-	}
-	ser, _ := desc.Serialize()
-	if err := shared.Seed("repo.json", ser, "1"); err != nil {
-		t.Fatal(err)
-	}
 	shared.ArmFault("read", &cloudsync.StoreError{Kind: cloudsync.ErrPermission, Message: "denied"})
 
-	doJSON(t, "POST", "/api/sync/enable", nil)
 	run := decodeSync[syncRunJSON](t, doJSON(t, "POST", "/api/sync/run", nil))
 	if run.Synced {
 		t.Fatal("fatal error reported synced")
@@ -283,6 +305,11 @@ func TestSyncApiRunFatalErrorNeverSynced(t *testing.T) {
 	}
 	if strings.Contains(run.LastError, "://") || strings.Contains(run.LastError, "secret") {
 		t.Fatalf("status leaked provider details: %q", run.LastError)
+	}
+	// The failure must be recorded so a status refresh never shows a stale run.
+	st := decodeSync[map[string]any](t, doJSON(t, "GET", "/api/sync/status", nil))
+	if st["lastRun"] == nil {
+		t.Fatal("fatal run failure not recorded in syncLastRun")
 	}
 }
 
