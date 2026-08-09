@@ -146,6 +146,172 @@ func TestGenerateFixtures(t *testing.T) {
 	})
 	writeJSON("entities.json", map[string]any{"entities": entityCases})
 
+	// ---- note records (schema v2, V1 wire contract) ----
+	// The V1 record carries a complete portable .md path and has no kind,
+	// parentId, graph, or stored contentHash (the hash is derived). The
+	// conflict-ID case reuses the pinned v5 identity from state-hashes.json so
+	// both fixtures agree on the same conflict note. Each case pins the DERIVED
+	// content hash so later phases can assert the hash derivation is stable.
+	type noteCase struct {
+		Name          string     `json:"name"`
+		Record        NoteRecord `json:"record"`
+		ContentHash   string     `json:"contentHash"`
+		CanonicalJSON string     `json:"canonicalJson"`
+	}
+	noteRecords := []*NoteRecord{
+		{
+			SchemaVersion: NoteSchemaVersion, SyncID: "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			Path:     "Projects/idea.md",
+			Markdown: "---\ntags: [\"project\"]\n---\n# Idea\n",
+		},
+		{
+			SchemaVersion: NoteSchemaVersion, SyncID: "6e6e9c3d-a5b8-4c49-9409-9de566677770",
+			Path:     "Projects/Sub/deep.md",
+			Markdown: "# Nested\nbody\n",
+		},
+		{
+			SchemaVersion: NoteSchemaVersion, SyncID: "8a8a1e5f-c7da-4e6b-b62b-1f0788899992",
+			Path:    "archive/deleted.md",
+			Deleted: true,
+		},
+		{
+			SchemaVersion: NoteSchemaVersion, SyncID: conflictID,
+			Path:     "Projects/" + ConflictFilename("idea", conflictID),
+			Markdown: "# Local version\n",
+		},
+		{
+			SchemaVersion: NoteSchemaVersion, SyncID: "9b9b2f60-d8eb-4f7c-a73c-2018999aaab3",
+			Path:     "你好/笔记.md",
+			Markdown: "# 你好\n中文内容\n",
+		},
+		{
+			SchemaVersion: NoteSchemaVersion, SyncID: "acac3051-e9fc-408d-884d-3119aaaa4bb4",
+			Path: "blank.md",
+		},
+	}
+	var noteCases []noteCase
+	for _, n := range noteRecords {
+		h := n.ComputeContentHash()
+		ser, err := n.Serialize()
+		if err != nil {
+			t.Fatal(err)
+		}
+		noteCases = append(noteCases, noteCase{
+			Name: n.Path, Record: *n, ContentHash: h, CanonicalJSON: string(ser),
+		})
+	}
+
+	// Portable path collisions: individually valid records whose paths collide
+	// under PortablePathKey (case variant and NFC decomposition). The keys are
+	// pinned here so the cycle-level collision detection can assert against them.
+	portableCollisions := []map[string]any{
+		{"name": "case variant", "portablePathKey": PortablePathKey("Projects/Hello.md"), "records": []NoteRecord{
+			{
+				SchemaVersion: NoteSchemaVersion, SyncID: "bdad4162-faf1-418e-895e-4221bbbb5cc5",
+				Path: "Projects/Hello.md", Markdown: "upper\n",
+			},
+			{
+				SchemaVersion: NoteSchemaVersion, SyncID: "cebe5263-fbf2-419f-9a6f-5332cccc6dd6",
+				Path: "projects/hello.md", Markdown: "lower\n",
+			},
+		}},
+		{"name": "nfc decomposition", "portablePathKey": PortablePathKey("café.md"), "records": []NoteRecord{
+			{
+				SchemaVersion: NoteSchemaVersion, SyncID: "dfcf6374-aca3-4f01-ab70-6443dddd7ee7",
+				Path: "café.md", Markdown: "composed\n",
+			},
+			{
+				SchemaVersion: NoteSchemaVersion, SyncID: "e0d07485-bdb4-4e12-bc81-7554eee8ff08",
+				Path: "cafe\u0301.md", Markdown: "decomposed\n",
+			},
+		}},
+	}
+
+	invalidNotes := []map[string]any{
+		{"name": "newer schema", "record": map[string]any{
+			"schemaVersion": 3, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": "idea.md", "markdown": "x", "deleted": false,
+		}},
+		{"name": "bad sync uuid", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "not-a-uuid", "path": "idea.md",
+			"markdown": "x", "deleted": false,
+		}},
+		{"name": "traversal path", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": "../evil.md", "markdown": "x", "deleted": false,
+		}},
+		{"name": "absolute path", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": "/abs.md", "markdown": "x", "deleted": false,
+		}},
+		{"name": "backslash path", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": `a\b.md`, "markdown": "x", "deleted": false,
+		}},
+		{"name": "empty segment", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": "a//b.md", "markdown": "x", "deleted": false,
+		}},
+		{"name": "reserved memodump segment", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": ".memodump/secret.md", "markdown": "x", "deleted": false,
+		}},
+		{"name": "reserved images segment", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": ".images/pic.md", "markdown": "x", "deleted": false,
+		}},
+		{"name": "non-md extension", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": "note.txt", "markdown": "x", "deleted": false,
+		}},
+		{"name": "tombstone with markdown", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": "gone.md", "markdown": "x", "deleted": true,
+		}},
+		{"name": "live note missing markdown", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": "idea.md", "deleted": false,
+		}},
+		{"name": "crlf markdown", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": "idea.md", "markdown": "a\r\nb\n", "deleted": false,
+		}},
+		{"name": "invalid media key", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": "idea.md", "markdown": "![x](memodump-media:not-a-key)", "deleted": false,
+		}},
+		{"name": "empty media key", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": "idea.md", "markdown": "![x](memodump-media:)", "deleted": false,
+		}},
+		{"name": "wrong field type", "record": map[string]any{
+			"schemaVersion": 2, "syncId": 42, "path": "idea.md",
+			"markdown": "x", "deleted": false,
+		}},
+		{"name": "null markdown", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": "idea.md", "markdown": nil, "deleted": false,
+		}},
+		{"name": "null deleted", "record": map[string]any{
+			"schemaVersion": 2, "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+			"path": "idea.md", "markdown": "x", "deleted": nil,
+		}},
+	}
+	rawNoteCases := []map[string]any{
+		{"name": "unknown field", "json": `{"schemaVersion":2,"syncId":"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8","path":"idea.md","markdown":"x","deleted":false,"evil":true}`},
+		{"name": "contentHash not a wire field", "json": `{"schemaVersion":2,"syncId":"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8","path":"idea.md","markdown":"x","contentHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","deleted":false}`},
+		{"name": "duplicate syncId", "json": `{"schemaVersion":2,"syncId":"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8","syncId":"6e6e9c3d-a5b8-4c49-9409-9de566677770","path":"idea.md","markdown":"x","deleted":false}`},
+		{"name": "missing deleted", "json": `{"schemaVersion":2,"syncId":"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8","path":"idea.md","markdown":"x"}`},
+		{"name": "trailing json value", "json": `{"schemaVersion":2,"syncId":"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8","path":"idea.md","markdown":"x","deleted":false}{"x":1}`},
+		{"name": "malformed json", "json": `{"schemaVersion":2,`},
+	}
+	writeJSON("note-records.json", map[string]any{
+		"valid":              noteCases,
+		"portableCollisions": portableCollisions,
+		"invalid":            invalidNotes,
+		"invalidRaw":         rawNoteCases,
+	})
+
 	// ---- repository descriptors ----
 	type repoCase struct {
 		Name          string               `json:"name"`

@@ -1,0 +1,313 @@
+{
+  "invalid": [
+    {
+      "name": "newer schema",
+      "record": {
+        "deleted": false,
+        "markdown": "x",
+        "path": "idea.md",
+        "schemaVersion": 3,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "bad sync uuid",
+      "record": {
+        "deleted": false,
+        "markdown": "x",
+        "path": "idea.md",
+        "schemaVersion": 2,
+        "syncId": "not-a-uuid"
+      }
+    },
+    {
+      "name": "traversal path",
+      "record": {
+        "deleted": false,
+        "markdown": "x",
+        "path": "../evil.md",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "absolute path",
+      "record": {
+        "deleted": false,
+        "markdown": "x",
+        "path": "/abs.md",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "backslash path",
+      "record": {
+        "deleted": false,
+        "markdown": "x",
+        "path": "a\\b.md",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "empty segment",
+      "record": {
+        "deleted": false,
+        "markdown": "x",
+        "path": "a//b.md",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "reserved memodump segment",
+      "record": {
+        "deleted": false,
+        "markdown": "x",
+        "path": ".memodump/secret.md",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "reserved images segment",
+      "record": {
+        "deleted": false,
+        "markdown": "x",
+        "path": ".images/pic.md",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "non-md extension",
+      "record": {
+        "deleted": false,
+        "markdown": "x",
+        "path": "note.txt",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "tombstone with markdown",
+      "record": {
+        "deleted": true,
+        "markdown": "x",
+        "path": "gone.md",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "live note missing markdown",
+      "record": {
+        "deleted": false,
+        "path": "idea.md",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "crlf markdown",
+      "record": {
+        "deleted": false,
+        "markdown": "a\r\nb\n",
+        "path": "idea.md",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "invalid media key",
+      "record": {
+        "deleted": false,
+        "markdown": "![x](memodump-media:not-a-key)",
+        "path": "idea.md",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "empty media key",
+      "record": {
+        "deleted": false,
+        "markdown": "![x](memodump-media:)",
+        "path": "idea.md",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "wrong field type",
+      "record": {
+        "deleted": false,
+        "markdown": "x",
+        "path": "idea.md",
+        "schemaVersion": 2,
+        "syncId": 42
+      }
+    },
+    {
+      "name": "null markdown",
+      "record": {
+        "deleted": false,
+        "markdown": null,
+        "path": "idea.md",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    },
+    {
+      "name": "null deleted",
+      "record": {
+        "deleted": null,
+        "markdown": "x",
+        "path": "idea.md",
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8"
+      }
+    }
+  ],
+  "invalidRaw": [
+    {
+      "json": "{\"schemaVersion\":2,\"syncId\":\"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8\",\"path\":\"idea.md\",\"markdown\":\"x\",\"deleted\":false,\"evil\":true}",
+      "name": "unknown field"
+    },
+    {
+      "json": "{\"schemaVersion\":2,\"syncId\":\"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8\",\"path\":\"idea.md\",\"markdown\":\"x\",\"contentHash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"deleted\":false}",
+      "name": "contentHash not a wire field"
+    },
+    {
+      "json": "{\"schemaVersion\":2,\"syncId\":\"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8\",\"syncId\":\"6e6e9c3d-a5b8-4c49-9409-9de566677770\",\"path\":\"idea.md\",\"markdown\":\"x\",\"deleted\":false}",
+      "name": "duplicate syncId"
+    },
+    {
+      "json": "{\"schemaVersion\":2,\"syncId\":\"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8\",\"path\":\"idea.md\",\"markdown\":\"x\"}",
+      "name": "missing deleted"
+    },
+    {
+      "json": "{\"schemaVersion\":2,\"syncId\":\"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8\",\"path\":\"idea.md\",\"markdown\":\"x\",\"deleted\":false}{\"x\":1}",
+      "name": "trailing json value"
+    },
+    {
+      "json": "{\"schemaVersion\":2,",
+      "name": "malformed json"
+    }
+  ],
+  "portableCollisions": [
+    {
+      "name": "case variant",
+      "portablePathKey": "projects/hello.md",
+      "records": [
+        {
+          "schemaVersion": 2,
+          "syncId": "bdad4162-faf1-418e-895e-4221bbbb5cc5",
+          "path": "Projects/Hello.md",
+          "markdown": "upper\n",
+          "deleted": false
+        },
+        {
+          "schemaVersion": 2,
+          "syncId": "cebe5263-fbf2-419f-9a6f-5332cccc6dd6",
+          "path": "projects/hello.md",
+          "markdown": "lower\n",
+          "deleted": false
+        }
+      ]
+    },
+    {
+      "name": "nfc decomposition",
+      "portablePathKey": "café.md",
+      "records": [
+        {
+          "schemaVersion": 2,
+          "syncId": "dfcf6374-aca3-4f01-ab70-6443dddd7ee7",
+          "path": "café.md",
+          "markdown": "composed\n",
+          "deleted": false
+        },
+        {
+          "schemaVersion": 2,
+          "syncId": "e0d07485-bdb4-4e12-bc81-7554eee8ff08",
+          "path": "café.md",
+          "markdown": "decomposed\n",
+          "deleted": false
+        }
+      ]
+    }
+  ],
+  "valid": [
+    {
+      "name": "Projects/idea.md",
+      "record": {
+        "schemaVersion": 2,
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "path": "Projects/idea.md",
+        "markdown": "---\ntags: [\"project\"]\n---\n# Idea\n",
+        "deleted": false
+      },
+      "contentHash": "f5919a374551fa11bed03ec2a65abb80e9ff004c6f00922663607c007b81a6fe",
+      "canonicalJson": "{\"deleted\":false,\"markdown\":\"---\\ntags: [\\\"project\\\"]\\n---\\n# Idea\\n\",\"path\":\"Projects/idea.md\",\"schemaVersion\":2,\"syncId\":\"5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8\"}\n"
+    },
+    {
+      "name": "Projects/Sub/deep.md",
+      "record": {
+        "schemaVersion": 2,
+        "syncId": "6e6e9c3d-a5b8-4c49-9409-9de566677770",
+        "path": "Projects/Sub/deep.md",
+        "markdown": "# Nested\nbody\n",
+        "deleted": false
+      },
+      "contentHash": "7840c601349ce9fb071e0390398c3ea0266e37700c5378c72b44fddd671acf28",
+      "canonicalJson": "{\"deleted\":false,\"markdown\":\"# Nested\\nbody\\n\",\"path\":\"Projects/Sub/deep.md\",\"schemaVersion\":2,\"syncId\":\"6e6e9c3d-a5b8-4c49-9409-9de566677770\"}\n"
+    },
+    {
+      "name": "archive/deleted.md",
+      "record": {
+        "schemaVersion": 2,
+        "syncId": "8a8a1e5f-c7da-4e6b-b62b-1f0788899992",
+        "path": "archive/deleted.md",
+        "deleted": true
+      },
+      "contentHash": "082ac8e8e2394d2e06354d2d8d82cd678c7692918901f4974206c37ee825f289",
+      "canonicalJson": "{\"deleted\":true,\"path\":\"archive/deleted.md\",\"schemaVersion\":2,\"syncId\":\"8a8a1e5f-c7da-4e6b-b62b-1f0788899992\"}\n"
+    },
+    {
+      "name": "Projects/idea (conflict 04b2cbe619cf).md",
+      "record": {
+        "schemaVersion": 2,
+        "syncId": "04b2cbe6-19cf-584f-bad4-55fa03d9c05a",
+        "path": "Projects/idea (conflict 04b2cbe619cf).md",
+        "markdown": "# Local version\n",
+        "deleted": false
+      },
+      "contentHash": "3e68b023018a8737152c163c91120a7b3fbd09f3e6c0c927dc864de99f3be09c",
+      "canonicalJson": "{\"deleted\":false,\"markdown\":\"# Local version\\n\",\"path\":\"Projects/idea (conflict 04b2cbe619cf).md\",\"schemaVersion\":2,\"syncId\":\"04b2cbe6-19cf-584f-bad4-55fa03d9c05a\"}\n"
+    },
+    {
+      "name": "你好/笔记.md",
+      "record": {
+        "schemaVersion": 2,
+        "syncId": "9b9b2f60-d8eb-4f7c-a73c-2018999aaab3",
+        "path": "你好/笔记.md",
+        "markdown": "# 你好\n中文内容\n",
+        "deleted": false
+      },
+      "contentHash": "d305b9c68e21560fc6cfe80f4cfc43f8b01887bbb38de49491a18023d89500bd",
+      "canonicalJson": "{\"deleted\":false,\"markdown\":\"# 你好\\n中文内容\\n\",\"path\":\"你好/笔记.md\",\"schemaVersion\":2,\"syncId\":\"9b9b2f60-d8eb-4f7c-a73c-2018999aaab3\"}\n"
+    },
+    {
+      "name": "blank.md",
+      "record": {
+        "schemaVersion": 2,
+        "syncId": "acac3051-e9fc-408d-884d-3119aaaa4bb4",
+        "path": "blank.md",
+        "deleted": false
+      },
+      "contentHash": "be67ac78a76266823d885d28520a1516b3ed57d447b0b159db88bade4ea75c62",
+      "canonicalJson": "{\"deleted\":false,\"markdown\":\"\",\"path\":\"blank.md\",\"schemaVersion\":2,\"syncId\":\"acac3051-e9fc-408d-884d-3119aaaa4bb4\"}\n"
+    }
+  ]
+}
