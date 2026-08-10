@@ -110,20 +110,23 @@ export async function runSync() {
     state.lastRun = data
     state.lastCompleted = new Date().toISOString()
     state.lastTrigger = 'manual'
-    if (data && data.Synced && onManualSynced) {
-      onManualSynced()
+    // The disk may already have changed even when the cycle reports Synced=false
+    // (notes pulled, then other notes Retry/Blocked). Refresh the list and the
+    // open note whenever a result returns; Synced only gates the toast/pause.
+    if (data && onSyncChanged) {
+      onSyncChanged()
     }
     return data
   })
 }
 
-// onManualSynced is registered by the app shell: after a successful manual run
+// onSyncChanged is registered by the app shell: after a manual run or a restore
 // the visible list and the open editor are refreshed through the same safe
-// logic the auto-sync poller uses, so a manual pull is never stale.
-let onManualSynced = null
+// logic the auto-sync poller uses, so a manual pull or restore is never stale.
+let onSyncChanged = null
 
-export function setOnManualSynced(fn) {
-  onManualSynced = fn
+export function setOnSyncChanged(fn) {
+  onSyncChanged = fn
 }
 
 export async function disableSync() {
@@ -156,6 +159,9 @@ export async function testSync() {
 export async function restoreRecovery(syncId, stateHash) {
   return withBusy(async () => {
     const { data } = await apiClient.syncRecoveryRestore({ syncId, stateHash })
+    // A restored note is written back to the vault by the backend: refresh the
+    // visible list and the open editor through the same safe sync logic.
+    if (onSyncChanged) onSyncChanged()
     return data
   })
 }

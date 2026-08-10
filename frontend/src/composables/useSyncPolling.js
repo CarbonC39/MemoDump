@@ -7,7 +7,7 @@
 // the open note is re-read: a clean buffer adopts the new content, a deleted
 // note closes, and a dirty buffer is never replaced — only a notice is shown.
 import { ref } from 'vue'
-import { applyLightweightStatus } from './useSyncSettings'
+import { applyLightweightStatus, getSyncSettings } from './useSyncSettings'
 
 const DEFAULT_INTERVAL_MS = 30000
 const AUTO_TRIGGERS = ['startup', 'periodic', 'retry', 'enable']
@@ -32,7 +32,6 @@ export function useSyncPolling({
   let timer = null
   let started = false
   let running = false
-  let recoveryCount = null
 
   function startTimer() {
     if (timer !== null) return
@@ -80,6 +79,11 @@ export function useSyncPolling({
     try {
       const resp = await api.syncStatus()
       const d = resp.data || {}
+      // Capture the count BEFORE the lightweight status write overwrites it, so
+      // the very first background addition (e.g. the 10s startup run creating a
+      // recovery copy seen by the first 30s poll) still triggers a detail
+      // refresh instead of being treated as a baseline.
+      const beforeRecoveryCount = getSyncSettings().recoveryCount
       // Keep the settings panel fresh (running/next-run/paused) without
       // downloading recovery content on every poll.
       applyLightweightStatus(d)
@@ -93,10 +97,8 @@ export function useSyncPolling({
         }
       }
       const rc = d.recoveryCount
-      if (rc !== undefined && rc !== recoveryCount) {
-        const increased = recoveryCount !== null && rc > recoveryCount
-        recoveryCount = rc
-        if (increased) onRecoveryChanged(rc)
+      if (rc !== undefined && rc > beforeRecoveryCount) {
+        onRecoveryChanged(rc)
       }
     } catch (_) {
       // A transient poll failure is harmless; the next interval retries.

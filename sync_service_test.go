@@ -137,6 +137,41 @@ func TestSyncRepoSetupProviderMismatchRefuses(t *testing.T) {
 	}
 }
 
+// TestSyncConnectionRecordStrictParsing: the connection record is validated
+// structurally (connected present, non-empty profile, valid repo ID, no unknown
+// fields), so a partial or empty record can never bypass the provider/repository
+// guards and silently re-adopt a different repository.
+func TestSyncConnectionRecordStrictParsing(t *testing.T) {
+	valid := `{"connected": true, "profile": "` + memoryProfile + `", "repoId": "11111111-1111-4111-8111-111111111111"}`
+	disabled := `{"connected": false, "profile": "` + memoryProfile + `", "repoId": "11111111-1111-4111-8111-111111111111"}`
+	cases := []struct {
+		name string
+		data string
+		ok   bool
+	}{
+		{"valid", valid, true},
+		{"disabled-preserves-identity", disabled, true},
+		{"empty-object", `{}`, false},
+		{"missing-profile", `{"connected": true, "repoId": "11111111-1111-4111-8111-111111111111"}`, false},
+		{"missing-repoId", `{"connected": true, "profile": "` + memoryProfile + `"}`, false},
+		{"invalid-repoId", `{"connected": true, "profile": "` + memoryProfile + `", "repoId": "not-a-uuid"}`, false},
+		{"missing-connected", `{"profile": "` + memoryProfile + `", "repoId": "11111111-1111-4111-8111-111111111111"}`, false},
+		{"unknown-field", `{"connected": true, "profile": "` + memoryProfile + `", "repoId": "11111111-1111-4111-8111-111111111111", "extra": 1}`, false},
+		{"bad-json", `{bad json`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, err := parseSyncConnectionRecord([]byte(tc.data))
+			if tc.ok && (err != nil || rec == nil) {
+				t.Fatalf("parse = %v, %v; want ok", rec, err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatalf("parse = %+v, want an error", rec)
+			}
+		})
+	}
+}
+
 // TestSyncDefaultProviderSelectsS3WhenConfigured: the production provider is an
 // S3 client when MEMODUMP_SYNC_* is configured; a partial config is an error,
 // and the memory remote is available only behind the explicit dev switch.

@@ -9,6 +9,7 @@ vi.mock('../api', () => ({
     syncReset: vi.fn(),
     syncTest: vi.fn(),
     syncRecovery: vi.fn(),
+    syncRecoveryRestore: vi.fn(),
   },
 }))
 
@@ -22,7 +23,8 @@ import {
   runSync,
   disableSync,
   resetSync,
-  setOnManualSynced,
+  restoreRecovery,
+  setOnSyncChanged,
   testSync,
 } from './useSyncSettings'
 
@@ -47,6 +49,7 @@ describe('sync settings', () => {
     apiClient.syncDisable.mockResolvedValue({ data: { enabled: false } })
     apiClient.syncReset.mockResolvedValue({ data: { ok: true } })
     apiClient.syncTest.mockResolvedValue({ data: { ok: true } })
+    apiClient.syncRecoveryRestore.mockResolvedValue({ data: { ok: true, path: 'a.md' } })
   })
 
   it('hydrates the redacted status and exposes the no-E2EE flag', async () => {
@@ -114,12 +117,21 @@ describe('sync settings', () => {
     expect(s.recoveryCount).toBe(1)
   })
 
-  it('a successful manual run refreshes the UI through the registered callback', async () => {
-    const onManualSynced = vi.fn()
-    setOnManualSynced(onManualSynced)
-    apiClient.syncRun.mockResolvedValue({ data: { Synced: true, Conflicts: 0 } })
+  it('refreshes the UI after a manual run even when the cycle reports Synced=false', async () => {
+    const onSyncChanged = vi.fn()
+    setOnSyncChanged(onSyncChanged)
+    // A cycle that pulled notes but deferred others reports Synced=false.
+    apiClient.syncRun.mockResolvedValue({ data: { Synced: false, Retry: 1, Conflicts: 0 } })
     await runSync()
-    expect(onManualSynced).toHaveBeenCalled()
+    expect(onSyncChanged).toHaveBeenCalled()
     expect(getSyncSettings().lastTrigger).toBe('manual')
+  })
+
+  it('refreshes the UI after restoring a recovery copy', async () => {
+    const onSyncChanged = vi.fn()
+    setOnSyncChanged(onSyncChanged)
+    apiClient.syncRecoveryRestore.mockResolvedValue({ data: { ok: true, path: 'a.md' } })
+    await restoreRecovery('x', 'y')
+    expect(onSyncChanged).toHaveBeenCalled()
   })
 })

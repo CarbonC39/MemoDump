@@ -241,7 +241,7 @@ import { useNotePersistence } from '../composables/useNotePersistence.js'
 import { useFolderActions } from '../composables/useFolderActions.js'
 import { useWorkspaceNavigation } from '../composables/useWorkspaceNavigation.js'
 import { useSyncPolling } from '../composables/useSyncPolling.js'
-import { refreshSyncSettings, setOnManualSynced } from '../composables/useSyncSettings.js'
+import { refreshSyncSettings, setOnSyncChanged } from '../composables/useSyncSettings.js'
 import { preloadMilkdownEditor } from '../components/milkdownLoader.js'
 
 const router = useRouter()
@@ -377,9 +377,11 @@ function dismissSyncNotice() {
   syncChangedNotice.value = ''
 }
 
-// A successful manual Run-now refreshes the list and the open note through the
-// same safe logic the auto-sync poller uses, so a manual pull is never stale.
-setOnManualSynced(() => {
+// A successful manual Run-now (or a recovery restore) refreshes the list and
+// the open note through the same safe logic the auto-sync poller uses, so a
+// manual pull or restore is never stale — even when the cycle reports
+// Synced=false after pulling some notes.
+setOnSyncChanged(() => {
   loadAll()
   syncPolling.refreshOpenNote()
 })

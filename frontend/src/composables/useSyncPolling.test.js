@@ -46,7 +46,10 @@ const baseStatus = (over = {}) => ({
 })
 
 describe('useSyncPolling', () => {
-  beforeEach(() => { vi.useFakeTimers() })
+  beforeEach(() => {
+    vi.useFakeTimers()
+    getSyncSettings().recoveryCount = 0
+  })
 
   it('polls lightweight status without ever downloading recovery content', async () => {
     const api = { syncStatus: vi.fn().mockResolvedValue(baseStatus()), getNote: vi.fn().mockResolvedValue({ data: { revision: 'r1' } }) }
@@ -205,6 +208,25 @@ describe('useSyncPolling', () => {
     expect(s.autoPaused).toBe(true)
     expect(s.pauseReason).toBe('permission')
     expect(s.lastTrigger).toBe('periodic')
+    p.stop()
+  })
+
+  it('refreshes recovery details when the first background copy appears', async () => {
+    const onRecoveryChanged = vi.fn()
+    // The settings state baseline is 0; the first poll sees the recovery copy
+    // the startup run created, so it must trigger a detail refresh — not treat
+    // it as a baseline.
+    const api = {
+      syncStatus: vi.fn().mockResolvedValue(baseStatus({ recoveryCount: 1, lastCompleted: '2026-08-09T00:10:00Z' })),
+      getNote: vi.fn().mockResolvedValue({ data: { revision: 'r1' } }),
+    }
+    const { p } = makePolling({ api, editor: makeEditor(), onRecoveryChanged })
+    p.start()
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(onRecoveryChanged).toHaveBeenCalledWith(1)
+    // A repeated poll with the same count does not re-trigger.
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(onRecoveryChanged).toHaveBeenCalledTimes(1)
     p.stop()
   })
 

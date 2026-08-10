@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -298,6 +299,46 @@ func syncWriteConnected(rec *syncConnectionRecord) error {
 	return nil
 }
 
+// parseSyncConnectionRecord strictly decodes and validates the connection
+// record. Unknown fields, a missing connected flag, an empty provider profile,
+// or a missing/invalid repository ID are all errors — a partial or empty record
+// must never pass the enable/run guards, or a lost disposable snapshot could
+// silently re-adopt the current provider/repository instead of requiring the
+// explicit reset flow.
+func parseSyncConnectionRecord(data []byte) (*syncConnectionRecord, error) {
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return nil, fmt.Errorf("%w: %v", errSyncStateCorrupt, err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var rec syncConnectionRecord
+	if err := dec.Decode(&rec); err != nil {
+		return nil, fmt.Errorf("%w: %v", errSyncStateCorrupt, err)
+	}
+	if _, ok := keys["connected"]; !ok {
+		return nil, fmt.Errorf("%w: connection record is missing its connected flag", errSyncStateCorrupt)
+	}
+	if err := rec.validate(); err != nil {
+		return nil, fmt.Errorf("%w: %v", errSyncStateCorrupt, err)
+	}
+	return &rec, nil
+}
+
+// validate checks the structural requirements of a connection record: a
+// non-empty secret-free provider profile and a valid v4 repository ID. Disable
+// preserves both, so any record that fails this is either legacy or corrupt and
+// must go through the reset/re-enable flow.
+func (rec *syncConnectionRecord) validate() error {
+	if rec.Profile == "" {
+		return errors.New("connection record is missing its provider profile")
+	}
+	if !cloudsync.IsUUIDv4(rec.RepoID) {
+		return errors.New("connection record is missing a valid repository ID")
+	}
+	return nil
+}
+
 // syncReadConnected returns the replica's connection record, or nil when sync
 // has never been enabled or was disabled. A corrupt record is an error, never
 // silently treated as disconnected.
@@ -316,11 +357,7 @@ func syncReadConnected() (*syncConnectionRecord, error) {
 		}
 		return nil, rerr
 	}
-	var rec syncConnectionRecord
-	if err := json.Unmarshal(data, &rec); err != nil {
-		return nil, fmt.Errorf("%w: %v", errSyncStateCorrupt, err)
-	}
-	return &rec, nil
+	return parseSyncConnectionRecord(data)
 }
 
 // syncConnected reports whether the user has enabled sync (a connection record
@@ -399,9 +436,8 @@ func syncConnectionIssue() error {
 		}
 		return rerr
 	}
-	var rec syncConnectionRecord
-	if err := json.Unmarshal(data, &rec); err != nil {
-		return fmt.Errorf("corrupt sync connection record: %w", err)
+	if _, err := parseSyncConnectionRecord(data); err != nil {
+		return err
 	}
 	return nil
 }
