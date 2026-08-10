@@ -73,6 +73,17 @@ func (a *App) startup(ctx context.Context) {
 	loadSessions()
 	startSessionCleanup()
 	startImageCleanupLoop()
+
+	// Automatic cloud sync: a connected replica runs once after a 10s startup
+	// delay and then every five minutes while the app is open. OnShutdown stops
+	// and waits for it.
+	startSyncScheduler(ctx)
+}
+
+// shutdown stops the automatic sync scheduler and waits for any in-flight
+// attempt to exit.
+func (a *App) shutdown() {
+	stopSyncScheduler()
 }
 
 // GetDataDir returns the active data directory path (shown in the sidebar).

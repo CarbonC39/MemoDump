@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"flag"
 	"fmt"
@@ -10,8 +11,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
+	"time"
 )
 
 //go:embed frontend/dist/*
@@ -163,7 +167,28 @@ func main() {
 	if syncRoot != "" {
 		log.Printf("Sync state root: %s", syncRoot)
 	}
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+
+	// Automatic cloud sync: a connected replica runs once after a 10s startup
+	// delay and then every five minutes while the process is alive. The root
+	// context is tied to process signals so shutdown stops the scheduler and
+	// cancels any in-flight attempt.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	startSyncScheduler(ctx)
+	log.Println("Cloud sync scheduler started (startup + every 5 minutes while running)")
+
+	server := &http.Server{Addr: addr, Handler: mux}
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.ListenAndServe() }()
+	select {
+	case err := <-errCh:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	case <-ctx.Done():
 	}
+	stopSyncScheduler()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = server.Shutdown(shutdownCtx)
 }

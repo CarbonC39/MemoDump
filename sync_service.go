@@ -34,20 +34,22 @@ var syncMemoryRemote = cloudsync.NewMemoryStore()
 const memoryProfile = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 // syncOpMu serializes the state-mutating sync API operations (enable, run,
-// disable) within the process. Each request builds its own Service, so the
-// service's instance mutex cannot serialize lifecycle operations; this
+// disable, reset) within the process. Each request builds its own Service, so
+// the service's instance mutex cannot serialize lifecycle operations; this
 // package-level lock does. The replica OS lock still serializes across
 // processes.
 var syncOpMu sync.Mutex
 
-// syncLastRun is the most recent manual-run outcome (redacted) and when it
+// syncLastRun is the most recent attempt outcome (redacted) and when it
 // completed, guarded by syncLastRunMu because Status reads it concurrently with
-// Run writing it.
+// attempts writing it. Trigger records which trigger produced the attempt; it
+// is process status, not durable history.
 var (
 	syncLastRunMu sync.RWMutex
 	syncLastRun   struct {
 		Result    syncservice.Result
 		Completed time.Time
+		Trigger   string
 	}
 )
 
@@ -355,7 +357,7 @@ func withSyncLifecycleLock(fn func(vaultID, replicaID, stateRoot string, lock *s
 	lock, err := syncstate.AcquireReplicaLock(stateRoot, vaultID, replicaID)
 	if err != nil {
 		if errors.Is(err, syncstate.ErrLocked) {
-			return fmt.Errorf("sync is running in another process; try again")
+			return errSyncLocked
 		}
 		return err
 	}

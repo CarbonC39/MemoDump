@@ -38,8 +38,9 @@ func main() {
 			Assets:  sub,
 			Handler: buildAPIMux(),
 		},
-		OnStartup: app.startup,
-		Bind:      []interface{}{app},
+		OnStartup:  app.startup,
+		OnShutdown: app.shutdown,
+		Bind:       []interface{}{app},
 		Windows: &windows.Options{
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,

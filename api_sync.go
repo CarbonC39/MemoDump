@@ -28,21 +28,29 @@ type syncserviceResult = syncservice.Result
 func handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 	rec, cerr := syncReadConnected()
 	connected := rec != nil && rec.Connected
+	nextRun, paused, pauseRsn := syncSchedulerStatusSnapshot()
 	resp := map[string]any{
-		"enabled":       connected,
-		"connected":     connected,
-		"connection":    syncConnectionExists(),
-		"experimental":  true,
-		"noE2EE":        true,
-		"recoveryCount": 0,
+		"enabled":          connected,
+		"connected":        connected,
+		"connection":       syncConnectionExists(),
+		"experimental":     true,
+		"noE2EE":           true,
+		"recoveryCount":    0,
+		"autoEnabled":      connected && !paused,
+		"autoIntervalSecs": int(periodicEvery.Seconds()),
+		"syncRunning":      syncRunning.Load(),
+		"autoPaused":       paused,
+		"pauseReason":      pauseRsn,
+		"nextRun":          formatNextRun(nextRun),
 	}
 	if cerr != nil {
 		resp["connectionError"] = cerr.Error()
 	}
-	lastRun, lastCompleted := lastRunSnapshot()
+	lastRun, lastCompleted, lastTrigger := lastRunSnapshot()
 	if !lastCompleted.IsZero() {
 		resp["lastRun"] = lastRun
 		resp["lastCompleted"] = lastCompleted
+		resp["lastTrigger"] = lastTrigger
 	}
 	if connected {
 		if n, err := countRecovery(); err == nil {
@@ -52,12 +60,22 @@ func handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// lastRunSnapshot returns one consistent (result, completed) snapshot under a
-// single read lock, so a status never combines fields from different runs.
-func lastRunSnapshot() (syncserviceResult, time.Time) {
+// formatNextRun renders a scheduled run time as an RFC3339 UTC string, or nil
+// when nothing is scheduled.
+func formatNextRun(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// lastRunSnapshot returns one consistent (result, completed, trigger) snapshot
+// under a single read lock, so a status never combines fields from different
+// runs.
+func lastRunSnapshot() (syncserviceResult, time.Time, string) {
 	syncLastRunMu.RLock()
 	defer syncLastRunMu.RUnlock()
-	return syncLastRun.Result, syncLastRun.Completed
+	return syncLastRun.Result, syncLastRun.Completed, syncLastRun.Trigger
 }
 
 // handleSyncEnable enables sync for the vault through the EXPLICIT setup flow.
@@ -107,78 +125,39 @@ func handleSyncEnable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// A successful Enable requests one immediate asynchronous run.
+	wakeSyncScheduler()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled": true, "vaultId": vaultID, "replicaId": replicaID, "repoId": repoID,
 		"experimental": true, "noE2EE": true,
 	})
 }
 
-// errSyncDisabled marks a run refusal because sync is disabled; the handler
-// surfaces it as a 400 rather than a redacted run result.
-var errSyncDisabled = errors.New("sync is disabled; enable it first")
-
-// handleSyncRun runs one manual note cycle and records the redacted outcome.
-// The connection validation (record, provider profile, repository ID) happens
-// INSIDE the replica OS lock critical section that the cycle itself runs under,
-// so a disable/reset in another process can never leave a stale run syncing or
-// re-writing a reset snapshot. Every outcome, including build and run failures,
-// is written to syncLastRun so a refresh never surfaces a stale one.
+// handleSyncRun is the thin manual HTTP adapter over the shared attempt
+// boundary: runSyncAttempt does the process-mutex + replica-lock critical
+// section, connection/provider/repository validation, cycle, redacted
+// classification, and last-attempt recording. A disabled connection is the one
+// refusal surfaced as a 400.
 func handleSyncRun(w http.ResponseWriter, r *http.Request) {
-	syncOpMu.Lock()
-	defer syncOpMu.Unlock()
-	var res *syncservice.Result
-	err := withSyncLifecycleLock(func(vaultID, replicaID, stateRoot string, lock *syncstate.Lock) error {
-		rec, err := syncReadConnected()
-		if err != nil {
-			return err
-		}
-		if rec == nil || !rec.Connected {
-			return errSyncDisabled
-		}
-		remote, err := syncProvider()
-		if err != nil {
-			return err
-		}
-		profile := providerProfile(remote)
-		if rec.Profile == "" || rec.Profile != profile {
-			return errors.New("sync provider changed since enable; disable and reset sync to reconnect")
-		}
-		repoID, _, err := syncRepoIdentity(r.Context(), remote)
-		if err != nil {
-			return err
-		}
-		if rec.RepoID == "" || repoID != rec.RepoID {
-			return errors.New("remote repository changed since enable; disable and reset sync to reconnect")
-		}
-		svc, err := buildSyncService(r.Context(), repoID, profile, remote, lock)
-		if err != nil {
-			return err
-		}
-		res, err = svc.Run(r.Context())
-		return err
-	})
-	if err != nil {
-		recordLastRunError(err)
-		if errors.Is(err, errSyncDisabled) || errors.Is(err, syncindex.ErrNotEnabled) {
-			writeErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, &syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)})
+	att := runSyncAttempt(r.Context(), triggerManual)
+	if att.disabled {
+		writeErr(w, http.StatusBadRequest, errSyncDisabled.Error())
 		return
 	}
-	syncLastRunMu.Lock()
-	syncLastRun.Result = *res
-	syncLastRun.Completed = time.Now()
-	syncLastRunMu.Unlock()
-	writeJSON(w, http.StatusOK, res)
+	if att.Result != nil && att.Result.Synced {
+		// A successful manual run clears a permanent scheduler pause.
+		clearSyncSchedulerPause()
+	}
+	writeJSON(w, http.StatusOK, att.Result)
 }
 
 // recordLastRunError records a failed outcome in syncLastRun so the status
 // endpoint never surfaces a stale earlier result.
-func recordLastRunError(err error) {
+func recordLastRunError(err error, trigger attemptTrigger) {
 	syncLastRunMu.Lock()
 	syncLastRun.Result = syncservice.Result{Synced: false, LastError: syncservice.ClassifyError(err)}
 	syncLastRun.Completed = time.Now()
+	syncLastRun.Trigger = string(trigger)
 	syncLastRunMu.Unlock()
 }
 
@@ -187,6 +166,7 @@ func clearLastRun() {
 	syncLastRunMu.Lock()
 	syncLastRun.Result = syncservice.Result{}
 	syncLastRun.Completed = time.Time{}
+	syncLastRun.Trigger = ""
 	syncLastRunMu.Unlock()
 }
 
@@ -222,6 +202,7 @@ func handleSyncDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clearLastRun()
+	resetSyncScheduler()
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "disconnected": true})
 }
 
@@ -246,6 +227,7 @@ func handleSyncReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clearLastRun()
+	resetSyncScheduler()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reset": true})
 }
 

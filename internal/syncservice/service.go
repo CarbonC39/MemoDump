@@ -43,7 +43,9 @@ type Config struct {
 
 // Result is the redacted outcome of one manual run: counts and a stable phase
 // label only. It never carries credentials, provider URLs, remote content, or
-// raw provider error text.
+// raw provider error text. rawErr is the original cycle/provider error retained
+// in memory for scheduler classification (ClassifyRetry); it is unexported and
+// therefore never serialized or exposed.
 type Result struct {
 	Synced            bool // a snapshot was committed and no fatal error occurred
 	Scanned           int
@@ -52,6 +54,20 @@ type Result struct {
 	Conflicts         int
 	SnapshotCommitted bool
 	LastError         string // stable, redacted label for the last failure, if any
+	rawErr            error  // internal, never serialized: original error for classification
+}
+
+// RawError returns the original cycle/provider error retained for scheduler
+// classification, or nil. It is never part of the serialized status and must
+// not be surfaced to callers.
+func (r *Result) RawError() error { return r.rawErr }
+
+// Redacted returns a copy of the result without the retained raw error, for
+// storing in the public status/attempt record.
+func (r *Result) Redacted() Result {
+	c := *r
+	c.rawErr = nil
+	return c
 }
 
 // Service owns provider selection, the replica OS lock, and serialized manual
@@ -99,12 +115,12 @@ func (s *Service) Run(ctx context.Context) (*Result, error) {
 		var perr error
 		remote, perr = s.cfg.Provider()
 		if perr != nil {
-			return &Result{LastError: "provider"}, nil
+			return &Result{LastError: "provider", rawErr: perr}, nil
 		}
 	}
 	res, err := s.runOnce(ctx, remote, lock)
 	if err != nil {
-		return &Result{LastError: ClassifyError(err)}, nil
+		return &Result{LastError: ClassifyError(err), rawErr: err}, nil
 	}
 	// A cycle with blocked or retried notes (including a potentially incomplete
 	// listing surfacing as remote damage) has not converged: it is never
