@@ -11,9 +11,10 @@ import (
 )
 
 // DefaultStateRoot is the OS application-data location for one installation's
-// sync device state: <os.UserConfigDir>/memodump/sync. The Wails build uses it
-// by default; the CLI/server can override it with --sync-root,
-// MEMODUMP_SYNC_ROOT, or SYNC_ROOT= (the path a container must persist).
+// sync device state: <os.UserConfigDir>/memodump/sync. It is the default when
+// the caller (package main) has not supplied an explicit state root, which the
+// Wails build and tests can do. The CLI Web server never reaches it — it has no
+// cloud-sync surface (R6.0).
 func DefaultStateRoot() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {

@@ -34,7 +34,6 @@ func main() {
 	flag.StringVar(&imageS3PublicURL, "image-s3-public-url", "", "Public base URL for S3 objects")
 	flag.StringVar(&imageS3AccessKey, "image-s3-access-key", "", "S3 access key")
 	flag.StringVar(&imageS3SecretKey, "image-s3-secret-key", "", "S3 secret key")
-	flag.StringVar(&syncRoot, "sync-root", "", "Cloud-sync device-state root (default: OS application data dir)")
 	flag.Parse()
 
 	// Load .env from CWD (lower priority than flags and env vars).
@@ -88,26 +87,14 @@ func main() {
 			log.Fatalf("CSS file not found: %s", cssFile)
 		}
 	}
-	if syncRoot == "" {
-		if v := os.Getenv("MEMODUMP_SYNC_ROOT"); v != "" {
-			syncRoot = v
-		} else if v := dotenv["SYNC_ROOT"]; v != "" {
-			syncRoot = v
-		}
-	}
-	if syncRoot != "" {
-		if abs, err := filepath.Abs(syncRoot); err == nil {
-			syncRoot = abs
-		}
-	}
 	if port == 0 {
 		port = 8080
 	}
 
 	if dataDir == "" {
-		fmt.Println("Usage: memodump --data <folder> [--user <username> --pass <password>] [--port <port>] [--css <file>] [--sync-root <dir>]")
+		fmt.Println("Usage: memodump --data <folder> [--user <username> --pass <password>] [--port <port>] [--css <file>]")
 		fmt.Println("  Credentials can also be set via MEMODUMP_USER / MEMODUMP_PASS env vars")
-		fmt.Println("  or a .env file in the current directory (DATA=, USER=, PASS=, PORT=, CSS=, SYNC_ROOT=).")
+		fmt.Println("  or a .env file in the current directory (DATA=, USER=, PASS=, PORT=, CSS=).")
 		fmt.Println("  Omitting username and password starts the server in no-auth mode.")
 		os.Exit(1)
 	}
@@ -164,18 +151,14 @@ func main() {
 	addr := fmt.Sprintf(":%d", port)
 	log.Printf("MemoDump started at http://localhost%s", addr)
 	log.Printf("Data directory: %s", dataDir)
-	if syncRoot != "" {
-		log.Printf("Sync state root: %s", syncRoot)
-	}
 
-	// Automatic cloud sync: a connected replica runs once after a 10s startup
-	// delay and then every five minutes while the process is alive. The root
-	// context is tied to process signals so shutdown stops the scheduler and
-	// cancels any in-flight attempt.
+	// The CLI Web server does not own cloud sync (R6.0): all of its browser
+	// clients already share this one server vault, so no scheduler is started
+	// and every /api/sync route returns a stable unavailable response. The root
+	// context is still tied to process signals so shutdown drains in-flight
+	// requests.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	startSyncScheduler(ctx)
-	log.Println("Cloud sync scheduler started (startup + every 5 minutes while running)")
 
 	server := &http.Server{Addr: addr, Handler: mux}
 	errCh := make(chan error, 1)
@@ -187,6 +170,8 @@ func main() {
 		}
 	case <-ctx.Done():
 	}
+	// No-op on the CLI runtime (no scheduler is ever started); kept so shutdown
+	// is symmetric with the Wails lifecycle.
 	stopSyncScheduler()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

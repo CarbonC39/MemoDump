@@ -1,5 +1,5 @@
 <template>
-  <div v-if="!isLocalBuild" class="settings-section">
+  <div v-if="cloudSyncAvailable()" class="settings-section">
     <div class="settings-section-header-row">
       <button
         type="button"
@@ -100,8 +100,8 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { useI18n } from '../i18n'
+import { cloudSyncAvailable } from '../composables/runtime'
 import {
-  isLocalBuild,
   initSyncSettings,
   getSyncSettings,
   enableSync,

@@ -14,13 +14,13 @@ function makeEditor() {
   return editor
 }
 
-function makePolling({ api, editor, visible = true, local = false, onAutoSync = vi.fn(), onNotice = vi.fn(), onNoteClosed = vi.fn(), onRecoveryChanged = vi.fn() }) {
+function makePolling({ api, editor, visible = true, available = true, onAutoSync = vi.fn(), onNotice = vi.fn(), onNoteClosed = vi.fn(), onRecoveryChanged = vi.fn() }) {
   let visibilityHandler = null
   let visibleState = visible
   const p = useSyncPolling({
     api,
     editor,
-    isLocalBuild: local,
+    available,
     intervalMs: 30000,
     isVisible: () => visibleState,
     addVisibilityListener: (fn) => { visibilityHandler = fn },
@@ -230,9 +230,9 @@ describe('useSyncPolling', () => {
     p.stop()
   })
 
-  it('local build creates no timer and makes no request', async () => {
+  it('runtime without cloud sync creates no timer and makes no request', async () => {
     const api = { syncStatus: vi.fn(), getNote: vi.fn() }
-    const { p, api: a } = makePolling({ api, editor: makeEditor(), local: true })
+    const { p, api: a } = makePolling({ api, editor: makeEditor(), available: false })
     p.start()
     await vi.advanceTimersByTimeAsync(30000)
     expect(a.syncStatus).not.toHaveBeenCalled()

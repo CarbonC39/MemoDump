@@ -129,16 +129,34 @@ func buildAPIMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/v2/duplicate/{path...}", authMiddleware(handleV2DuplicateNote))
 	mux.HandleFunc("GET /api/v2/folders", authMiddleware(handleV2ListFolders))
 	mux.HandleFunc("GET /api/v2/search", authMiddleware(handleV2Search))
-	mux.HandleFunc("GET /api/sync/status", authMiddleware(handleSyncStatus))
-	mux.HandleFunc("POST /api/sync/enable", authMiddleware(handleSyncEnable))
-	mux.HandleFunc("POST /api/sync/run", authMiddleware(handleSyncRun))
-	mux.HandleFunc("POST /api/sync/disable", authMiddleware(handleSyncDisable))
-	mux.HandleFunc("POST /api/sync/reset", authMiddleware(handleSyncReset))
-	mux.HandleFunc("POST /api/sync/test", authMiddleware(handleSyncTest))
-	mux.HandleFunc("GET /api/sync/recovery", authMiddleware(handleSyncRecoveryList))
-	mux.HandleFunc("POST /api/sync/recovery/restore", authMiddleware(handleSyncRecoveryRestore))
+	// Cloud sync is owned by the Wails runtime only (R6.0). The CLI Web server
+	// shares one server vault across all its browser clients, so it exposes no
+	// sync surface: every /api/sync route returns the single stable unavailable
+	// response below instead of leaking engine state or falling through to the
+	// SPA fallback handler.
+	if cloudSyncCapable {
+		mux.HandleFunc("GET /api/sync/status", authMiddleware(handleSyncStatus))
+		mux.HandleFunc("POST /api/sync/enable", authMiddleware(handleSyncEnable))
+		mux.HandleFunc("POST /api/sync/run", authMiddleware(handleSyncRun))
+		mux.HandleFunc("POST /api/sync/disable", authMiddleware(handleSyncDisable))
+		mux.HandleFunc("POST /api/sync/reset", authMiddleware(handleSyncReset))
+		mux.HandleFunc("POST /api/sync/test", authMiddleware(handleSyncTest))
+		mux.HandleFunc("GET /api/sync/recovery", authMiddleware(handleSyncRecoveryList))
+		mux.HandleFunc("POST /api/sync/recovery/restore", authMiddleware(handleSyncRecoveryRestore))
+	} else {
+		mux.HandleFunc("/api/sync", syncUnavailable)
+		mux.HandleFunc("/api/sync/", syncUnavailable)
+	}
 	mux.HandleFunc("GET /custom.css", handleCustomCSS)
 	return mux
+}
+
+// syncUnavailable is the one stable response for every cloud-sync route on a
+// runtime without cloud sync. It is deliberately not wrapped in
+// authMiddleware: availability is a property of the runtime, not of the
+// caller, so the answer is identical for every request.
+func syncUnavailable(w http.ResponseWriter, r *http.Request) {
+	writeErr(w, http.StatusNotFound, "cloud sync is not available on this runtime")
 }
 
 // handleCustomCSS serves the user-supplied stylesheet (via --css flag).

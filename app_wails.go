@@ -81,8 +81,8 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // shutdown stops the automatic sync scheduler and waits for any in-flight
-// attempt to exit.
-func (a *App) shutdown() {
+// attempt to exit. Wails v2 invokes it with the app context on teardown.
+func (a *App) shutdown(ctx context.Context) {
 	stopSyncScheduler()
 }
 

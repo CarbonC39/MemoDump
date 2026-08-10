@@ -4,8 +4,7 @@
 // completed run, conflicts, and recovery state.
 import { reactive } from 'vue'
 import apiClient from '../api'
-
-export const isLocalBuild = import.meta.env.VITE_LOCAL === '1'
+import { cloudSyncAvailable } from './runtime'
 
 const state = reactive({
   initialized: false,
@@ -60,7 +59,7 @@ export async function initSyncSettings() {
 }
 
 export async function refreshSyncSettings() {
-  if (isLocalBuild) {
+  if (!cloudSyncAvailable()) {
     state.initialized = true
     return
   }

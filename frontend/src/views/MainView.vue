@@ -242,6 +242,7 @@ import { useFolderActions } from '../composables/useFolderActions.js'
 import { useWorkspaceNavigation } from '../composables/useWorkspaceNavigation.js'
 import { useSyncPolling } from '../composables/useSyncPolling.js'
 import { refreshSyncSettings, setOnSyncChanged } from '../composables/useSyncSettings.js'
+import { cloudSyncAvailable } from '../composables/runtime.js'
 import { preloadMilkdownEditor } from '../components/milkdownLoader.js'
 
 const router = useRouter()
@@ -364,7 +365,7 @@ const syncChangedNotice = ref('')
 const syncPolling = useSyncPolling({
   api: apiClient,
   editor: noteEditor,
-  isLocalBuild,
+  available: cloudSyncAvailable(),
   onAutoSync: loadAll,
   onNotice: () => {
     syncChangedNotice.value = t('sync.syncedVersionChanged')

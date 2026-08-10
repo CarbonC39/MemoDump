@@ -1,8 +1,9 @@
-// Lightweight automatic-sync status poller (R5.4). The backend can change local
-// Markdown without a frontend request, so a connected server/Wails build polls
+// Lightweight automatic-sync status poller (R5.4). The Wails backend can change
+// local Markdown without a frontend request, so a connected Wails runtime polls
 // the redacted /api/sync/status every 30 seconds while the document is visible.
 // It never calls /api/sync/run, never fetches recovery content on a poll (the
-// status carries only the count), and does not exist in the local/IndexedDB
+// status carries only the count), and only runs when the runtime reports cloud
+// sync available (R6.0) — never on the CLI Web server or the Pure frontend/PWA
 // build. When an automatic attempt completes, the visible list is refreshed and
 // the open note is re-read: a clean buffer adopts the new content, a deleted
 // note closes, and a dirty buffer is never replaced — only a notice is shown.
@@ -15,7 +16,7 @@ const AUTO_TRIGGERS = ['startup', 'periodic', 'retry', 'enable']
 export function useSyncPolling({
   api,
   editor,
-  isLocalBuild = false,
+  available = false,
   intervalMs = DEFAULT_INTERVAL_MS,
   isVisible = () => !document.hidden,
   setIntervalFn = setInterval,
@@ -55,9 +56,10 @@ export function useSyncPolling({
   }
 
   // start begins polling: it registers the visibility listener and polls while
-  // the document is visible. It is idempotent.
+  // the document is visible. It is idempotent and does nothing when the runtime
+  // has no cloud-sync surface (CLI Web server) or none yet (Pure frontend/PWA).
   function start() {
-    if (isLocalBuild || started) return
+    if (!available || started) return
     started = true
     addVisibilityListener(onVisibilityChange)
     if (isVisible()) {
@@ -74,7 +76,7 @@ export function useSyncPolling({
   }
 
   async function poll() {
-    if (isLocalBuild || running) return
+    if (!available || running) return
     running = true
     try {
       const resp = await api.syncStatus()

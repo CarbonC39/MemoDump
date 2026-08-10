@@ -14,6 +14,7 @@ vi.mock('../api', () => ({
 }))
 
 import apiClient from '../api'
+import { setCloudSyncAvailable } from './runtime'
 import {
   applyLightweightStatus,
   enableSync,
@@ -30,6 +31,10 @@ import {
 
 describe('sync settings', () => {
   beforeEach(() => {
+    // Runtime matrix: this suite exercises the Wails surface explicitly (R6.0);
+    // the CLI Web server and Pure frontend/PWA runtimes have no sync surface.
+    setCloudSyncAvailable(true)
+    vi.clearAllMocks()
     apiClient.syncStatus.mockResolvedValue({
       data: {
         enabled: true,
@@ -98,6 +103,13 @@ describe('sync settings', () => {
     const s = getSyncSettings()
     expect(s.recovery).toHaveLength(0)
     expect(s.recoveryError).toContain('sync index corrupt')
+  })
+
+  it('runtime without cloud sync never calls the sync API', async () => {
+    setCloudSyncAvailable(false)
+    await refreshSyncSettings()
+    expect(apiClient.syncStatus).not.toHaveBeenCalled()
+    expect(apiClient.syncRecovery).not.toHaveBeenCalled()
   })
 
   it('applyLightweightStatus updates the panel scheduling state without recovery', () => {
