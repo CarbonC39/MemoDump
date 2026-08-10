@@ -199,3 +199,101 @@ async function onRestore(index) {
   }
 }
 </script>
+
+<style scoped>
+.settings-section {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.settings-section-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-section-title-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.settings-section-title-btn h3 { margin: 0; }
+.settings-section-header {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.settings-caret {
+  color: var(--text-muted);
+  font-size: 18px;
+  transition: transform 0.15s ease;
+}
+.settings-caret.open { transform: rotate(180deg); }
+.sync-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--primary-bg);
+  color: var(--primary-dark);
+}
+.settings-sync-body { padding-top: 14px; }
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.setting-row:last-child { margin-bottom: 0; }
+.setting-row-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.sync-warning { color: var(--danger); }
+.error-text { color: var(--danger); }
+.ok-text { color: var(--success); }
+.sync-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.sync-status {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sync-recovery {
+  margin-top: 14px;
+}
+.sync-recovery-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sync-recovery-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+</style>
