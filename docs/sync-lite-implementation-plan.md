@@ -1,7 +1,7 @@
 # MemoDump Versioned-Note Sync — Implementation Plan
 
-Status: R0–R5 implemented and reviewed
-Date: 2026-08-09
+Status: R0–R5 implemented and reviewed; R6 planned
+Date: 2026-08-10
 Architecture contract: [`sync-spec-lite.md`](sync-spec-lite.md)
 
 ## 1. Reset point
@@ -42,6 +42,9 @@ Adapt:
   path and no `kind` or `parentId`;
 - the pure decision code becomes one small Go per-note function;
 - scanner output covers Markdown notes only.
+- in R6, port only the schema-v2 wire contract, per-note decision table, and
+  serialized cycle to browser JavaScript; consume the committed Go fixtures
+  instead of introducing a shared filesystem/IndexedDB abstraction.
 
 Retire after replacement tests pass:
 
@@ -50,8 +53,9 @@ Retire after replacement tests pass:
 - cursor persistence and delta-list decisions;
 - the general `Action`/repository planner and simulator executor when the
   note-only coordinator no longer calls them;
-- the TypeScript reconciliation/coordinator port. Keep generic wire/store code
-  only if it remains used or cheap to maintain;
+- the old generic TypeScript reconciliation/coordinator port. R6 starts a new
+  note-only browser implementation against the reviewed fixtures; it does not
+  revive the folder/action-graph port;
 - any coordinator path that recursively deletes a folder.
 
 Do not delete the historical commits or users' legacy state files. Schema-v1
@@ -76,6 +80,9 @@ internal/syncprovider/s3/ first real provider
 
 sync_service.go           lifecycle/configuration
 api_sync.go               manual setup/run/status endpoints
+
+frontend/src/sync/        R6 note-only browser contract/coordinator/S3 adapter
+frontend/src/storage/     IndexedDB note CAS + R6 sync state/recovery stores
 ```
 
 The coordinator may use a small `switch` over a per-note decision. Do not add a
@@ -302,6 +309,12 @@ sync, cursors, or scheduling in the same phase.
 
 ## 9. R5 — Scheduling and release hardening
 
+> **Post-R5 runtime correction (2026-08-10):** R5 is complete and remains the
+> reviewed Go/filesystem implementation used by Wails. The original plan was
+> wrong to treat the CLI Web server as the product that needed cloud sync and
+> to treat Pure frontend/PWA synchronization as deferred. Section 10 supersedes
+> that runtime assumption without reopening or reimplementing R5.
+
 Purpose: make the proven manual S3 cycle run predictably while MemoDump is open,
 without turning synchronization into a second application framework.
 
@@ -323,10 +336,11 @@ seconds.
   cycles never overlap or cause catch-up bursts.
 - `Run now` remains available, bypasses the timer/backoff delay, and uses the
   exact same run function and locks as startup, periodic, and retry attempts.
-- Automatic sync exists in the Go server/Wails backend only. It continues when
-  a browser tab is closed but the CLI server is still running; it stops when the
-  Wails app or server process exits. The pure local/IndexedDB build has no cloud
-  scheduler.
+- R5 automatic sync is the completed Go/filesystem scheduler. Wails is its
+  supported product consumer. Its current CLI-server exposure is transitional
+  shared-backend behavior removed from the product surface in R6. The Pure
+  frontend/PWA build receives its own page-lifetime IndexedDB scheduler in R6;
+  it is not expected to call the Go backend.
 - This is eventual, not real-time, synchronization. A change on A is uploaded
   on A's next attempt and downloaded on B's next attempt. The worst normal
   latency is therefore about two intervals; users can choose `Run now` when
@@ -414,16 +428,16 @@ Estimated review size: 250–400 changed lines.
 
 ### R5.3 Process lifecycle and status
 
-Start the scheduler only after `dataDir`, repository, state root, sessions, and
-provider configuration are ready:
+R5 starts the Go scheduler only after `dataDir`, repository, state root,
+sessions, and provider configuration are ready:
 
-- CLI: use a root cancellation context tied to process signals, stop the
-  scheduler during HTTP-server shutdown, and do not start it in tests unless a
-  test explicitly asks for it.
+- CLI: R5 implemented a root cancellation context tied to process signals and
+  clean HTTP-server shutdown. R6 disables this scheduler and its product/API
+  surface for the CLI Web server; do not delete the shared Go engine Wails uses.
 - Wails: start from `OnStartup` after repository initialization and stop/wait
   from `OnShutdown`.
-- Local/IndexedDB build: retain the current disabled sync stubs and create no
-  timer or polling loop.
+- Local/IndexedDB build: not implemented by R5. R6 replaces the disabled stubs
+  with the browser implementation and creates a page-lifetime timer there.
 
 Extend `/api/sync/status` with secret-free, in-memory scheduling fields:
 
@@ -456,8 +470,11 @@ Estimated review size: 200–350 changed lines.
 
 ### R5.4 Visible frontend updates
 
-Backend sync can change local Markdown without a frontend request, so add one
-lightweight **status poll**, not a sync engine, in server/Wails builds:
+Wails backend sync can change local Markdown without a frontend request, so R5
+adds one lightweight **status poll**, not a second sync engine, to the shared
+server/Wails frontend. R6 keeps it for Wails, removes it from the CLI Web-server
+product path, and does not use it in Pure frontend/PWA because the browser
+engine can notify the UI directly:
 
 - poll `/api/sync/status` every 30 seconds only while the document is visible;
   stop on unmount/hidden and refresh once when visibility returns;
@@ -474,7 +491,8 @@ lightweight **status poll**, not a sync engine, in server/Wails builds:
   buffer. Only when the revision differs (or the file disappeared), show a
   non-blocking "synced version changed; save or reload to reconcile" notice and
   rely on the existing revision CAS to prevent overwrite;
-- polling must never call `/api/sync/run` and must not exist in the local build.
+- polling must never call `/api/sync/run`. It remains a Wails adapter only after
+  R6; the local build uses direct browser-engine completion callbacks.
 
 Exit gate: frontend fake-timer tests cover visibility pause/resume, lightweight
 polling without recovery downloads, list refresh, clean-note refresh/deletion,
@@ -534,16 +552,268 @@ matches for `time.NewTicker`, `time.Sleep`, scheduler-state files, watchers,
 cursors, worker pools, and loopback `/api/sync/run` calls; every match must be
 unrelated or explicitly justified.
 
-R5 is complete when two connected filesystem replicas, with no browser action,
-converge through S3 after startup/periodic triggers; Run now remains immediate;
+R5 is complete when two connected Wails/filesystem replicas, with no browser
+action, converge through S3 after startup/periodic triggers; Run now remains immediate;
 transient failures back off without surviving restart; permanent failures pause
 without spinning; Disable stops future attempts; shutdown leaves no background
 sync work; a dirty editor is never overwritten by a background pull; and all R4
 data-loss protections remain unchanged.
 
-## 10. Verification gates
+## 10. R6 — Pure frontend/PWA sync and runtime ownership
 
-For each small assignment, run its narrow tests. At every reset-phase exit run:
+Purpose: give the browser-local product the synchronization it actually needs,
+without reopening the reviewed R0–R5 filesystem implementation or building a
+third application framework.
+
+R6 ports the **same remote note protocol and per-note behavior** to the existing
+IndexedDB vault. It does not call the Go API, mount a virtual filesystem, compile
+Go to WebAssembly, revive the old TypeScript folder planner, or attempt service-
+worker/background sync. Wails keeps R5. The CLI Web server leaves the cloud-sync
+product surface because all of its browser clients already share one server
+vault.
+
+The target runtime matrix after R6 is:
+
+| Build | Notes live in | Sync owner | Automatic lifetime |
+|---|---|---|---|
+| Wails desktop | Filesystem vault | Reviewed Go R0–R5 engine | Wails process |
+| Pure frontend / PWA | IndexedDB | R6 browser engine | Active app/page lifetime |
+| CLI Web server | Server filesystem | None | None |
+
+Wails↔PWA interoperability is an exit requirement. Share wire fixtures and
+observable result shapes; do not force the two runtimes behind a common storage
+interface.
+
+The following browser constraints are fixed for every R6 phase:
+
+- use the committed `testdata/sync` repository/note/canonical-path/state-hash
+  fixtures as the wire authority;
+- use `crypto.randomUUID()` and Web Crypto for UUID/hash work; do not add a
+  cryptography dependency or handwritten signer;
+- require an exclusive Web Lock for a browser sync cycle. If Web Locks are not
+  available, editing remains usable but sync reports `unsupported-lock`; R6 must
+  never run two tabs unlocked and must not add an expiring lease/fencing system;
+- keep note-sync S3 configuration separate from image hosting. The browser may
+  persist endpoint, region, bucket, prefix, access key, secret key, and path-
+  style choice in its local sync configuration with an explicit plaintext-
+  credential warning. Credentials never enter IndexedDB sync state, remote note
+  records, recovery copies, fixtures, logs, or UI status;
+- a browser page owns no work after it closes. Do not use Background Sync,
+  service-worker credentials, push, WebSocket, or a durable retry queue.
+
+### R6.0 Correct runtime ownership
+
+Introduce one explicit runtime capability instead of deriving cloud-sync
+availability from `!isLocalBuild`:
+
+- Wails reports sync available, starts/stops the reviewed R5 scheduler, exposes
+  the existing API, shows the Sync panel, and keeps the 30-second status poll;
+- CLI Web server reports sync unavailable, starts no scheduler, hides the panel,
+  creates no polling timer, and returns one stable unavailable response if a
+  sync route is called;
+- Pure frontend/PWA remains unavailable in this preparatory phase, so its old
+  stubs stay hidden until R6.5 replaces them atomically with a working browser
+  surface.
+
+Keep the Go engine compiled and shared for Wails. Do not delete R5 code, fork
+the server, or expose a half-built PWA panel. Tests must select all three modes
+explicitly instead of relying on ambient globals that cannot distinguish CLI
+from Wails.
+
+Exit gate: lifecycle/API/component tests prove the matrix above; ordinary CLI
+note/image APIs and all Wails R5 behavior remain unchanged.
+
+Estimated review size: 150–300 changed lines.
+
+### R6.1 Browser wire contract and pure decision core
+
+Create small modules under `frontend/src/sync/` for:
+
+- loading the committed cross-runtime fixtures plus a new shared per-note
+  decision fixture consumed by both Go and browser tests;
+- strict schema-v1 `repo.json` and schema-v2 note parsing/serialization;
+- LF Markdown normalization, portable path keys, canonical hashes, state hashes,
+  deterministic conflict UUID/path derivation, and UUID v4/v5 validation;
+- the fixed R1 per-note decision table and stable redacted result/error labels.
+
+Use ordinary JavaScript matching the current frontend. The modules perform no
+IndexedDB, Vue, timer, or network I/O. Reject duplicate/unknown JSON fields and
+unsafe, non-portable, oversized, non-UTF-8, or malformed records exactly as the
+Go fixtures require. Do not port folder entities, action DAGs, cursors, or the
+old generic TypeScript coordinator.
+
+Exit gate: browser tests consume every applicable committed fixture and the new
+shared decision fixture; the matching Go decision test consumes that same new
+fixture and all existing Go fixture tests remain green.
+
+Estimated review size: 300–500 changed lines.
+
+### R6.2 IndexedDB identity, snapshot, and recovery
+
+Upgrade `localVaultDb` once, preserving every existing note/folder record, and
+add only the state needed by the note protocol:
+
+- a sync-index store mapping Sync ID to last known Markdown path. It survives
+  local note deletion so the next cycle can emit the correct tombstone, and is
+  removed only after that deletion is known converged;
+- optional `syncId` mirrored on a live note record. Existing notes gain IDs only
+  during explicit Enable/first cycle; note and index updates share one
+  transaction, and later in-app rename/move preserves the ID while atomically
+  changing the indexed path;
+- a small sync-state store for Vault/Replica identity, strict connection pin,
+  and one disposable schema-v2 snapshot;
+- a recovery store keyed by `(syncId, stateHash)` containing complete Markdown
+  and original path;
+- atomic helpers to assign an ID only if it is still absent, reserve a conflict
+  ID/path, apply a pull/delete with the existing note revision CAS, replace the
+  snapshot once, list recovery metadata without loading all Markdown, and
+  restore a selected copy safely.
+
+Disable flips only `Connected`; Reset clears the connection pin and disposable
+snapshot but preserves notes, assigned Sync IDs, and recovery copies. A missing
+or corrupt snapshot triggers conservative onboarding. Corrupt identity or
+connection state stops sync and requires Reset; it is never reinterpreted as an
+empty repository.
+
+Exit gate: `fake-indexeddb` migration/fault tests cover a populated v2 database,
+atomic ID assignment, rename preservation, stale local revision, recovery-before-
+delete, Disable, Reset, and page termination before/after snapshot replacement.
+
+Estimated review size: 350–550 changed lines.
+
+### R6.3 Browser S3 conditional store
+
+Add a note-sync S3 adapter beside, but separate from, the public-image helper.
+Reuse `aws4fetch` only for SigV4. Note storage is private and never uses an
+anonymous public URL. Implement:
+
+- signed read of `repo.json` and `notes/<sync-id>.json` returning the opaque
+  `ETag`/provider version;
+- complete paginated ListObjectsV2 under the configured note prefix;
+- conditional create with `If-None-Match: *` and conditional replace with
+  `If-Match`;
+- the same setup probe as Go, rejecting a provider/CORS policy that cannot list,
+  read, expose `ETag`, or enforce both conditional operations;
+- normalized auth, permission, rate-limit, quota, invalid/incomplete response,
+  unsupported, and retryable transport errors without reading/logging arbitrary
+  response bodies.
+
+Use injected `fetch` and deterministic XML/response fixtures. Do not depend on a
+public bucket, reuse the image `publicBaseUrl`, add parallel transfers, or use
+unconditional writes as fallback.
+
+Exit gate: adapter tests cover pagination, URL/prefix encoding, missing/exposed
+ETag, both preconditions, retry headers, abort, malformed XML, and redaction. An
+opt-in live browser test uses a random isolated prefix and prints no credential
+or note content.
+
+Estimated review size: 350–550 changed lines.
+
+### R6.4 Serialized IndexedDB cycle
+
+Implement one browser coordinator that mirrors the reviewed R2 cycle without
+copying its filesystem machinery:
+
+1. acquire the exclusive Web Lock and validate connection/provider/repository;
+2. enumerate IndexedDB notes once, assign missing IDs atomically, load the
+   disposable snapshot, and fully list/read the remote;
+3. build the union by Sync ID, detect portable/local path collisions, and call
+   the pure R6.1 decision function in sorted ID order;
+4. execute conditional remote writes and local revision-CAS writes serially;
+5. reserve deterministic conflict notes before changing originals and write a
+   recovery copy before every pulled deletion;
+6. commit one consolidated snapshot only for final known-equal states, then
+   release the lock.
+
+Cancellation is checked between notes. A remote precondition/uncertain response
+re-reads that key. A local CAS loser survives for the next cycle. Do not hook
+every save, sync empty folders, infer renames, create a worker pool, or persist
+an operation queue.
+
+Exit gate: two fake IndexedDB replicas converge through an in-memory/fake remote
+for every R2 conflict/deletion/restart scenario, including two tabs attempting
+Run now and a dirty editor racing a pull/delete.
+
+Estimated review size: 450–700 changed lines; split observation/ordinary actions
+from conflict/deletion execution if needed.
+
+### R6.5 Local API, settings, recovery, and visible updates
+
+Replace only the Pure frontend/PWA sync stubs in `localApi.js` with thin calls to
+the browser service. Keep the axios-shaped API so the existing Sync panel can be
+reused, but choose visibility by runtime capability rather than
+`!isLocalBuild`:
+
+- Pure frontend/PWA and Wails show Cloud Sync; CLI Web server does not;
+- browser Enable validates configuration, creates/adopts `repo.json`, pins the
+  provider/repository, assigns existing note IDs, and requests an immediate run;
+- Run now, Disable, Reset, status, recovery list, and restore match the reviewed
+  redacted response shapes;
+- browser status is read directly from the in-page service. It never polls
+  `/api/sync/status` or downloads recovery Markdown merely to obtain a count;
+- after a browser cycle/restore, refresh the list and safely re-read the open
+  note. A dirty, saving, offline, or conflicting buffer is never replaced or
+  closed; the existing revision CAS remains the overwrite guard.
+
+The note-sync settings form is independent of image settings and states that
+credentials are stored in this browser, note data is not E2EE, deletes
+propagate, and private-bucket CORS must allow/expose the required signed methods,
+headers, and `ETag`.
+
+Exit gate: local-build tests exercise the complete public sync surface with no
+HTTP call to MemoDump itself; Wails behavior remains unchanged; CLI status/UI
+reports sync unavailable.
+
+Estimated review size: 300–500 changed lines.
+
+### R6.6 Page-lifetime scheduler
+
+Add one in-memory scheduler owned by the Pure frontend/PWA app instance. Reuse
+R5 behavior, not R5 Go code:
+
+- connected startup attempt after 10 seconds; successful Enable wakes an
+  immediate coalesced attempt;
+- next ordinary run five minutes after completion; exact transient backoff
+  `1m, 2m, 5m, 10m, 30m`, honoring a longer Retry-After;
+- permanent configuration/auth/quota/corruption/mismatch failures pause until a
+  successful manual run, successful Enable, or page restart;
+- one resettable timeout and one in-process single-flight promise. The Web Lock
+  supplies cross-tab exclusion;
+- when hidden, cancel the active timeout but retain the in-memory due time; when
+  visible again, run immediately if overdue or re-arm the remaining delay;
+- close/unmount cancels the timeout and current fetch via `AbortController` and
+  waits for the attempt promise. No work is promised after page/PWA closure.
+
+Exit gate: frontend fake-timer/visibility tests cover startup, Enable, periodic,
+backoff, pause, multi-tab lock refusal, cancellation, and local direct UI
+refresh. Runtime-matrix regression tests from R6.0 remain green.
+
+Estimated review size: 350–550 changed lines.
+
+### R6.7 Documentation and cross-runtime release gate
+
+Update English/Chinese docs and manual checks together:
+
+- runtime matrix: Wails and Pure frontend/PWA sync; CLI Web server does not;
+- browser-private S3 configuration, CORS, credential-at-rest warning, no E2EE,
+  page-lifetime scheduling, and no sync after the page/PWA closes;
+- IndexedDB identity/snapshot/recovery persistence and the consequences of
+  clearing site data or using private browsing;
+- two PWA browser profiles/devices, Wails↔PWA interoperability, dirty-editor
+  protection, conflict/deletion/recovery, offline/transient recovery, Reset, and
+  repository mismatch;
+- one opt-in real S3 run from a supported browser with an isolated prefix.
+
+R6 is complete only when PWA↔PWA and Wails↔PWA converge through the same real S3
+repository and fixtures prove byte-compatible records. Retain the experimental
+flag until those checks pass on the supported browser/platform matrix.
+
+Estimated review size: documentation and release evidence only.
+
+## 11. Verification gates
+
+For each small assignment, run its narrow tests. At every phase exit run the
+applicable full gates:
 
 ```sh
 go test ./...
@@ -558,24 +828,32 @@ npm run build:local
 ```
 
 The frontend gates ensure the existing application still works; they do not
-authorize porting the new coordinator to TypeScript.
+authorize reviving the old generic TypeScript coordinator. R6 browser-sync work
+must remain under `frontend/src/sync/`, use the reviewed shared fixtures, and
+stay note-only.
 
-## 11. Next handoff to a smaller agent
+For R6, additionally run the shared fixture tests in both Go and frontend, the
+`fake-indexeddb` coordinator suite, local-build scheduler fake-timer tests, and
+the runtime-gating tests. Do not make a real S3 test part of the default suite;
+it remains explicit opt-in with a random isolated prefix.
 
-R0–R5 are complete and the experimental cloud-sync feature is fully implemented.
-Any next small assignment should come from the R5.5 release-review checklist
-(three-platform manual convergence, conflict/recovery UX, and one successful
-opt-in live S3 test) or one of the explicitly deferred future proposals below.
-The follow-up proposals remain separate: filesystem watchers, delta cursors,
-parallel transfers, tombstone GC, pure frontend synchronization, and removing
-the experimental flag.
+## 12. Next handoff to a smaller agent
+
+R0–R5 are complete and reviewed for the Go/filesystem runtime. The next small
+assignment is **R6.0 only**. Do not reopen R5, start with the browser coordinator,
+or expose the local Sync panel early. Each later R6 subsection is a separate
+review/commit after the previous exit gate passes.
 
 ```text
-Read CLAUDE.md, docs/sync-spec-lite.md, and the R5.5 release checklist. Pick one
-concrete deferred proposal, implement it against the existing R0–R5 stack, run
-go test ./..., go test -race ./..., go vet ./..., and the frontend gates, and
-stop at that proposal's own exit gate.
+Read CLAUDE.md, docs/sync-spec-lite.md, and Section 10 of
+docs/sync-lite-implementation-plan.md. Implement R6.0 only: freeze the browser
+runtime ownership so Wails retains R5, CLI Web server has no sync scheduler/UI,
+and Pure frontend/PWA remains hidden until its implementation is ready. Do not
+add IndexedDB/network/coordinator work. Run the narrow Go/frontend runtime tests
+plus the normal gates, then stop for review. R0–R5 are complete and must not be
+rewritten.
 ```
 
-Expected review: one focused follow-up on top of the reviewed R0–R5 stack, with
-no regression to the reviewed scheduler or lifecycle behavior.
+Expected review: one focused R6 subsection on top of the reviewed R0–R5 Wails
+stack, with no regression to R5 scheduler/lifecycle behavior and no cloud-sync
+surface in the CLI Web-server target after R6.0.

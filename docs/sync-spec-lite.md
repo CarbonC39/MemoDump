@@ -1,12 +1,14 @@
 # MemoDump Cloud Sync — Versioned Notes Specification
 
-Status: proposed V1 implementation contract
-Date: 2026-08-08
+Status: filesystem/Wails V1 implemented through R5; Pure frontend/PWA port planned in R6
+Date: 2026-08-10
 
 This document replaces the earlier “simplified” synchronization design. The
 earlier design removed the WAL, but still modeled a general bidirectional file
-system: folders were entities, paths formed a graph, moves retained identity,
-and two runtimes implemented the same planner. That is not the V1 product.
+system: folders were entities, paths formed a graph, and moves retained
+identity. That is not the V1 product. MemoDump does need two local-vault
+runtimes, but they share this small note protocol and fixtures rather than a
+generic cross-runtime filesystem framework.
 
 MemoDump V1 synchronizes versioned notes through a cloud repository. It is not
 a Dropbox replacement.
@@ -31,10 +33,26 @@ V1 deliberately does not promise:
 - identity-preserving external rename or move detection;
 - Markdown merging, collaborative editing, CRDTs, or remote history;
 - incremental cursors, parallel transfers, or work after a browser closes;
-- simultaneous Go and pure-frontend implementations.
+- one storage abstraction shared by the Go filesystem and browser IndexedDB
+  runtimes, or background work after the owning app/page closes.
 
-The Go filesystem implementation is completed first. A pure-frontend port is a
-later product decision, after the Go behavior has proved useful.
+The Go filesystem implementation and scheduler were completed first in R0–R5
+and are the Wails implementation. R6 ports the same wire contract and per-note
+rules to the Pure frontend/PWA build, whose notes live in IndexedDB. The CLI Web
+server is not a cloud-sync product target: its browsers already share the
+server's one canonical data directory.
+
+The supported runtime matrix is:
+
+| Build | Local note authority | Cloud-sync implementation |
+|---|---|---|
+| Wails desktop | Filesystem vault | Existing Go R0–R5 engine and scheduler |
+| Pure frontend / PWA (`VITE_LOCAL=1`) | Browser IndexedDB | R6 browser engine and page-lifetime scheduler |
+| CLI Web server | Server filesystem shared by all clients | None; clients already use the same server vault |
+
+Wails and Pure frontend/PWA replicas must interoperate through byte-identical
+remote records. Runtime-specific persistence and locking stay separate. Shared
+JSON fixtures, not shared storage code, keep their protocol behavior aligned.
 
 ## 2. The note model
 
@@ -51,19 +69,24 @@ portable index maps that ID to its current local path:
 }
 ```
 
-The index lives at `<vault>/.memodump/sync-index.json` and is created only when
-sync is enabled. It contains no note bodies, cloud credentials, remote versions,
-or deletion state.
+In Wails the index lives at `<vault>/.memodump/sync-index.json`. In the Pure
+frontend/PWA build the same logical mapping is stored as IndexedDB sync metadata
+and each live indexed note may mirror its assigned `syncId`; no virtual
+`.memodump` file is created. The IndexedDB mapping survives local note deletion
+until the corresponding tombstone is known converged. Both indexes are created
+only when sync is enabled and contain no cloud credentials, remote versions, or
+deletion state.
 
 Folders have no identity. A note record carries its complete slash-relative
 path. Downloading a note creates its parent directories as needed. MemoDump
 does not upload empty folders and never deletes a directory merely because no
 remote folder record exists.
 
-An external rename that MemoDump did not record is interpreted conservatively
-as deletion of the old note plus creation of a new note with a new `syncId`.
-This may lose rename identity, but it does not lose Markdown. Automatic rename
-inference is out of scope.
+An external filesystem rename that MemoDump did not record is interpreted
+conservatively as deletion of the old note plus creation of a new note with a
+new `syncId`. This may lose rename identity, but it does not lose Markdown.
+IndexedDB has no external filesystem rename; an in-app browser rename preserves
+the note record's `syncId`. Automatic rename inference is out of scope.
 
 ## 3. Remote repository
 
@@ -125,11 +148,17 @@ fallback.
 
 ## 5. Minimal device state
 
-One disposable snapshot is stored outside the vault at:
+One disposable snapshot is stored outside the filesystem vault at:
 
 ```text
 <app-data>/memodump/sync/<vault-id>/<replica-id>/state.json
 ```
+
+The Pure frontend/PWA equivalent is one record in the MemoDump IndexedDB sync
+state store, keyed by its local Vault/Replica identity. Recovery copies use a
+separate IndexedDB store. Browser S3 credentials live only in the browser's
+local sync configuration, never in note records, snapshots, recovery copies,
+remote objects, or shared fixtures.
 
 It contains repository/profile identity and, for each note, only the last state
 this replica knew was equal locally and remotely:
@@ -165,18 +194,22 @@ cache, not a journal:
 - profile or Repository-ID mismatch stops before mutation;
 - ordinary snapshot I/O errors stop the cycle.
 
-The existing replica OS lock remains operational support. Exactly one sync cycle
-may own a replica's index and snapshot at a time.
+Wails uses the existing replica OS lock. Pure frontend/PWA uses one exclusive
+Web Lock scoped to its local vault. Exactly one sync cycle may own a replica's
+index and snapshot at a time; a browser without Web Locks may still edit locally
+but does not run sync in V1.
 
 ## 6. Full-list serialized cycle
 
-V1 runs a single-threaded cycle:
+V1 runs a single-threaded cycle in either runtime:
 
-1. Acquire the replica lock and load the provider profile, index, snapshot, and
-   `repo.json`; stop on identity mismatch.
-2. Stably scan Markdown notes. Assign IDs to definite unindexed notes and save
-   the index before uploading them. Unsafe, unreadable, or unstable paths are
-   unknown, never absent.
+1. Acquire the runtime's replica lock (OS lock in Wails, Web Lock in PWA) and
+   load the provider profile, index, snapshot, and `repo.json`; stop on identity
+   mismatch.
+2. Observe all local Markdown notes: stable filesystem scan in Wails, one
+   IndexedDB enumeration in Pure frontend/PWA. Assign IDs to definite unindexed
+   notes and durably save them before uploading. Unsafe, unreadable, unstable,
+   or transaction-failed notes are unknown, never absent.
 3. Fully list `notes/` on every cycle. Read and validate remote records whose
    versions are not already known, plus every remote-only record. Pagination is
    allowed; a delta cursor is not.
@@ -226,9 +259,10 @@ A physically missing remote object is not a tombstone. If a baseline expected
 that object, report remote damage and leave local content untouched. Absence
 alone never authorizes deletion.
 
-Local writes use the existing filesystem revision CAS. If an editor changes a
-note during a pull or delete, the local operation fails and the new edit
-survives for the next cycle.
+Local writes use the existing revision CAS: `vaultfs` in Wails and the atomic
+IndexedDB note transaction in Pure frontend/PWA. If an editor changes a note
+during a pull or delete, the local operation fails and the new edit survives for
+the next cycle.
 
 ## 8. Conflict and deletion preservation
 
@@ -250,6 +284,9 @@ idempotently to:
 ```text
 <replica-state>/recovery/<sync-id>/<state-hash>.md
 ```
+
+Pure frontend/PWA stores the same logical recovery entry in its IndexedDB
+recovery store instead of materializing this filesystem path.
 
 Recovery failure prevents deletion. Recovery copies are not synchronization
 state and do not influence decisions. Automatic cleanup is deferred.
@@ -275,30 +312,34 @@ Provider URLs require HTTPS except explicit localhost development.
 
 ## 10. V1 acceptance tests
 
-1. Two filesystem replicas converge for create, edit, delete, nested note path,
-   and in-app path change.
-2. An external rename converges as old-note deletion plus new-note creation; the
-   Markdown survives.
+1. Two replicas converge for create, edit, delete, nested note path, and in-app
+   path change in each supported pairing: Wails↔Wails, PWA↔PWA, and Wails↔PWA.
+2. A Wails external rename converges as old-note deletion plus new-note creation;
+   a PWA in-app rename retains its Sync ID; the Markdown survives both.
 3. Concurrent edits and both edit/delete directions preserve all edited content
    and create no duplicate conflict notes after retries.
 4. A stale remote version never causes an unconditional overwrite.
 5. An external edit racing pull/delete survives local revision-CAS failure.
 6. Remote tombstone deletion cannot occur before a durable recovery copy.
-7. Crash/restart around conflict reservation, local write/delete, remote write,
-   index save, and snapshot replace converges without silent loss.
+7. Process/page termination around conflict reservation, local write/delete,
+   remote write, index save, and snapshot replace converges without silent loss.
 8. Missing/corrupt snapshots, physical remote deletion, incomplete listing,
    invalid records, repository mismatch, and path collision never delete local
    Markdown.
 9. Empty folders are ignored, and synchronization never recursively deletes a
    directory.
-10. A full cycle needs no cursor, folder graph, durable operation queue, or
-    TypeScript coordinator.
+10. A full cycle needs no cursor, folder graph, durable operation queue, service
+    worker, or background work after the Wails app/PWA page closes.
+11. The CLI Web server exposes no cloud-sync product surface and starts no sync
+    scheduler; Wails retains the reviewed Go R5 behavior.
+12. The Go and browser implementations accept and serialize the same repository
+    and note fixtures, including canonical hashes and deterministic conflicts.
 
 ## 11. Deferred until V1 proves useful
 
-- pure-frontend synchronization;
 - WebDAV and Dropbox after one provider works end-to-end;
 - provider delta cursors and bandwidth optimization;
 - empty-folder identity, identity-preserving external rename, and folder moves;
 - managed private media, E2EE, automatic merging, remote history, and GC;
-- watchers for correctness, parallel actions, background durable retry state.
+- watchers for correctness, parallel actions, service-worker/background sync,
+  and durable retry state.
