@@ -1,7 +1,6 @@
 package cloudsync
 
 import (
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -99,22 +98,4 @@ func FirstInvalidMediaKey(markdown string) (string, bool) {
 func isKeyContinuation(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' ||
 		b == '.' || b == '-' || b == '_' || b == '/' || b == ':'
-}
-
-// requireString reads a required string field from a decoded JSON object.
-func requireString(fields map[string]json.RawMessage, key string) (string, error) {
-	raw, ok := fields[key]
-	if !ok {
-		return "", fmt.Errorf("%w: missing field %q", ErrInvalidEntity, key)
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return "", fieldTypeError(key)
-	}
-	return s, nil
-}
-
-// fieldTypeError reports a decoded JSON field with the wrong type.
-func fieldTypeError(key string) error {
-	return fmt.Errorf("%w: field %q has the wrong type", ErrInvalidEntity, key)
 }

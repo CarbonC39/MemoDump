@@ -237,6 +237,9 @@ func TestGenerateFixtures(t *testing.T) {
 		{"name": "empty minimumClientVersion", "json": `{"formatVersion":1,"repositoryId":"bdbd4162-faf1-418e-895e-4221bbbb5cc5","createdAt":1785800000000,"minimumClientVersion":""}`},
 		{"name": "createdAt beyond safe integer", "json": `{"formatVersion":1,"repositoryId":"bdbd4162-faf1-418e-895e-4221bbbb5cc5","createdAt":9007199254740992,"minimumClientVersion":"2.0.0"}`},
 		{"name": "trailing content", "json": `{"formatVersion":1,"repositoryId":"bdbd4162-faf1-418e-895e-4221bbbb5cc5","createdAt":1785800000000,"minimumClientVersion":"2.0.0"}extra`},
+		{"name": "duplicate repositoryId", "json": `{"formatVersion":1,"repositoryId":"bdbd4162-faf1-418e-895e-4221bbbb5cc5","repositoryId":"cebe5263-fbf2-419f-9a6f-5332cccc6dd6","createdAt":1785800000000,"minimumClientVersion":"2.0.0"}`},
+		{"name": "duplicate formatVersion", "json": `{"formatVersion":1,"formatVersion":2,"repositoryId":"bdbd4162-faf1-418e-895e-4221bbbb5cc5","createdAt":1785800000000,"minimumClientVersion":"2.0.0"}`},
+		{"name": "null repositoryId", "json": `{"formatVersion":1,"repositoryId":null,"createdAt":1785800000000,"minimumClientVersion":"2.0.0"}`},
 	}
 	writeJSON("repo-descriptors.json", map[string]any{"valid": repoCases, "invalid": invalidRepo})
 
@@ -345,4 +348,174 @@ func TestGenerateFixtures(t *testing.T) {
 		{"name": "quota", "kind": "quota", "retryAfterSeconds": 0, "retryable": false, "backoffSeconds": 0},
 		{"name": "precondition-failed", "kind": "precondition-failed", "retryAfterSeconds": 0, "retryable": false, "backoffSeconds": 0},
 	}})
+
+	// ---- per-note decisions (shared cross-runtime fixture) ----
+	// Pins the fixed R1 decision table in a runtime-neutral format so the Go
+	// engine and the browser port (frontend/src/sync/decision.js) assert the
+	// exact same outcomes, including the deterministic conflict identity/path.
+	type decisionObservation struct {
+		State       string `json:"state"`
+		Path        string `json:"path,omitempty"`
+		Markdown    string `json:"markdown,omitempty"`
+		ContentHash string `json:"contentHash,omitempty"`
+		Revision    string `json:"revision,omitempty"`
+		Version     string `json:"version,omitempty"`
+		Retryable   bool   `json:"retryable,omitempty"`
+	}
+	type decisionBaseline struct {
+		ContentHash   string `json:"contentHash"`
+		Deleted       bool   `json:"deleted"`
+		RemoteVersion string `json:"remoteVersion"`
+	}
+	type decisionConflict struct {
+		SourceSyncID      string `json:"sourceSyncId"`
+		ConflictSyncID    string `json:"conflictSyncId"`
+		ConflictPath      string `json:"conflictPath"`
+		ConflictMarkdown  string `json:"conflictMarkdown"`
+		LocalStateHash    string `json:"localStateHash"`
+		RemoteStateHash   string `json:"remoteStateHash"`
+		OriginalTombstone bool   `json:"originalTombstone"`
+		OriginalVersion   string `json:"originalVersion"`
+	}
+	type decisionExpected struct {
+		SyncID        string            `json:"syncId"`
+		Kind          string            `json:"kind"`
+		Reason        string            `json:"reason"`
+		ContentHash   string            `json:"contentHash"`
+		Deleted       bool              `json:"deleted"`
+		Path          string            `json:"path"`
+		Markdown      string            `json:"markdown"`
+		Version       string            `json:"version"`
+		LocalRevision string            `json:"localRevision"`
+		Conflict      *decisionConflict `json:"conflict"`
+	}
+	type decisionCase struct {
+		Name         string              `json:"name"`
+		Local        decisionObservation `json:"local"`
+		Remote       decisionObservation `json:"remote"`
+		Baseline     *decisionBaseline   `json:"baseline"`
+		PathConflict bool                `json:"pathConflict"`
+		Expected     decisionExpected    `json:"expected"`
+	}
+	localState := func(s string) LocalState {
+		switch s {
+		case "live":
+			return LocalLive
+		case "absent":
+			return LocalAbsent
+		default:
+			return LocalUnknown
+		}
+	}
+	remoteState := func(s string) RemoteState {
+		switch s {
+		case "live":
+			return RemoteLive
+		case "tombstone":
+			return RemoteTombstone
+		case "missing":
+			return RemoteMissing
+		default:
+			return RemoteInvalid
+		}
+	}
+	obs := func(o decisionObservation) (NoteLocalObservation, NoteRemoteObservation) {
+		loc := NoteLocalObservation{SyncID: testNoteSyncID, State: localState(o.State), Path: o.Path, Markdown: o.Markdown, ContentHash: o.ContentHash, Revision: o.Revision}
+		if o.State == "absent" || o.State == "unknown" {
+			loc.Markdown, loc.ContentHash, loc.Revision = "", "", ""
+		}
+		rem := NoteRemoteObservation{SyncID: testNoteSyncID, State: remoteState(o.State), Path: o.Path, Markdown: o.Markdown, ContentHash: o.ContentHash, Version: o.Version, Retryable: o.Retryable}
+		return loc, rem
+	}
+	hc := func(n string) string { return strings.Repeat(n, 64) }
+	path := "Projects/idea.md"
+	h0, h1, h2, th, th2 := hc("a"), hc("b"), hc("c"), hc("d"), hc("e")
+	base := func(hash string, deleted bool, version string) *decisionBaseline {
+		return &decisionBaseline{ContentHash: hash, Deleted: deleted, RemoteVersion: version}
+	}
+	live := func(hash string) decisionObservation {
+		return decisionObservation{State: "live", Path: path, Markdown: "body\n", ContentHash: hash, Revision: "local-rev"}
+	}
+	absent := decisionObservation{State: "absent"}
+	liveRemote := func(hash, version string) decisionObservation {
+		return decisionObservation{State: "live", Path: path, Markdown: "body\n", ContentHash: hash, Version: version}
+	}
+	tombRemote := func(hash, version string) decisionObservation {
+		return decisionObservation{State: "tombstone", Path: path, ContentHash: hash, Version: version}
+	}
+	missing := decisionObservation{State: "missing", Path: path}
+	invalidRemote := decisionObservation{State: "invalid", Path: path}
+	invalidRetryable := decisionObservation{State: "invalid", Path: path, Retryable: true}
+
+	decisionRows := []struct {
+		Name         string              `json:"name"`
+		Local        decisionObservation `json:"local"`
+		Remote       decisionObservation `json:"remote"`
+		Baseline     *decisionBaseline   `json:"baseline"`
+		PathConflict bool                `json:"pathConflict"`
+	}{
+		{"no-baseline local-only", live(h1), missing, nil, false},
+		{"no-baseline remote-only", absent, liveRemote(h1, "v1"), nil, false},
+		{"no-baseline identical", live(h1), liveRemote(h1, "v1"), nil, false},
+		{"no-baseline divergent", live(h1), liveRemote(h2, "v1"), nil, false},
+		{"no-baseline live vs tombstone", live(h1), tombRemote(th, "v1"), nil, false},
+		{"no-baseline absent + tombstone", absent, tombRemote(th, "v1"), nil, false},
+		{"no-baseline absent + missing", absent, missing, nil, false},
+		{"no-baseline invalid remote", live(h1), invalidRemote, nil, false},
+		{"no-baseline invalid remote retryable", live(h1), invalidRetryable, nil, false},
+		{"L==R baseline matches", live(h0), liveRemote(h0, "v0"), base(h0, false, "v0"), false},
+		{"L==R baseline version stale", live(h0), liveRemote(h0, "v1"), base(h0, false, "v0"), false},
+		{"remote changed only", live(h0), liveRemote(h1, "v2"), base(h0, false, "v0"), false},
+		{"local changed only", live(h1), liveRemote(h0, "v1"), base(h0, false, "v0"), false},
+		{"both changed differently", live(h1), liveRemote(h2, "v2"), base(h0, false, "v0"), false},
+		{"local absent remote unchanged", absent, liveRemote(h0, "v1"), base(h0, false, "v0"), false},
+		{"local absent remote edited", absent, liveRemote(h1, "v2"), base(h0, false, "v0"), false},
+		{"local absent remote recreated", absent, liveRemote(h1, "v2"), base(th, true, "v1"), false},
+		{"local unchanged remote tombstone", live(h0), tombRemote(th, "v2"), base(h0, false, "v0"), false},
+		{"local edited vs remote tombstone", live(h1), tombRemote(th, "v2"), base(h0, false, "v0"), false},
+		{"converged deletion", absent, tombRemote(th, "v1"), base(th, true, "v1"), false},
+		{"converged deletion version stale", absent, tombRemote(th, "v2"), base(th, true, "v1"), false},
+		{"absent + divergent tombstone baseline", absent, tombRemote(th, "v2"), base(h0, false, "v0"), false},
+		{"recreated identical over deleted baseline", live(h1), liveRemote(h1, "v2"), base(th, true, "v1"), false},
+		{"recreated divergent over deleted baseline", live(h1), liveRemote(h2, "v2"), base(th, true, "v1"), false},
+		{"recreated over matching tombstone", live(h1), tombRemote(th, "v1"), base(th, true, "v1"), false},
+		{"recreated over divergent tombstone", live(h1), tombRemote(th2, "v2"), base(th, true, "v1"), false},
+		{"remote missing with baseline", live(h1), missing, base(h1, false, "v1"), false},
+		{"path conflict", live(h1), liveRemote(h2, "v1"), base(h0, false, "v0"), true},
+		{"local unknown", decisionObservation{State: "unknown"}, liveRemote(h1, "v1"), base(h0, false, "v0"), false},
+		{"invalid remote with baseline", live(h0), invalidRemote, base(h0, false, "v0"), false},
+	}
+	var decisionCases []decisionCase
+	for _, tc := range decisionRows {
+		loc, _ := obs(tc.Local)
+		_, rem := obs(tc.Remote)
+		var b *Baseline
+		if tc.Baseline != nil {
+			b = &Baseline{ContentHash: tc.Baseline.ContentHash, Deleted: tc.Baseline.Deleted, RemoteVersion: tc.Baseline.RemoteVersion}
+		}
+		d := DecideNote(loc, rem, b, tc.PathConflict)
+		out := decisionCase{
+			Name: tc.Name, Local: tc.Local, Remote: tc.Remote,
+			Baseline: tc.Baseline, PathConflict: tc.PathConflict,
+		}
+		out.Expected.SyncID = d.SyncID
+		out.Expected.Kind = d.Kind.String()
+		out.Expected.Reason = d.Reason
+		out.Expected.ContentHash = d.ContentHash
+		out.Expected.Deleted = d.Deleted
+		out.Expected.Path = d.Path
+		out.Expected.Markdown = d.Markdown
+		out.Expected.Version = d.Version
+		out.Expected.LocalRevision = d.LocalRevision
+		if c := d.Conflict; c != nil {
+			out.Expected.Conflict = &decisionConflict{
+				SourceSyncID: c.SourceSyncID, ConflictSyncID: c.ConflictSyncID,
+				ConflictPath: c.ConflictPath, ConflictMarkdown: c.ConflictMarkdown,
+				LocalStateHash: c.LocalStateHash, RemoteStateHash: c.RemoteStateHash,
+				OriginalTombstone: c.OriginalTombstone, OriginalVersion: c.OriginalVersion,
+			}
+		}
+		decisionCases = append(decisionCases, out)
+	}
+	writeJSON("decisions.json", map[string]any{"cases": decisionCases})
 }

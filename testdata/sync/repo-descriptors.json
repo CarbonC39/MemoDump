@@ -27,6 +27,18 @@
     {
       "json": "{\"formatVersion\":1,\"repositoryId\":\"bdbd4162-faf1-418e-895e-4221bbbb5cc5\",\"createdAt\":1785800000000,\"minimumClientVersion\":\"2.0.0\"}extra",
       "name": "trailing content"
+    },
+    {
+      "json": "{\"formatVersion\":1,\"repositoryId\":\"bdbd4162-faf1-418e-895e-4221bbbb5cc5\",\"repositoryId\":\"cebe5263-fbf2-419f-9a6f-5332cccc6dd6\",\"createdAt\":1785800000000,\"minimumClientVersion\":\"2.0.0\"}",
+      "name": "duplicate repositoryId"
+    },
+    {
+      "json": "{\"formatVersion\":1,\"formatVersion\":2,\"repositoryId\":\"bdbd4162-faf1-418e-895e-4221bbbb5cc5\",\"createdAt\":1785800000000,\"minimumClientVersion\":\"2.0.0\"}",
+      "name": "duplicate formatVersion"
+    },
+    {
+      "json": "{\"formatVersion\":1,\"repositoryId\":null,\"createdAt\":1785800000000,\"minimumClientVersion\":\"2.0.0\"}",
+      "name": "null repositoryId"
     }
   ],
   "valid": [
