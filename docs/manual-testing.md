@@ -182,10 +182,12 @@ data directories, `--sync-root` pointing at a second temporary directory, and
 two browser profiles. Record the application build, provider, date, and result
 for each step on Windows, macOS, and Linux.
 
-1. **Startup and periodic convergence.** Enable sync on replica A, create a
-   note, and wait up to 10 seconds: the note uploads without a browser action.
-   On replica B (already enabled), the note downloads within the next automatic
-   interval. Confirm the settings panel shows the next scheduled run.
+1. **Startup and periodic convergence.** On replica A, create a note BEFORE
+   enabling sync, then Enable: Enable triggers an immediate run, so the note
+   uploads without further action. (If you create the note AFTER Enable, it may
+   wait until the next five-minute interval.) On replica B (already enabled),
+   the note downloads within the next automatic interval. Confirm the settings
+   panel shows the next scheduled run.
 2. **Run-now / automatic single-flight.** Trigger `Run now` while an automatic
    run is in progress and confirm they serialize (no overlapping cycles, no
    duplicate conflict notes). Shut the process down mid-cycle and confirm no

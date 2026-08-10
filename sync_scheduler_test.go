@@ -83,12 +83,14 @@ func (t *fakeTimer) Stop() bool {
 
 // fakeRunner records triggers and returns attempts from a configurable queue
 // (falling back to a default). blockFirst, when non-nil, blocks the first
-// attempt until it is closed (for coalescing/no-overlap tests).
+// attempt until it is closed (for coalescing/no-overlap tests). notify signals
+// each attempt so tests wait on channels instead of sleeping.
 type fakeRunner struct {
 	mu         sync.Mutex
 	triggers   []attemptTrigger
 	queue      []*syncAttempt
 	blockFirst chan struct{}
+	notify     chan struct{}
 }
 
 func (r *fakeRunner) run(ctx context.Context, trigger attemptTrigger) *syncAttempt {
@@ -112,6 +114,10 @@ func (r *fakeRunner) run(ctx context.Context, trigger attemptTrigger) *syncAttem
 			<-block
 		}
 	}
+	select {
+	case r.notify <- struct{}{}:
+	default:
+	}
 	return att
 }
 
@@ -119,6 +125,10 @@ func (r *fakeRunner) seen() []attemptTrigger {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]attemptTrigger(nil), r.triggers...)
+}
+
+func newFakeRunner() *fakeRunner {
+	return &fakeRunner{notify: make(chan struct{}, 16)}
 }
 
 func testAttempt(kind string) *syncAttempt {
@@ -138,44 +148,50 @@ func testAttempt(kind string) *syncAttempt {
 	}
 }
 
-// waitSeen waits (with a real deadline) until the runner has seen the triggers.
+// waitSeen blocks until the runner has recorded n triggers (or the deadline
+// passes). It never sleeps: it waits on the runner's notification channel.
 func waitSeen(t *testing.T, r *fakeRunner, n int) []attemptTrigger {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.After(5 * time.Second)
 	for {
-		got := r.seen()
-		if len(got) >= n || time.Now().After(deadline) {
+		if got := r.seen(); len(got) >= n {
 			return got
 		}
-		time.Sleep(time.Millisecond)
+		select {
+		case <-r.notify:
+		case <-deadline:
+			return r.seen()
+		}
 	}
 }
 
-// waitProcessed waits until the scheduler has fully processed (re-armed after)
+// waitProcessed blocks until the scheduler has fully processed (re-armed after)
 // n attempts, so deterministic-clock tests never advance the clock while the
 // single loop goroutine is still handling a fired attempt.
 func waitProcessed(t *testing.T, s *syncScheduler, n int64) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for s.processed.Load() < n && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if s.processed.Load() < n {
-		t.Fatalf("scheduler processed %d attempts, want %d", s.processed.Load(), n)
+	deadline := time.After(5 * time.Second)
+	for s.processed.Load() < n {
+		select {
+		case <-s.notify:
+		case <-deadline:
+			t.Fatalf("scheduler processed %d attempts, want %d", s.processed.Load(), n)
+		}
 	}
 }
 
-// waitLoopTick waits until the loop goroutine has completed another iteration
+// waitLoopTick blocks until the loop goroutine has completed another iteration
 // after the captured tick (i.e. it re-armed the timer after an external state
 // change such as ClearPause or Reset).
 func waitLoopTick(t *testing.T, s *syncScheduler, after int64) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for s.loopTick.Load() <= after && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if s.loopTick.Load() <= after {
-		t.Fatalf("scheduler loop did not re-arm after tick %d", after)
+	deadline := time.After(5 * time.Second)
+	for s.loopTick.Load() <= after {
+		select {
+		case <-s.notify:
+		case <-deadline:
+			t.Fatalf("scheduler loop did not re-arm after tick %d", after)
+		}
 	}
 }
 
@@ -184,7 +200,7 @@ func waitLoopTick(t *testing.T, s *syncScheduler, after int64) {
 // run 5 minutes later.
 func TestSyncSchedulerStartupThenPeriodic(t *testing.T) {
 	clock := newFakeClock()
-	runner := &fakeRunner{}
+	runner := newFakeRunner()
 	s := newSyncScheduler(clock, runner.run)
 	s.Start(context.Background())
 	<-s.Started()
@@ -215,7 +231,7 @@ func TestSyncSchedulerStartupThenPeriodic(t *testing.T) {
 // with the enable trigger, without waiting for the startup delay.
 func TestSyncSchedulerEnableWake(t *testing.T) {
 	clock := newFakeClock()
-	runner := &fakeRunner{}
+	runner := newFakeRunner()
 	s := newSyncScheduler(clock, runner.run)
 	s.Start(context.Background())
 	<-s.Started()
@@ -231,7 +247,7 @@ func TestSyncSchedulerEnableWake(t *testing.T) {
 // 1m/2m/5m/10m/30m progression and then stay capped at 30m.
 func TestSyncSchedulerBackoffSequence(t *testing.T) {
 	clock := newFakeClock()
-	runner := &fakeRunner{}
+	runner := newFakeRunner()
 	s := newSyncScheduler(clock, runner.run)
 	s.Start(context.Background())
 	<-s.Started()
@@ -271,7 +287,7 @@ func TestSyncSchedulerBackoffSequence(t *testing.T) {
 // backoff instead of shortening it.
 func TestSyncSchedulerHonorsRetryAfter(t *testing.T) {
 	clock := newFakeClock()
-	runner := &fakeRunner{}
+	runner := newFakeRunner()
 	s := newSyncScheduler(clock, runner.run)
 	s.Start(context.Background())
 	<-s.Started()
@@ -304,7 +320,7 @@ func TestSyncSchedulerHonorsRetryAfter(t *testing.T) {
 // until a successful manual run (ClearPause) or an Enable wakes it.
 func TestSyncSchedulerPermanentPause(t *testing.T) {
 	clock := newFakeClock()
-	runner := &fakeRunner{}
+	runner := newFakeRunner()
 	s := newSyncScheduler(clock, runner.run)
 	s.Start(context.Background())
 	<-s.Started()
@@ -344,7 +360,7 @@ func TestSyncSchedulerPermanentPause(t *testing.T) {
 // scheduler immediately.
 func TestSyncSchedulerWakeClearsPause(t *testing.T) {
 	clock := newFakeClock()
-	runner := &fakeRunner{}
+	runner := newFakeRunner()
 	s := newSyncScheduler(clock, runner.run)
 	s.Start(context.Background())
 	<-s.Started()
@@ -376,7 +392,7 @@ func TestSyncSchedulerWakeClearsPause(t *testing.T) {
 // error) waits for the ordinary interval without increasing the failure count.
 func TestSyncSchedulerBlockedNotRetryable(t *testing.T) {
 	clock := newFakeClock()
-	runner := &fakeRunner{}
+	runner := newFakeRunner()
 	s := newSyncScheduler(clock, runner.run)
 	s.Start(context.Background())
 	<-s.Started()
@@ -398,7 +414,7 @@ func TestSyncSchedulerBlockedNotRetryable(t *testing.T) {
 // successful Enable wakes it again.
 func TestSyncSchedulerResetIdles(t *testing.T) {
 	clock := newFakeClock()
-	runner := &fakeRunner{}
+	runner := newFakeRunner()
 	s := newSyncScheduler(clock, runner.run)
 	s.Start(context.Background())
 	<-s.Started()
@@ -427,7 +443,8 @@ func TestSyncSchedulerResetIdles(t *testing.T) {
 func TestSyncSchedulerWakeCoalescing(t *testing.T) {
 	clock := newFakeClock()
 	block := make(chan struct{})
-	runner := &fakeRunner{blockFirst: block}
+	runner := newFakeRunner()
+	runner.blockFirst = block
 	s := newSyncScheduler(clock, runner.run)
 	s.Start(context.Background())
 	<-s.Started()
@@ -442,15 +459,25 @@ func TestSyncSchedulerWakeCoalescing(t *testing.T) {
 	close(block) // release the startup attempt
 
 	// At most ONE coalesced enable attempt follows, never three.
-	deadline := time.Now().Add(5 * time.Second)
+	waitSeen(t, runner, 2)
+	waitProcessed(t, s, 2)
+	drainNotify(runner)
+	select {
+	case <-runner.notify:
+		t.Fatalf("wakes caused more than one coalesced attempt: %v", runner.seen())
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// drainNotify consumes any pending runner notifications so a negative
+// assertion below is not satisfied by a stale signal.
+func drainNotify(r *fakeRunner) {
 	for {
-		if got := runner.seen(); len(got) >= 3 || time.Now().After(deadline) {
-			if len(got) > 2 {
-				t.Fatalf("wakes caused %d attempts, want at most 2: %v", len(got), got)
-			}
+		select {
+		case <-r.notify:
+		default:
 			return
 		}
-		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -458,7 +485,7 @@ func TestSyncSchedulerWakeCoalescing(t *testing.T) {
 // goroutine running; double-stop is safe.
 func TestSyncSchedulerShutdown(t *testing.T) {
 	clock := newFakeClock()
-	runner := &fakeRunner{}
+	runner := newFakeRunner()
 	s := newSyncScheduler(clock, runner.run)
 	s.Start(context.Background())
 	<-s.Started()
@@ -476,7 +503,7 @@ func TestSyncSchedulerShutdown(t *testing.T) {
 // scheduler/backoff state across restart.
 func TestSyncSchedulerRestartForgetsState(t *testing.T) {
 	clock := newFakeClock()
-	runner := &fakeRunner{}
+	runner := newFakeRunner()
 	s := newSyncScheduler(clock, runner.run)
 	s.Start(context.Background())
 	<-s.Started()
@@ -498,7 +525,7 @@ func TestSyncSchedulerRestartForgetsState(t *testing.T) {
 
 	// A fresh scheduler after "restart" forgets pause and backoff.
 	clock2 := newFakeClock()
-	runner2 := &fakeRunner{}
+	runner2 := newFakeRunner()
 	s2 := newSyncScheduler(clock2, runner2.run)
 	s2.Start(context.Background())
 	defer s2.Stop()

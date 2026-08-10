@@ -24,10 +24,35 @@ const state = reactive({
   nextRun: null,
   autoPaused: false,
   pauseReason: '',
+  recoveryCount: 0,
   recovery: [],
   recoveryError: '',
   busy: false,
 })
+
+// applyLightweightStatus writes the redacted status fields (no recovery content)
+// into the shared panel state. The 30-second auto-sync poller calls this so the
+// settings panel reflects running / next-run / paused state without downloading
+// recovery copies on every poll.
+export function applyLightweightStatus(d) {
+  d = d || {}
+  state.enabled = !!d.enabled
+  state.connected = !!d.connected
+  state.connection = !!d.connection
+  state.connectionError = d.connectionError || ''
+  state.experimental = !!d.experimental
+  state.noE2EE = !!d.noE2EE
+  state.lastRun = d.lastRun || null
+  state.lastCompleted = d.lastCompleted || null
+  state.lastTrigger = d.lastTrigger || ''
+  state.autoEnabled = !!d.autoEnabled
+  state.autoIntervalSecs = d.autoIntervalSecs || 0
+  state.syncRunning = !!d.syncRunning
+  state.nextRun = d.nextRun || null
+  state.autoPaused = !!d.autoPaused
+  state.pauseReason = d.pauseReason || ''
+  state.recoveryCount = d.recoveryCount || 0
+}
 
 export async function initSyncSettings() {
   if (state.initialized) return
@@ -41,22 +66,7 @@ export async function refreshSyncSettings() {
   }
   try {
     const resp = await apiClient.syncStatus()
-    const d = resp.data || {}
-    state.enabled = !!d.enabled
-    state.connected = !!d.connected
-    state.connection = !!d.connection
-    state.connectionError = d.connectionError || ''
-    state.experimental = !!d.experimental
-    state.noE2EE = !!d.noE2EE
-    state.lastRun = d.lastRun || null
-    state.lastCompleted = d.lastCompleted || null
-    state.lastTrigger = d.lastTrigger || ''
-    state.autoEnabled = !!d.autoEnabled
-    state.autoIntervalSecs = d.autoIntervalSecs || 0
-    state.syncRunning = !!d.syncRunning
-    state.nextRun = d.nextRun || null
-    state.autoPaused = !!d.autoPaused
-    state.pauseReason = d.pauseReason || ''
+    applyLightweightStatus(resp.data)
     // The status carries only the count; fetch the detailed copies always (the
     // endpoint safely returns an empty list when sync was never enabled), and
     // surface a failure instead of faking an empty list — a corrupt index must
@@ -99,8 +109,21 @@ export async function runSync() {
     const { data } = await apiClient.syncRun()
     state.lastRun = data
     state.lastCompleted = new Date().toISOString()
+    state.lastTrigger = 'manual'
+    if (data && data.Synced && onManualSynced) {
+      onManualSynced()
+    }
     return data
   })
+}
+
+// onManualSynced is registered by the app shell: after a successful manual run
+// the visible list and the open editor are refreshed through the same safe
+// logic the auto-sync poller uses, so a manual pull is never stale.
+let onManualSynced = null
+
+export function setOnManualSynced(fn) {
+  onManualSynced = fn
 }
 
 export async function disableSync() {

@@ -241,7 +241,7 @@ import { useNotePersistence } from '../composables/useNotePersistence.js'
 import { useFolderActions } from '../composables/useFolderActions.js'
 import { useWorkspaceNavigation } from '../composables/useWorkspaceNavigation.js'
 import { useSyncPolling } from '../composables/useSyncPolling.js'
-import { refreshSyncSettings } from '../composables/useSyncSettings.js'
+import { refreshSyncSettings, setOnManualSynced } from '../composables/useSyncSettings.js'
 import { preloadMilkdownEditor } from '../components/milkdownLoader.js'
 
 const router = useRouter()
@@ -376,6 +376,13 @@ const syncPolling = useSyncPolling({
 function dismissSyncNotice() {
   syncChangedNotice.value = ''
 }
+
+// A successful manual Run-now refreshes the list and the open note through the
+// same safe logic the auto-sync poller uses, so a manual pull is never stale.
+setOnManualSynced(() => {
+  loadAll()
+  syncPolling.refreshOpenNote()
+})
 
 const {
   promptNewFolder,

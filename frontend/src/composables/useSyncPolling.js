@@ -7,6 +7,7 @@
 // the open note is re-read: a clean buffer adopts the new content, a deleted
 // note closes, and a dirty buffer is never replaced — only a notice is shown.
 import { ref } from 'vue'
+import { applyLightweightStatus } from './useSyncSettings'
 
 const DEFAULT_INTERVAL_MS = 30000
 const AUTO_TRIGGERS = ['startup', 'periodic', 'retry', 'enable']
@@ -79,6 +80,9 @@ export function useSyncPolling({
     try {
       const resp = await api.syncStatus()
       const d = resp.data || {}
+      // Keep the settings panel fresh (running/next-run/paused) without
+      // downloading recovery content on every poll.
+      applyLightweightStatus(d)
       const completed = d.lastCompleted
       const autoTrigger = AUTO_TRIGGERS.includes(d.lastTrigger)
       if (completed && completed !== lastCompleted.value) {
@@ -104,26 +108,31 @@ export function useSyncPolling({
   // refreshOpenNote re-reads the open note. A clean buffer adopts the fetched
   // revision/content; a deleted note closes; a dirty/saving/conflicting buffer
   // is never replaced or closed — only a notice is shown, and the existing
-  // revision CAS prevents overwrite.
+  // revision CAS prevents overwrite. If the user switches notes while the
+  // request is in flight, the stale response is discarded so note A's content
+  // can never be loaded into note B.
   async function refreshOpenNote() {
-    const note = editingNote.value
-    if (!note || !note.path) return
+    const instance = editingNote.value
+    if (!instance || !instance.path) return
+    const path = instance.path
     let fetched
     try {
-      const resp = await api.getNote(note.path)
+      const resp = await api.getNote(path)
       fetched = resp.data
     } catch (e) {
       if (e?.response?.status === 404) {
+        if (editingNote.value !== instance) return // user switched away
         if (isDirty.value || isSaving.value) {
           onNotice('changed')
         } else {
           clearDocument()
-          onNoteClosed(note.path)
+          onNoteClosed(path)
         }
       }
       return
     }
-    if (!fetched || fetched.revision === note.revision) return
+    if (editingNote.value !== instance) return // user switched during the request
+    if (!fetched || fetched.revision === instance.revision) return
     if (isDirty.value || isSaving.value) {
       onNotice('changed')
       return

@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useNoteEditor } from './useNoteEditor'
 import { useSyncPolling } from './useSyncPolling'
+import { getSyncSettings } from './useSyncSettings'
+
+// useSyncPolling imports useSyncSettings, which loads the real ../api (axios +
+// router referencing window). Stub it so the module loads in a plain node
+// environment; the poller under test uses its own injected api.
+vi.mock('../api', () => ({ default: { syncStatus: vi.fn(), syncRecovery: vi.fn() } }))
 
 function makeEditor() {
   const editor = useNoteEditor()
@@ -25,7 +31,7 @@ function makePolling({ api, editor, visible = true, local = false, onAutoSync = 
     onRecoveryChanged,
   })
   return {
-    p, api, editor,
+    p, api, editor, onAutoSync, onNotice, onNoteClosed, onRecoveryChanged,
     setVisible(v) { visibleState = v; if (visibilityHandler) visibilityHandler() },
   }
 }
@@ -132,6 +138,73 @@ describe('useSyncPolling', () => {
     expect(a.syncStatus.mock.calls.length).toBeGreaterThan(calls)
     await vi.advanceTimersByTimeAsync(30000)
     expect(a.syncStatus.mock.calls.length).toBeGreaterThan(calls + 1)
+    p.stop()
+  })
+
+  it('discards a stale note response when the user switches notes mid-request', async () => {
+    const editor = makeEditor() // open note A (a.md)
+    let resolveGetNote
+    const pending = new Promise((resolve) => { resolveGetNote = resolve })
+    const api = {
+      syncStatus: vi.fn().mockResolvedValue(baseStatus({ lastCompleted: '2026-08-09T00:10:00Z' })),
+      getNote: vi.fn().mockReturnValue(pending),
+    }
+    const { p } = makePolling({ api, editor })
+    p.start()
+    await vi.advanceTimersByTimeAsync(30000) // poll fires; getNote('a.md') is pending
+
+    // The user switches to note B while the request for A is in flight.
+    editor.loadDocument({ path: 'b.md', name: 'b', content: '# B\n', tags: [], revision: 'b1' })
+    // The stale response for A arrives afterwards.
+    resolveGetNote({ data: { path: 'a.md', name: 'a', content: '# A new\n', tags: [], revision: 'a2' } })
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Note A's content must never be loaded into note B.
+    expect(editor.editingNote.value.path).toBe('b.md')
+    expect(editor.editContent.value).toBe('# B\n')
+    expect(editor.editingNote.value.revision).toBe('b1')
+    p.stop()
+  })
+
+  it('does not close a newly opened note when a stale 404 for another note arrives', async () => {
+    const editor = makeEditor() // note A
+    let rejectGetNote
+    const pending = new Promise((_, reject) => { rejectGetNote = reject })
+    const api = {
+      syncStatus: vi.fn().mockResolvedValue(baseStatus({ lastCompleted: '2026-08-09T00:10:00Z' })),
+      getNote: vi.fn().mockReturnValue(pending),
+    }
+    const { p, onNoteClosed } = makePolling({ api, editor })
+    p.start()
+    await vi.advanceTimersByTimeAsync(30000) // poll fires; getNote('a.md') pending
+
+    // The user switches to note B, then A's 404 arrives.
+    editor.loadDocument({ path: 'b.md', name: 'b', content: '# B\n', tags: [], revision: 'b1' })
+    rejectGetNote({ response: { status: 404 } })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(editor.editingNote.value.path).toBe('b.md')
+    expect(onNoteClosed).not.toHaveBeenCalled()
+    p.stop()
+  })
+
+  it('updates the settings panel scheduling state on every poll', async () => {
+    const api = {
+      syncStatus: vi.fn().mockResolvedValue(baseStatus({
+        syncRunning: true, nextRun: '2026-08-09T00:10:00Z',
+        autoPaused: true, pauseReason: 'permission',
+      })),
+      getNote: vi.fn().mockResolvedValue({ data: { revision: 'r1' } }),
+    }
+    const { p } = makePolling({ api, editor: makeEditor() })
+    p.start()
+    await vi.advanceTimersByTimeAsync(30000)
+    const s = getSyncSettings()
+    expect(s.syncRunning).toBe(true)
+    expect(s.nextRun).toBe('2026-08-09T00:10:00Z')
+    expect(s.autoPaused).toBe(true)
+    expect(s.pauseReason).toBe('permission')
+    expect(s.lastTrigger).toBe('periodic')
     p.stop()
   })
 

@@ -108,7 +108,7 @@ func syncRepoIdentity(ctx context.Context, remote cloudsync.RemoteStore) (repoID
 	data, _, rerr := remote.Read(ctx, "repo.json")
 	if rerr != nil {
 		if cloudsync.IsStoreError(rerr, cloudsync.ErrNotFound) {
-			return "", "", fmt.Errorf("remote repository lost though sync was established")
+			return "", "", errSyncRepoLost
 		}
 		return "", "", rerr
 	}
@@ -175,7 +175,7 @@ func reReadRepoIdentity(ctx context.Context, remote cloudsync.RemoteStore, profi
 func parseRepoIdentity(data []byte, profile string) (string, string, error) {
 	parsed, perr := cloudsync.ParseRepositoryDescriptor(data)
 	if perr != nil {
-		return "", "", fmt.Errorf("invalid remote repo.json: %w", perr)
+		return "", "", fmt.Errorf("%w: %v", errSyncRepoInvalid, perr)
 	}
 	return parsed.RepositoryID, profile, nil
 }
@@ -318,7 +318,7 @@ func syncReadConnected() (*syncConnectionRecord, error) {
 	}
 	var rec syncConnectionRecord
 	if err := json.Unmarshal(data, &rec); err != nil {
-		return nil, fmt.Errorf("corrupt sync connection record: %w", err)
+		return nil, fmt.Errorf("%w: %v", errSyncStateCorrupt, err)
 	}
 	return &rec, nil
 }

@@ -31,6 +31,9 @@ var (
 	errSyncLocked          = errors.New("sync is running in another process; try again")
 	errSyncProviderChanged = errors.New("sync provider changed since enable; disable and reset sync to reconnect")
 	errSyncRepoChanged     = errors.New("remote repository changed since enable; disable and reset sync to reconnect")
+	errSyncRepoLost        = errors.New("remote repository lost though sync was established")
+	errSyncRepoInvalid     = errors.New("remote repository descriptor is invalid; reset and re-enable sync")
+	errSyncStateCorrupt    = errors.New("sync state is corrupt; reset and re-enable sync")
 )
 
 // syncRunning reports whether an attempt currently owns the run boundary. It is
@@ -110,9 +113,13 @@ func runSyncAttemptLocked(ctx context.Context, trigger attemptTrigger) *syncAtte
 		err = nil
 	}
 	if att.disabled {
-		// A refusal, not an attempt. Record it so a stale earlier success never
-		// shows, and return nothing schedulable.
-		recordLastRunError(errSyncDisabled, trigger)
+		// A refusal, not an attempt. A manual run records it so a stale earlier
+		// success never shows, but an automatic trigger (startup/periodic/retry/
+		// enable) on a never-connected vault must not record a spurious failure —
+		// the scheduler simply stays idle until an Enable.
+		if trigger == triggerManual {
+			recordLastRunError(errSyncDisabled, trigger)
+		}
 		return att
 	}
 	if err != nil {
@@ -142,14 +149,27 @@ func runSyncAttemptLocked(ctx context.Context, trigger attemptTrigger) *syncAtte
 
 // classifyError maps a raw attempt error onto scheduler classification.
 func (att *syncAttempt) classifyError(err error) {
-	if errors.Is(err, errSyncProviderChanged) {
+	switch {
+	case errors.Is(err, errSyncProviderChanged):
 		att.permanent = true
 		att.pauseReason = "provider-changed"
 		return
-	}
-	if errors.Is(err, errSyncRepoChanged) {
+	case errors.Is(err, errSyncRepoChanged):
 		att.permanent = true
 		att.pauseReason = "repo-changed"
+		return
+	case errors.Is(err, errSyncRepoLost), errors.Is(err, errSyncRepoInvalid):
+		// A lost or corrupt repo.json is repository damage, not a transient
+		// condition: it pauses automatic sync until an explicit reset.
+		att.permanent = true
+		att.pauseReason = "repo-lost"
+		return
+	case errors.Is(err, errSyncStateCorrupt), errors.Is(err, syncindex.ErrCorrupt),
+		errors.Is(err, syncindex.ErrUnsupportedSchema):
+		// Corrupt local sync state (connection record or index) pauses
+		// automatic sync instead of retrying every ordinary interval.
+		att.permanent = true
+		att.pauseReason = "corrupt-state"
 		return
 	}
 	var se *cloudsync.StoreError

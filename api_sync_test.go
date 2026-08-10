@@ -31,6 +31,7 @@ func setSyncEnv(t *testing.T, dir, stateRoot string, provider syncservice.Provid
 	syncLastRunMu.Lock()
 	syncLastRun.Result = syncservice.Result{}
 	syncLastRun.Completed = time.Time{}
+	syncLastRun.Trigger = ""
 	syncLastRunMu.Unlock()
 	t.Cleanup(func() { dataDir, syncRoot, syncProvider = oldDataDir, oldSyncRoot, oldProvider })
 }

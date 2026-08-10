@@ -94,6 +94,104 @@ func TestSyncAttemptClassification(t *testing.T) {
 	})
 }
 
+// TestSyncAttemptPermanentStateClassification: corrupt local sync state, a lost
+// or corrupt repo.json, and a corrupt index are permanent — they pause automatic
+// sync instead of retrying every ordinary interval.
+func TestSyncAttemptPermanentStateClassification(t *testing.T) {
+	// A lost repo.json after enable is repository damage.
+	t.Run("repo-lost", func(t *testing.T) {
+		dir, state := t.TempDir(), t.TempDir()
+		store := cloudsync.NewMemoryStore()
+		setSyncEnv(t, dir, state, func() (cloudsync.RemoteStore, error) { return store, nil })
+		doJSON(t, "POST", "/api/sync/enable", nil)
+		if err := store.Remove(context.Background(), "repo.json"); err != nil {
+			t.Fatal(err)
+		}
+		att := runSyncAttempt(context.Background(), triggerPeriodic)
+		if !att.permanent || att.pauseReason != "repo-lost" {
+			t.Fatalf("attempt = %+v, want permanent repo-lost", att)
+		}
+	})
+
+	// A corrupt remote repo.json is permanent.
+	t.Run("repo-invalid", func(t *testing.T) {
+		dir, state := t.TempDir(), t.TempDir()
+		store := cloudsync.NewMemoryStore()
+		setSyncEnv(t, dir, state, func() (cloudsync.RemoteStore, error) { return store, nil })
+		doJSON(t, "POST", "/api/sync/enable", nil)
+		if err := store.Remove(context.Background(), "repo.json"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Seed("repo.json", []byte(`{bad json`), "2"); err != nil {
+			t.Fatal(err)
+		}
+		att := runSyncAttempt(context.Background(), triggerPeriodic)
+		if !att.permanent || att.pauseReason != "repo-lost" {
+			t.Fatalf("attempt = %+v, want permanent repo-lost", att)
+		}
+	})
+
+	// A corrupt connection record is permanent.
+	t.Run("corrupt-connection", func(t *testing.T) {
+		dir, state := t.TempDir(), t.TempDir()
+		setSyncEnv(t, dir, state, nil)
+		doJSON(t, "POST", "/api/sync/enable", nil)
+		vaultID, replicaID, stateRoot, err := syncIdentity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(syncConnectedPath(stateRoot, vaultID, replicaID), []byte(`{bad json`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		att := runSyncAttempt(context.Background(), triggerPeriodic)
+		if !att.permanent || att.pauseReason != "corrupt-state" {
+			t.Fatalf("attempt = %+v, want permanent corrupt-state", att)
+		}
+	})
+
+	// A corrupt local index (primary and backup) is permanent.
+	t.Run("corrupt-index", func(t *testing.T) {
+		dir, state := t.TempDir(), t.TempDir()
+		setSyncEnv(t, dir, state, nil)
+		doJSON(t, "POST", "/api/sync/enable", nil)
+		for _, name := range []string{"sync-index.json", "sync-index.json.bak"} {
+			if err := os.WriteFile(filepath.Join(dir, ".memodump", name), []byte(`{bad json`), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		att := runSyncAttempt(context.Background(), triggerPeriodic)
+		if !att.permanent || att.pauseReason != "corrupt-state" {
+			t.Fatalf("attempt = %+v, want permanent corrupt-state", att)
+		}
+	})
+}
+
+// TestSyncAttemptAutomaticDisconnectedDoesNotRecord: a startup/periodic attempt
+// on a never-connected vault goes idle without recording a last-run failure, so
+// a user who never enabled sync never sees a spurious failure record.
+func TestSyncAttemptAutomaticDisconnectedDoesNotRecord(t *testing.T) {
+	dir, state := t.TempDir(), t.TempDir()
+	setSyncEnv(t, dir, state, nil)
+	att := runSyncAttempt(context.Background(), triggerStartup)
+	if !att.disabled {
+		t.Fatalf("attempt = %+v, want disabled", att)
+	}
+	syncLastRunMu.RLock()
+	completed := syncLastRun.Completed
+	result := syncLastRun.Result
+	trigger := syncLastRun.Trigger
+	syncLastRunMu.RUnlock()
+	if !completed.IsZero() {
+		t.Fatalf("automatic disabled attempt recorded a last-run at %v", completed)
+	}
+	if result.Synced || result.LastError != "" {
+		t.Fatalf("automatic disabled attempt recorded a result: %+v", result)
+	}
+	if trigger != "" {
+		t.Fatalf("automatic disabled attempt recorded trigger %q", trigger)
+	}
+}
+
 // TestSyncAttemptRecordsTrigger: every attempt writes one redacted last-attempt
 // record including its trigger, shared by manual and automatic callers.
 func TestSyncAttemptRecordsTrigger(t *testing.T) {

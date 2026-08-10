@@ -74,8 +74,9 @@ type syncScheduler struct {
 	started   chan struct{} // closed once the loop has armed and is waiting
 	startOnce sync.Once
 
-	processed atomic.Int64 // number of attempts fully processed (loop re-armed)
-	loopTick  atomic.Int64 // number of loop iterations (re-arms) completed
+	processed atomic.Int64  // number of attempts fully processed (loop re-armed)
+	loopTick  atomic.Int64  // number of loop iterations (re-arms) completed
+	notify    chan struct{} // test notification: signaled each loop iteration
 }
 
 // newSyncScheduler builds a scheduler with the given clock and run function.
@@ -86,6 +87,7 @@ func newSyncScheduler(clock schedulerClock, run func(ctx context.Context, trigge
 		clock: clock, run: run,
 		wake:      make(chan struct{}, 1),
 		recompute: make(chan struct{}, 1),
+		notify:    make(chan struct{}, 16),
 	}
 }
 
@@ -266,6 +268,12 @@ func (s *syncScheduler) loop(timer schedulerTimer) {
 		}
 		s.startOnce.Do(func() { close(s.started) })
 		s.loopTick.Add(1)
+		if s.notify != nil {
+			select {
+			case s.notify <- struct{}{}:
+			default:
+			}
+		}
 		select {
 		case <-s.wakeCtx.Done():
 			timer.Stop()

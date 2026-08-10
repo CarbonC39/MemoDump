@@ -14,6 +14,7 @@ vi.mock('../api', () => ({
 
 import apiClient from '../api'
 import {
+  applyLightweightStatus,
   enableSync,
   getSyncSettings,
   initSyncSettings,
@@ -21,6 +22,7 @@ import {
   runSync,
   disableSync,
   resetSync,
+  setOnManualSynced,
   testSync,
 } from './useSyncSettings'
 
@@ -93,5 +95,31 @@ describe('sync settings', () => {
     const s = getSyncSettings()
     expect(s.recovery).toHaveLength(0)
     expect(s.recoveryError).toContain('sync index corrupt')
+  })
+
+  it('applyLightweightStatus updates the panel scheduling state without recovery', () => {
+    applyLightweightStatus({
+      enabled: true, connected: true, experimental: true, noE2EE: true,
+      syncRunning: true, autoEnabled: true, autoIntervalSecs: 300,
+      nextRun: '2026-08-09T00:05:00Z', autoPaused: true, pauseReason: 'permission',
+      lastRun: { Synced: false, LastError: 'permission' },
+      lastCompleted: '2026-08-09T00:00:00Z', lastTrigger: 'periodic', recoveryCount: 1,
+    })
+    const s = getSyncSettings()
+    expect(s.syncRunning).toBe(true)
+    expect(s.nextRun).toBe('2026-08-09T00:05:00Z')
+    expect(s.autoPaused).toBe(true)
+    expect(s.pauseReason).toBe('permission')
+    expect(s.lastTrigger).toBe('periodic')
+    expect(s.recoveryCount).toBe(1)
+  })
+
+  it('a successful manual run refreshes the UI through the registered callback', async () => {
+    const onManualSynced = vi.fn()
+    setOnManualSynced(onManualSynced)
+    apiClient.syncRun.mockResolvedValue({ data: { Synced: true, Conflicts: 0 } })
+    await runSync()
+    expect(onManualSynced).toHaveBeenCalled()
+    expect(getSyncSettings().lastTrigger).toBe('manual')
   })
 })

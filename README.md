@@ -118,7 +118,7 @@ Open `http://localhost:8080` in your browser (or the custom port).
 | `--pass` | Login password | — |
 | `--port` | HTTP port | `8080` |
 | `--css` | Custom CSS file injected into the UI | — |
-| `--sync-root` | Cloud-sync device-state root (identity, replicas, WAL) | OS application data dir |
+| `--sync-root` | Cloud-sync device-state root (identity, replicas, snapshot) | OS application data dir |
 
 ### Configuration sources
 
@@ -145,8 +145,8 @@ SYNC_ROOT=./sync-state
 
 Cloud sync is experimental and off by default; nothing is created until a vault
 first enables it. When it is enabled, one installation keeps its sync device
-state — Device ID, the path→Replica registry, and each replica's snapshot/WAL —
-under a **state root**:
+state — Device ID, the path→Replica registry, and each replica's connection
+record, disposable snapshot, and recovery copies — under a **state root**:
 
 - **Default**: the OS application-data directory (`os.UserConfigDir()/memodump/sync`).
 - **Override**: `--sync-root <dir>`, `MEMODUMP_SYNC_ROOT`, or `SYNC_ROOT=`.
