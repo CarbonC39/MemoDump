@@ -1,7 +1,7 @@
 # MemoDump Versioned-Note Sync — Implementation Plan
 
-Status: proposed handoff plan
-Date: 2026-08-08
+Status: R0–R4 implemented and reviewed; R5 ready for staged handoff
+Date: 2026-08-09
 Architecture contract: [`sync-spec-lite.md`](sync-spec-lite.md)
 
 ## 1. Reset point
@@ -302,18 +302,244 @@ sync, cursors, or scheduling in the same phase.
 
 ## 9. R5 — Scheduling and release hardening
 
-Only after manual S3 synchronization is stable:
+Purpose: make the proven manual S3 cycle run predictably while MemoDump is open,
+without turning synchronization into a second application framework.
 
-- run on explicit manual action and optionally application start;
-- add one simple periodic interval while the process is alive;
-- use in-memory backoff only; restart may forget it;
-- document provider privacy, backups, state-root persistence, and the risks of
-  layering another filesystem sync tool over the same vault;
-- retain the experimental flag until recovery and conflict UX are reviewed on
-  Windows, macOS, and Linux.
+R5 does not change reconciliation or the remote protocol. It schedules the same
+full-scan cycle that R4 exposes manually. Because a cycle lists and reads the
+remote note records, the interval is deliberately measured in minutes, not
+seconds.
 
-Filesystem watchers, delta cursors, parallel transfers, tombstone GC, and pure
-frontend synchronization remain separate future proposals.
+### R5 product contract
+
+- The persistent `Connected` flag is the one opt-in. Do not add a second
+  "automatic sync" setting: a connected replica synchronizes automatically;
+  a disconnected replica does not.
+- After backend initialization, a connected replica runs once after a
+  **10-second startup delay**. A successful Enable requests one immediate
+  asynchronous run instead of waiting for the first interval.
+- After any completed attempt, the next ordinary run is scheduled **5 minutes
+  after completion**. Use a resettable timer, not a wall-clock ticker, so slow
+  cycles never overlap or cause catch-up bursts.
+- `Run now` remains available, bypasses the timer/backoff delay, and uses the
+  exact same run function and locks as startup, periodic, and retry attempts.
+- Automatic sync exists in the Go server/Wails backend only. It continues when
+  a browser tab is closed but the CLI server is still running; it stops when the
+  Wails app or server process exits. The pure local/IndexedDB build has no cloud
+  scheduler.
+- This is eventual, not real-time, synchronization. A change on A is uploaded
+  on A's next attempt and downloaded on B's next attempt. The worst normal
+  latency is therefore about two intervals; users can choose `Run now` when
+  they need immediate convergence.
+
+Do not add a filesystem watcher, save hook, online listener, durable operation
+queue, scheduler database, delta cursor, worker pool, or parallel transfer. The
+periodic full scan remains the correctness mechanism.
+
+### R5.1 One shared attempt boundary
+
+Extract the state-mutating body of `handleSyncRun` into one backend function
+used by every trigger (`manual`, `enable`, `startup`, `periodic`, `retry`). The
+HTTP handler becomes a thin adapter; the scheduler must never call an HTTP
+handler or make a loopback request.
+
+The shared function must:
+
+- take the existing process mutex and replica OS lock;
+- read `connected.json`, validate provider profile and Repository ID, and run
+  the cycle inside that same replica-lock critical section;
+- preserve the existing manual HTTP response behavior;
+- update one in-memory last-attempt record for both manual and automatic runs,
+  including redacted result, completion time, and trigger;
+- return internal retry metadata separately from the public/redacted result.
+  Retry metadata must never be serialized, logged with provider bodies, or
+  contain credentials;
+- report cross-process lock contention as `locked`, not the generic `error`;
+- let Disable and Reset use the same serialization boundary. They do not cancel
+  a note mid-cycle: an in-process lifecycle request waits for the attempt to
+  finish, then changes the connection state. Cross-process contention remains a
+  visible refusal.
+
+Keep `syncservice.Result` as the public status shape. A small private attempt
+type may carry the raw typed error long enough to call
+`cloudsync.ClassifyRetry`; do not expose the error afterward. A completed cycle
+with `Retry > 0` is retryable even when no fatal error escaped the coordinator.
+`Blocked > 0` is not a transport retry: it waits for the next ordinary interval
+or a manual run.
+
+Exit gate: manual and direct/background callers exercise one run function;
+tests prove connection validation and the cycle share one lock, concurrent
+triggers never overlap, and all public errors remain redacted.
+
+Estimated review size: 150–300 changed lines.
+
+### R5.2 Minimal in-memory scheduler
+
+Add one scheduler owned by the backend process. It has one goroutine, one
+resettable timer, a size-one/coalescing wake channel, and an injected clock/run
+function for tests. It owns no filesystem state and writes no scheduler JSON.
+
+Scheduling rules:
+
+1. Wait 10 seconds after startup; run only if the connection record is valid
+   and `Connected=true`.
+2. Successful Enable coalesces an immediate wake. Multiple wakes while an
+   attempt is running produce at most one later attempt, never parallel runs.
+3. Success clears the failure count and schedules the next ordinary run in 5
+   minutes.
+4. A retryable provider failure or `Result.Retry > 0` uses delays
+   `1m, 2m, 5m, 10m, 30m`, capped at 30 minutes. Honor a larger provider
+   `Retry-After` instead of shortening it. Success resets the sequence.
+5. `locked`, `cancelled`, and `Blocked > 0` do not increase the transport
+   failure count; retry them only at the next ordinary interval.
+6. Auth, permission, quota, invalid/incomplete response, unsupported capability,
+   corrupt local state, and profile/Repository-ID mismatch pause automatic
+   attempts for the rest of the process. `Run now` still works; a successful
+   manual Run or successful Enable clears the pause. Restart may also forget the
+   pause and all backoff state.
+7. Disable or Reset clears pending wake/retry state and leaves the scheduler
+   idle. A later successful Enable wakes it again.
+
+Use context cancellation for shutdown and between-note cancellation already
+provided by the service. Stopping the scheduler must stop its timer, cancel its
+goroutine, and wait for it to exit. Do not use `time.Sleep` in implementation or
+tests.
+
+Exit gate: fake-clock tests cover startup, enable wake, five-minute periodic
+execution, wake coalescing, no overlap, the exact backoff sequence,
+`Retry-After`, permanent pause, manual recovery, Disable/Reset, and shutdown.
+Restart tests prove there is no durable scheduler/backoff state.
+
+Estimated review size: 250–400 changed lines.
+
+### R5.3 Process lifecycle and status
+
+Start the scheduler only after `dataDir`, repository, state root, sessions, and
+provider configuration are ready:
+
+- CLI: use a root cancellation context tied to process signals, stop the
+  scheduler during HTTP-server shutdown, and do not start it in tests unless a
+  test explicitly asks for it.
+- Wails: start from `OnStartup` after repository initialization and stop/wait
+  from `OnShutdown`.
+- Local/IndexedDB build: retain the current disabled sync stubs and create no
+  timer or polling loop.
+
+Extend `/api/sync/status` with secret-free, in-memory scheduling fields:
+
+```text
+autoEnabled       connected and not permanently paused
+autoIntervalSecs  300
+syncRunning       one attempt currently owns the run boundary
+lastTrigger       manual | enable | startup | periodic | retry
+nextRun           RFC3339 UTC string or null
+autoPaused        boolean
+pauseReason       stable redacted label or empty
+```
+
+`lastRun` and `lastCompleted` must include automatic attempts. These fields are
+process status, not durable history; they may be empty after restart until the
+startup attempt completes. Never expose endpoint, bucket, prefix, credentials,
+remote bodies, or raw local paths in scheduling status.
+
+The settings panel must say that a connected replica synchronizes at startup
+and every five minutes while MemoDump is running. Keep `Run now`, show running,
+next-run/paused state, and do not show success toasts for routine background
+runs.
+
+Exit gate: CLI and Wails lifecycle tests leave no scheduler goroutine/timer
+running; status tests cover idle, running, scheduled, retrying, paused,
+disconnected, and post-restart states; manual and automatic attempts produce
+the same redacted result shape.
+
+Estimated review size: 200–350 changed lines.
+
+### R5.4 Visible frontend updates
+
+Backend sync can change local Markdown without a frontend request, so add one
+lightweight **status poll**, not a sync engine, in server/Wails builds:
+
+- poll `/api/sync/status` every 30 seconds only while the document is visible;
+  stop on unmount/hidden and refresh once when visibility returns;
+- use a dedicated lightweight status refresh. Do not call the existing full
+  settings refresh on every poll, because it also reads recovery content;
+  refresh recovery details only when the panel opens or `recoveryCount` changes;
+- when `lastCompleted` advances after an automatic attempt, refresh the visible
+  note/folder list through existing browser functions;
+- re-read the open note without mutating the buffer. If it is clean and its
+  revision changed, adopt the new revision/content; if it was deleted, close it
+  with a notice;
+- if the open note is dirty, saving, offline, or already in conflict, compare
+  the fetched revision with its base revision but never replace/close its editor
+  buffer. Only when the revision differs (or the file disappeared), show a
+  non-blocking "synced version changed; save or reload to reconcile" notice and
+  rely on the existing revision CAS to prevent overwrite;
+- polling must never call `/api/sync/run` and must not exist in the local build.
+
+Exit gate: frontend fake-timer tests cover visibility pause/resume, lightweight
+polling without recovery downloads, list refresh, clean-note refresh/deletion,
+and preservation of a dirty editor buffer. Local-build tests create no polling
+timer and make no cloud API request.
+
+Estimated review size: 200–350 changed lines.
+
+### R5.5 Documentation and release review
+
+Update English and Chinese documentation together. Cover:
+
+- exact S3 configuration, private-bucket permissions, plaintext/no-E2EE
+  warning, and where credentials live;
+- startup/five-minute/manual behavior, expected two-device latency, in-memory
+  backoff, permanent pause, and the fact that no sync runs while the process is
+  closed;
+- cloud sync is not a backup: deletes propagate, provider history/versioning is
+  external, and recovery copies are local safety aids;
+- the state root contains Device/Replica identity, connection pin, disposable
+  snapshot, and recovery copies. It contains no WAL or durable scheduler queue,
+  stays outside the vault, and must persist across container/app recreation;
+- do not place the same vault under Dropbox/iCloud/OneDrive/git automation or
+  another filesystem sync tool while MemoDump cloud sync is enabled;
+- how to disable, reset/reconnect, inspect recovery copies, and run the opt-in
+  random-prefix live S3 test without printing secrets.
+
+Add an R5 section to the manual release checklist. On Windows, macOS, and Linux,
+record application build, provider, date, and result for:
+
+1. startup and periodic convergence between two replicas;
+2. Run-now/automatic single-flight behavior and clean shutdown mid-cycle;
+3. concurrent edit and both edit/delete conflict directions without duplicate
+   conflict notes;
+4. pulled deletion, durable recovery copy, and restore;
+5. a remote update while an editor is clean and while it is dirty;
+6. Unicode/case-portable paths and state-root persistence across restart;
+7. auth failure, transient-network recovery, visible redacted status, Disable,
+   and explicit Reset/reconnect.
+
+Retain the experimental flag after R5. Removing it is a separate release
+decision requiring all three platform checklists and one successful opt-in live
+test against an actual supported S3-compatible service.
+
+Exit gate: documentation matches the implementation and wire names; the normal
+verification suite passes; the opt-in live test uses an isolated random prefix;
+and the three platform review records contain no credentials or note content.
+
+Estimated review size: mostly documentation/tests; keep it separate from the
+scheduler implementation.
+
+### R5 final verification gate
+
+In addition to Section 10, run scheduler and frontend timing tests repeatedly
+with fake clocks/timers and run the Go suite under `-race`. Inspect remaining
+matches for `time.NewTicker`, `time.Sleep`, scheduler-state files, watchers,
+cursors, worker pools, and loopback `/api/sync/run` calls; every match must be
+unrelated or explicitly justified.
+
+R5 is complete when two connected filesystem replicas, with no browser action,
+converge through S3 after startup/periodic triggers; Run now remains immediate;
+transient failures back off without surviving restart; permanent failures pause
+without spinning; Disable stops future attempts; shutdown leaves no background
+sync work; a dirty editor is never overwritten by a background pull; and all R4
+data-loss protections remain unchanged.
 
 ## 10. Verification gates
 
@@ -334,25 +560,30 @@ npm run build:local
 The frontend gates ensure the existing application still works; they do not
 authorize porting the new coordinator to TypeScript.
 
-## 11. First handoff to a smaller agent
+## 11. Next handoff to a smaller agent
 
-Start with R0.1 only:
+R0–R4 are complete. Start R5 with R5.1 only:
 
 ```text
-Read CLAUDE.md, docs/sync-spec-lite.md, and R0.1 of
-docs/sync-lite-implementation-plan.md. Implement R0.1 only.
+Read CLAUDE.md, docs/sync-spec-lite.md, the R5 product contract, and R5.1 of
+docs/sync-lite-implementation-plan.md. Implement R5.1 only.
 
-Add the Go schema-v2 versioned-note remote record and its fixtures/tests. The
-record has syncId, complete portable .md path, full LF-normalized Markdown, and
-deleted. It has no folder kind, parentId, cursor, or graph validation. Reuse the
-existing strict canonical JSON, UUID, size, UTF-8, and path validation helpers
-where appropriate. Keep the old entity type temporarily if current callers
-need it to compile.
+Extract the state-mutating manual-run body into one shared backend attempt
+function. The HTTP endpoint must remain a thin adapter with compatible response
+behavior. Manual and future background callers must share syncOpMu, the same
+replica-lock critical section, connection/provider/repository validation, and
+last-attempt recording. Preserve syncservice.Result as the redacted public
+shape; carry typed retry metadata only in a private backend type. A completed
+cycle with Retry > 0 is internally retryable, Blocked > 0 is not a transport
+retry, and cross-process lock contention reports the stable label "locked".
 
-Do not change syncindex, snapshot, scanner, coordinator, TypeScript, providers,
-API, UI, or scheduling. Run the narrow Go tests and then go test ./.... Stop at
-the R0.1 exit gate and report any compatibility issue; do not continue to R0.2.
+Do not add a goroutine, timer, startup hook, Wails/CLI lifecycle change,
+frontend polling/UI, settings, or documentation in this task. Do not change the
+note protocol or coordinator decisions. Add narrow tests for the shared attempt
+boundary, redaction, retry metadata, and non-overlap; then run go test ./...,
+go test -race ./..., and go vet ./.... Stop at the R5.1 exit gate and do not
+continue to R5.2.
 ```
 
-Expected review: one new contract type plus fixtures, with no runtime behavior
-change.
+Expected review: one shared backend attempt path plus tests, with no scheduling
+or user-visible behavior change.

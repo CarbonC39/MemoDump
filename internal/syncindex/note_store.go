@@ -140,6 +140,10 @@ func readNoteIndex(io indexIO, path string) (*NoteIndex, error) {
 	return idx, nil
 }
 
+// ErrAlreadyEnabled reports that the vault already holds a sync index identity;
+// CreateNoteStore is a no-op in that case.
+var ErrAlreadyEnabled = errors.New("sync already enabled for this vault")
+
 // CreateNoteStore writes an EMPTY fresh note-only index for a vault enabling
 // sync for the first time. It is a low-level primitive; EnableNoteStore is the
 // normal entry point and additionally assigns stable Sync IDs to every existing
@@ -183,7 +187,7 @@ func CreateNoteStore(root, vaultID string) (*NoteStore, error) {
 		// silently; the caller must require an explicit re-enable.
 		return nil, err
 	}
-	return nil, fmt.Errorf("sync already enabled for this vault")
+	return nil, ErrAlreadyEnabled
 }
 
 // EnableNoteStore makes sure a vault is synced with the note-only index: on

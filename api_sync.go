@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+
 	"memodump/internal/syncindex"
 	"memodump/internal/syncservice"
 	"memodump/internal/syncstate"
@@ -59,33 +61,29 @@ func lastRunSnapshot() (syncserviceResult, time.Time) {
 }
 
 // handleSyncEnable enables sync for the vault through the EXPLICIT setup flow.
-// First-time index creation runs without the replica lock (no index means no
-// connected replica can be running a cycle); once an index exists, the re-scan
-// and identity assignment happen INSIDE the replica lock so they can never race
-// a cycle in another process that also indexes the same new notes. The whole
-// enable then verifies the provider's capabilities, establishes or re-adopts
-// the remote repository — the only place repo.json is ever created — and records
-// the connection with the verified provider profile and pinned repository ID.
-// It never modifies existing Markdown.
+// The empty index identity (a fresh Vault ID, no note mappings) is created
+// outside the replica lock — it never scans or assigns Sync IDs — so two
+// first-time enables cannot race each other into mutating an existing index
+// outside the lock. The scan and Sync ID assignment then ALWAYS run inside the
+// replica lock (EnableNoteStore), so a concurrent cycle in another process can
+// never assign different identities to the same new note. The enable then
+// verifies the provider's capabilities, establishes or re-adopts the remote
+// repository — the only place repo.json is ever created — and records the
+// connection with the verified provider profile and pinned repository ID. It
+// never modifies existing Markdown.
 func handleSyncEnable(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
-	_, lerr := syncindex.LoadNoteStore(dataDir)
-	firstEnable := errors.Is(lerr, syncindex.ErrNotEnabled)
-	if firstEnable {
-		if _, err := syncindex.EnableNoteStore(dataDir); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
+	if _, cerr := syncindex.CreateNoteStore(dataDir, uuid.NewString()); cerr != nil && !errors.Is(cerr, syncindex.ErrAlreadyEnabled) {
+		writeErr(w, http.StatusBadRequest, cerr.Error())
+		return
 	}
 	var vaultID, replicaID, repoID string
 	err := withSyncLifecycleLock(func(v, rep, stateRoot string, lock *syncstate.Lock) error {
 		vaultID, replicaID = v, rep
-		if !firstEnable {
-			// Re-scan and index newly discovered notes under the replica lock.
-			if _, err := syncindex.EnableNoteStore(dataDir); err != nil {
-				return err
-			}
+		// Scan and assign stable Sync IDs to every note under the replica lock.
+		if _, err := syncindex.EnableNoteStore(dataDir); err != nil {
+			return err
 		}
 		prev, err := syncReadConnected()
 		if err != nil {

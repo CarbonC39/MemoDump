@@ -142,8 +142,11 @@ func TestNoteTombstoneRecoveryIdempotent(t *testing.T) {
 }
 
 // TestNoteTombstoneRacePreservesLocalEdit proves an external edit racing the
-// pulled-tombstone delete survives the local revision CAS: the note stays
-// intact, and the edit is then preserved as a conflict note.
+// pulled-tombstone delete survives the local revision CAS: the edit is injected
+// AFTER the local observation (which captured the old revision) and BEFORE the
+// delete's revision CAS, so the delete genuinely fails and the new edit
+// survives. On the following cycle the edit is preserved as a conflict note and
+// the tombstone is accepted, so nothing is lost.
 func TestNoteTombstoneRacePreservesLocalEdit(t *testing.T) {
 	ctx := context.Background()
 	remote := cloudsync.NewMemoryStore()
@@ -160,25 +163,32 @@ func TestNoteTombstoneRacePreservesLocalEdit(t *testing.T) {
 	}
 	a.runQuiescent(t, ctx)
 
-	// B's scan observes the unchanged note, then a race rewrites it right after
-	// the stable read: the apply-tombstone delete's CAS must fail and the new
-	// edit survives. On the following cycle the edit is preserved as a conflict
-	// note and the tombstone is accepted, so nothing is lost.
-	b.withScanOpts(vaultfs.ScanOptions{
-		AfterCandidate: func(path string) {
-			if path == "a.md" {
-				_ = os.WriteFile(filepath.Join(b.root, "a.md"), []byte("# newer local edit\n"), 0644)
-			}
-		},
-	})
-	b.runQuiescent(t, ctx)
+	// B's scan observes the unchanged note, then the fault fires between the
+	// observation and the delete, rewriting the note: the apply-tombstone
+	// delete's CAS must fail, deferring the note (Retry) and leaving the new
+	// edit in place.
+	b.co.cfg.TestFault = func(point string) error {
+		if point == "tombstone:before-delete" {
+			_ = os.WriteFile(filepath.Join(b.root, "a.md"), []byte("# newer local edit\n"), 0644)
+		}
+		return nil
+	}
+	if st, err := b.co.Run(ctx); err != nil {
+		t.Fatal(err)
+	} else if st.Retry == 0 {
+		t.Fatalf("cycle = %+v, want the tombstone apply deferred as a retry", st)
+	}
+	b.co.cfg.TestFault = nil
+	if b.noteBody("a.md") != "# newer local edit\n" {
+		t.Fatal("the injected edit did not survive the delete CAS")
+	}
 
 	// The original converges to deleted; the racing edit survives in a conflict
 	// note.
+	converge(ctx, t, a, b)
 	if b.noteExists("a.md") {
 		t.Fatal("original note should converge to deleted")
 	}
-	converge(ctx, t, a, b)
 	found := false
 	for _, p := range conflictNotes(t, b.root) {
 		if b.noteBody(p) == "# newer local edit\n" {

@@ -186,6 +186,14 @@ func (c *NoteCoordinator) SetScanOptions(opts vaultfs.ScanOptions) {
 	c.cfg.ScanOptions = opts
 }
 
+// SetTestFault installs a test-only crash/mutation seam: a non-nil function is
+// called at every named execution boundary and its error aborts the cycle as a
+// crash would. A test that mutates state and returns nil injects mid-cycle
+// state without aborting.
+func (c *NoteCoordinator) SetTestFault(fn func(point string) error) {
+	c.cfg.TestFault = fn
+}
+
 // loadBaselines reads the disposable snapshot against the coordinator identity.
 func (c *NoteCoordinator) loadBaselines() (map[string]syncstate.SnapshotEntity, syncstate.DiscardReason, error) {
 	snap, reason, err := c.snaps.Load(syncstate.ExpectedIdentity{
@@ -300,6 +308,13 @@ func (c *NoteCoordinator) applyTombstone(ctx context.Context, d cloudsync.NoteDe
 	}
 	if err := c.writeRecovery(d.SyncID, path); err != nil {
 		return false, fmt.Errorf("recovery for %s: %w", d.SyncID, err)
+	}
+	// The injected fault fires AFTER the local observation captured the note's
+	// revision and BEFORE the delete's revision CAS, so a race test can write a
+	// newer local edit here and exercise the CAS-failure path (rather than a
+	// plain edit/delete conflict the decision would already see).
+	if err := c.fault("tombstone:before-delete"); err != nil {
+		return false, err
 	}
 	deleted, err := c.deleteLocalNote(d.SyncID, path, d.LocalRevision)
 	if err != nil {

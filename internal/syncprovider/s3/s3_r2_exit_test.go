@@ -387,9 +387,140 @@ func TestS3ExitRecoveryIdempotent(t *testing.T) {
 	}
 }
 
-// TestS3ExitLocalCASRace: an external edit racing the pulled-tombstone delete
-// survives the local revision CAS, and is then preserved as a conflict note —
-// nothing is lost through the S3 adapter.
+// TestS3ExitIdenticalSimultaneousEdit: both replicas edit the same note to the
+// SAME body; they converge without any conflict note (R2.2).
+func TestS3ExitIdenticalSimultaneousEdit(t *testing.T) {
+	ctx := context.Background()
+	cc, _ := newServer(t, newFakeS3())
+	a := newS3ExitRep(t, t.TempDir(), t.TempDir(), "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", cc, cc.Profile())
+	b := newS3ExitRep(t, t.TempDir(), t.TempDir(), "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", cc, cc.Profile())
+
+	if err := os.WriteFile(filepath.Join(a.root, "a.md"), []byte("# base\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	a.runQuiescent(t, ctx)
+	b.runQuiescent(t, ctx)
+
+	// Identical simultaneous edit: both write the same body, then converge.
+	if err := os.WriteFile(filepath.Join(a.root, "a.md"), []byte("# Same\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(b.root, "a.md"), []byte("# Same\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	a.runQuiescent(t, ctx)
+	b.runQuiescent(t, ctx)
+
+	if a.noteBody("a.md") != "# Same\n" || b.noteBody("a.md") != "# Same\n" {
+		t.Fatal("identical simultaneous edit did not converge")
+	}
+	if got := a.conflictNotes(t); len(got) != 0 {
+		t.Fatalf("identical edit minted conflict notes: %v", got)
+	}
+	if got := b.conflictNotes(t); len(got) != 0 {
+		t.Fatalf("identical edit minted conflict notes on B: %v", got)
+	}
+}
+
+// TestS3ExitExternalRenameNewIdentity: a rename OUTSIDE the app (no index
+// UpdatePath) is observed as old absence plus a new identity; the old note is
+// tombstoned and the moved file syncs as a fresh note, never silently folded
+// into the old identity (R2.1 external-rename case).
+func TestS3ExitExternalRenameNewIdentity(t *testing.T) {
+	ctx := context.Background()
+	cc, _ := newServer(t, newFakeS3())
+	a := newS3ExitRep(t, t.TempDir(), t.TempDir(), "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", cc, cc.Profile())
+	b := newS3ExitRep(t, t.TempDir(), t.TempDir(), "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", cc, cc.Profile())
+
+	if err := os.WriteFile(filepath.Join(a.root, "a.md"), []byte("# A\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	a.runQuiescent(t, ctx)
+	b.runQuiescent(t, ctx)
+	oldID, ok := a.noteID("a.md")
+	if !ok {
+		t.Fatal("a.md not indexed")
+	}
+
+	// External rename: the file moves without the app recording it.
+	if err := os.Rename(filepath.Join(a.root, "a.md"), filepath.Join(a.root, "b.md")); err != nil {
+		t.Fatal(err)
+	}
+	a.runQuiescent(t, ctx)
+	b.runQuiescent(t, ctx)
+
+	if a.noteExists("a.md") || b.noteExists("a.md") {
+		t.Fatal("the old path did not converge to deleted")
+	}
+	if b.noteBody("b.md") != "# A\n" {
+		t.Fatal("B did not pull the externally-renamed note")
+	}
+	// A NEW identity was minted for the moved file.
+	newID, ok := a.noteID("b.md")
+	if !ok || newID == oldID {
+		t.Fatalf("external rename reused the old identity: %q == %q", newID, oldID)
+	}
+	// The old identity is a tombstone on the remote; the new identity is live.
+	if rec := s3RemoteNote(t, cc, oldID); !rec.Deleted {
+		t.Fatal("old identity was not tombstoned after the external rename")
+	}
+	if rec := s3RemoteNote(t, cc, newID); rec.Deleted || rec.Path != "b.md" {
+		t.Fatalf("new identity remote = %+v, want live at b.md", rec)
+	}
+}
+
+// TestS3ExitPortableCollision: a remote record whose portable path collides
+// with a different local Sync ID blocks both, so a foreign note is never pulled
+// onto a claimed path and the original is never deleted (R2.1 portable
+// collision).
+func TestS3ExitPortableCollision(t *testing.T) {
+	ctx := context.Background()
+	cc, _ := newServer(t, newFakeS3())
+	a := newS3ExitRep(t, t.TempDir(), t.TempDir(), "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", cc, cc.Profile())
+	b := newS3ExitRep(t, t.TempDir(), t.TempDir(), "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", cc, cc.Profile())
+
+	if err := os.WriteFile(filepath.Join(a.root, "a.md"), []byte("# mine\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	a.runQuiescent(t, ctx)
+	b.runQuiescent(t, ctx)
+
+	// A foreign remote record claims the SAME portable path under another ID.
+	foreign := &cloudsync.NoteRecord{
+		SchemaVersion: cloudsync.NoteSchemaVersion,
+		SyncID:        "99999999-9999-4999-8999-999999999999",
+		Path:          "a.md", Markdown: "# foreign\n",
+	}
+	data, err := foreign.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cc.Create(ctx, cloudsync.NoteKey(foreign.SyncID), data); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := b.co.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Blocked == 0 {
+		t.Fatalf("B cycle = %+v, want the portable collision blocked", st)
+	}
+	// The original note is untouched and the foreign record is not pulled.
+	if b.noteBody("a.md") != "# mine\n" {
+		t.Fatal("the colliding path was overwritten")
+	}
+	if _, ok := b.noteID("a.md"); !ok {
+		t.Fatal("original identity lost")
+	}
+	if _, _, err := cc.Read(ctx, cloudsync.NoteKey(foreign.SyncID)); err != nil {
+		t.Fatal("the foreign remote record was touched")
+	}
+}
+
+// (which captured the old revision) and BEFORE the delete's revision CAS makes
+// the pulled-tombstone delete genuinely fail; the new edit survives and is then
+// preserved as a conflict note — nothing is lost through the S3 adapter.
 func TestS3ExitLocalCASRace(t *testing.T) {
 	ctx := context.Background()
 	cc, _ := newServer(t, newFakeS3())
@@ -408,23 +539,32 @@ func TestS3ExitLocalCASRace(t *testing.T) {
 	}
 	a.runQuiescent(t, ctx)
 
-	// B's scan observes the unchanged note, then a race rewrites it right after
-	// the stable read: the apply-tombstone delete's CAS fails and the new edit
-	// survives; the next cycle preserves it as a conflict note.
-	b.withScanOpts(vaultfs.ScanOptions{
-		AfterCandidate: func(path string) {
-			if path == "a.md" {
-				_ = os.WriteFile(filepath.Join(b.root, "a.md"), []byte("# newer local edit\n"), 0644)
-			}
-		},
+	// B's observation captures the old revision, then the fault fires between
+	// the observation and the delete, rewriting the note so the delete's CAS
+	// genuinely fails: one cycle must leave the edited note in place.
+	b.co.SetTestFault(func(point string) error {
+		if point == "tombstone:before-delete" {
+			_ = os.WriteFile(filepath.Join(b.root, "a.md"), []byte("# newer local edit\n"), 0644)
+		}
+		return nil
 	})
+	if st, err := b.co.Run(ctx); err != nil {
+		t.Fatal(err)
+	} else if st.Retry == 0 {
+		t.Fatalf("cycle = %+v, want the tombstone apply deferred as a retry", st)
+	}
+	b.co.SetTestFault(nil)
+	if b.noteBody("a.md") != "# newer local edit\n" {
+		t.Fatal("the injected edit did not survive the delete CAS")
+	}
+
+	// The next cycles preserve the racing edit as a conflict note and converge
+	// the original to deleted.
 	b.runQuiescent(t, ctx)
+	a.runQuiescent(t, ctx)
 	if b.noteExists("a.md") {
 		t.Fatal("original note should converge to deleted")
 	}
-	b.withScanOpts(vaultfs.ScanOptions{})
-	b.runQuiescent(t, ctx)
-	a.runQuiescent(t, ctx)
 	found := false
 	for _, p := range b.conflictNotes(t) {
 		if b.noteBody(p) == "# newer local edit\n" {
