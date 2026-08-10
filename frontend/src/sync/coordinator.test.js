@@ -1,11 +1,11 @@
 import { IDBFactory } from 'fake-indexeddb'
 import { describe, it, expect, beforeEach } from 'vitest'
 import localApi from '../localApi'
-import { _close } from '../storage/localVaultDb'
+import { _close, getNoteRec } from '../storage/localVaultDb'
 import { saveIdentity, setConnection, loadSyncIndex, listRecovery, loadSnapshot } from '../storage/syncDb'
 import { runSyncCycle, observeAndDecide, executeDecisions } from './coordinator'
 import { serializeRepositoryDescriptor } from './repo'
-import { serializeNoteRecord, noteKey } from './note'
+import { serializeNoteRecord, noteKey, parseNoteRecord } from './note'
 import { StoreError } from './s3store'
 import { utf8Bytes, sha256Hex } from './hash.js'
 
@@ -92,13 +92,29 @@ async function setReplica(factory) {
 }
 
 async function enableReplica(remote) {
-  await saveIdentity(crypto.randomUUID(), crypto.randomUUID())
+  const identity = { vaultId: crypto.randomUUID(), replicaId: crypto.randomUUID() }
+  await saveIdentity(identity.vaultId, identity.replicaId)
   await setConnection({ providerProfile: await remote.profile(), repositoryId: remote.repoRepositoryId, connected: true })
   remote.seedRepo()
+  return identity
 }
 
 function freshReplica() {
   return new IDBFactory()
+}
+
+async function putNote(rec) {
+  const db = await new Promise((resolve, reject) => {
+    const req = globalThis.indexedDB.open('memodump', 3)
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+  return new Promise((resolve, reject) => {
+    const t = db.transaction('notes', 'readwrite')
+    t.objectStore('notes').put(rec)
+    t.oncomplete = () => { db.close(); resolve() }
+    t.onerror = () => reject(t.error)
+  })
 }
 
 const runCycle = (remote, opts) => runSyncCycle(remote, { locks: fakeLocks, ...opts })
@@ -209,6 +225,40 @@ describe('serialized cycle lifecycle', () => {
     expect(currentVersion.length).toBeGreaterThan(0)
   })
 
+  it('ignores notes with unrepresentable paths instead of poisoning the index', async () => {
+    const remote = new FakeRemote()
+    await setReplica(freshReplica())
+    await enableReplica(remote)
+    await localApi.createNote({ name: 'ok', content: 'fine\n' })
+    await putNote({ path: '.images/a.md', markdown: 'image', content: 'image', tags: [], revision: 'r1', modTime: 1, created: 1 })
+
+    const res = await runCycle(remote)
+    // The valid note synced; the unsyncable one was never indexed.
+    const index = await loadSyncIndex()
+    expect(Object.keys(index)).toHaveLength(1)
+    expect(index[Object.keys(index)[0]]).toBe('ok.md')
+    expect(res.blocked).toBe(0)
+  })
+
+  it('a remote record for an unsyncable note is observed as unknown, never tombstoned', async () => {
+    const remote = new FakeRemote()
+    await setReplica(freshReplica())
+    await enableReplica(remote)
+    await localApi.createNote({ name: 'ok', content: 'fine\n' })
+    const badId = crypto.randomUUID()
+    await putNote({ path: '.images/a.md', markdown: 'image', content: 'image', tags: [], revision: 'r1', modTime: 1, created: 1, syncId: badId })
+    // The remote can only ever hold a VALID record (the wire contract rejects
+    // unrepresentable paths); its path differs from the local unsyncable one.
+    remote.put(noteKey(badId), utf8Bytes(serializeNoteRecord({ schemaVersion: 2, syncId: badId, path: 'somewhere.md', markdown: 'image', deleted: false })))
+
+    const res = await runCycle(remote)
+    // The unsyncable note survives: its id is never indexed, and the remote
+    // record is blocked (local unknown), never interpreted as absent/deleted.
+    expect(await getNoteRec('.images/a.md')).toBeDefined()
+    expect((await loadSyncIndex())[badId]).toBeUndefined()
+    expect(res.blocked).toBeGreaterThan(0)
+  })
+
   it('refuses a second Run now while the replica lock is held', async () => {
     const remote = new FakeRemote()
     await setReplica(freshReplica())
@@ -264,5 +314,202 @@ describe('dirty editor racing a pull', () => {
     expect((await localApi.getNote('a.md')).data.content).toBe('editor wins\n')
     const { data } = await remote.read(noteKey(syncId))
     expect(new TextDecoder().decode(data)).toContain('"new\\n"')
+  })
+
+  it('an edit racing a tombstone delete defers and survives', async () => {
+    const remote = new FakeRemote()
+    await setReplica(freshReplica())
+    await enableReplica(remote)
+    await localApi.createNote({ name: 'a', content: 'old\n' })
+    await runCycle(remote)
+    const syncId = Object.keys(await loadSyncIndex())[0]
+
+    // Another device tombstones the note.
+    remote.put(noteKey(syncId), utf8Bytes(serializeNoteRecord({ schemaVersion: 2, syncId, path: 'a.md', deleted: true })))
+
+    const state = await observeAndDecide(remote)
+    expect(state.decisions.find((d) => d.kind === 'apply_tombstone')).toBeDefined()
+
+    // The editor writes before the delete executes; the CAS must defer.
+    await localApi.updateNote('a.md', { content: 'editor wins\n' })
+    const { deferred } = await executeDecisions(remote, state.decisions, state.baselines, { index: state.index })
+    expect(deferred).toBeGreaterThan(0)
+    expect((await localApi.getNote('a.md')).data.content).toBe('editor wins\n')
+  })
+})
+
+describe('edit/delete conflict directions', () => {
+  it('preserves a local edit against a remote tombstone (preserve_local_then_delete)', async () => {
+    const remote = new FakeRemote()
+    const fa = freshReplica()
+    const fb = freshReplica()
+    await setReplica(fa)
+    await enableReplica(remote)
+    await localApi.createNote({ name: 'n', content: 'v1\n' })
+    await runCycle(remote)
+    await setReplica(fb)
+    await enableReplica(remote)
+    await runCycle(remote)
+
+    // B deletes and syncs the tombstone.
+    const bRec = await localApi.getNote('n.md')
+    await localApi.deleteNote('n.md', bRec.data.revision)
+    await runCycle(remote)
+
+    // A edits WITHOUT syncing, then cycles: local edit vs remote tombstone.
+    await setReplica(fa)
+    await localApi.updateNote('n.md', { content: 'A edit\n' })
+    await runCycle(remote)
+    await expect(localApi.getNote('n.md')).rejects.toMatchObject({ response: { status: 404 } })
+    const aAll = (await localApi.listNotes('')).data
+    const conflict = aAll.find((x) => /^n \(conflict [0-9a-f]{12}\)$/.test(x.name))
+    expect(conflict).toBeDefined()
+    expect((await localApi.getNote(conflict.path)).data.content).toBe('A edit\n')
+    expect((await listRecovery()).length).toBe(1)
+  })
+
+  it('preserves a remote edit against a local deletion (preserve_remote_then_tombstone)', async () => {
+    const remote = new FakeRemote()
+    const fa = freshReplica()
+    const fb = freshReplica()
+    await setReplica(fa)
+    await enableReplica(remote)
+    await localApi.createNote({ name: 'm', content: 'v1\n' })
+    await runCycle(remote)
+    await setReplica(fb)
+    await enableReplica(remote)
+    await runCycle(remote)
+
+    // A deletes locally WITHOUT syncing; B edits and syncs.
+    await setReplica(fa)
+    const aRec = await localApi.getNote('m.md')
+    await localApi.deleteNote('m.md', aRec.data.revision)
+    await setReplica(fb)
+    await localApi.updateNote('m.md', { content: 'B edit\n' })
+    await runCycle(remote)
+
+    // A cycles: local absent vs remote edit -> preserve remote as conflict note,
+    // tombstone the original.
+    await setReplica(fa)
+    await runCycle(remote)
+    const aAll = (await localApi.listNotes('')).data
+    const conflict = aAll.find((x) => /^m \(conflict [0-9a-f]{12}\)$/.test(x.name))
+    expect(conflict).toBeDefined()
+    expect((await localApi.getNote(conflict.path)).data.content).toBe('B edit\n')
+    await expect(localApi.getNote('m.md')).rejects.toMatchObject({ response: { status: 404 } })
+    // The remote ORIGINAL is now a tombstone (the index also carries the
+    // conflict id, so look the original up by its path).
+    const origSyncId = Object.entries(await loadSyncIndex()).find(([, p]) => p === 'm.md')[0]
+    const { data } = await remote.read(noteKey(origSyncId))
+    expect(parseNoteRecord(data).deleted).toBe(true)
+  })
+})
+
+describe('uncertain writes and restart', () => {
+  it('an accepted push whose response is lost is confirmed by re-read, then converges', async () => {
+    const remote = new FakeRemote()
+    let loseResponse = true
+    const flaky = {
+      profile: () => remote.profile(),
+      read: (k, o) => remote.read(k, o),
+      list: (p, o) => remote.list(p, o),
+      replace: (k, d, e, o) => remote.replace(k, d, e, o),
+      create: async (k, d, o) => {
+        const v = await remote.create(k, d, o)
+        if (loseResponse) {
+          loseResponse = false
+          throw new StoreError('retryable-transport', 'response lost')
+        }
+        return v
+      },
+    }
+    await setReplica(freshReplica())
+    await enableReplica(remote)
+    await localApi.createNote({ name: 'a', content: 'x\n' })
+
+    await runCycle(flaky) // the create landed but threw; confirmWrite re-reads
+    const syncId = Object.keys(await loadSyncIndex())[0]
+    expect(remote.objects.has(noteKey(syncId))).toBe(true)
+
+    const res = await runCycle(remote) // restart converges, nothing to redo
+    expect(res.retry).toBe(0)
+  })
+
+  it('a conflict-preservation crash restarts and converges without duplicating the conflict note', async () => {
+    const remote = new FakeRemote()
+    const fa = freshReplica()
+    const fb = freshReplica()
+    await setReplica(fa)
+    await enableReplica(remote)
+    await localApi.createNote({ name: 'shared', content: 'v1\n' })
+    await runCycle(remote)
+    await setReplica(fb)
+    await enableReplica(remote)
+    await runCycle(remote)
+    await localApi.updateNote('shared.md', { content: 'B edit\n' })
+    await setReplica(fa)
+    await localApi.updateNote('shared.md', { content: 'A edit\n' })
+    await runCycle(remote)
+
+    // B's cycle crashes right after the conflict note is created locally and the
+    // remote conflict record is written, before the original is touched.
+    await setReplica(fb)
+    const state = await observeAndDecide(remote)
+    await expect(executeDecisions(remote, state.decisions, state.baselines, {
+      index: state.index,
+      fault: async (point) => { if (point === 'conflict:remote') throw new Error('crash') },
+    })).rejects.toThrow('crash')
+    expect((await localApi.listNotes('')).data.filter((n) => /^shared \(conflict/.test(n.name))).toHaveLength(1)
+
+    // Restart: the reservation is replay-safe; still exactly one conflict note.
+    await runCycle(remote)
+    const notes = (await localApi.listNotes('')).data
+    const conflicts = notes.filter((n) => /^shared \(conflict/.test(n.name))
+    expect(conflicts).toHaveLength(1)
+    expect((await localApi.getNote('shared.md')).data.content).toBe('A edit\n')
+    expect((await localApi.getNote(conflicts[0].path)).data.content).toBe('B edit\n')
+  })
+
+  it('a lost snapshot commit restarts with conservative onboarding and converges', async () => {
+    const remote = new FakeRemote()
+    await setReplica(freshReplica())
+    const identity = await enableReplica(remote)
+    await localApi.createNote({ name: 'a', content: 'x\n' })
+
+    let committed = false
+    await expect(runCycle(remote, {
+      commitSnapshotFn: async () => { committed = true; throw new Error('snapshot commit lost') },
+    })).rejects.toThrow('snapshot commit lost')
+    expect(committed).toBe(true)
+    // The note was pushed but no baseline survived.
+    const syncId = Object.keys(await loadSyncIndex())[0]
+    expect(remote.objects.has(noteKey(syncId))).toBe(true)
+    expect((await loadSnapshot({
+      vaultId: identity.vaultId, replicaId: identity.replicaId,
+      providerProfile: await remote.profile(), repositoryId: remote.repoRepositoryId,
+    })).reason).toBe('missing')
+
+    // Restart: no baseline -> conservative onboarding -> establish baseline.
+    const res = await runCycle(remote)
+    expect(res.retry).toBe(0)
+    expect((await loadSnapshot({
+      vaultId: identity.vaultId, replicaId: identity.replicaId,
+      providerProfile: await remote.profile(), repositoryId: remote.repoRepositoryId,
+    })).reason).toBe('usable')
+  })
+
+  it('two concurrent Run now calls: exactly one wins, the other is refused', async () => {
+    const remote = new FakeRemote()
+    await setReplica(freshReplica())
+    await enableReplica(remote)
+    await localApi.createNote({ name: 'a', content: 'x\n' })
+
+    const [r1, r2] = await Promise.allSettled([runCycle(remote), runCycle(remote)])
+    const fulfilled = [r1, r2].filter((r) => r.status === 'fulfilled')
+    const rejected = [r1, r2].filter((r) => r.status === 'rejected')
+    expect(fulfilled).toHaveLength(1)
+    expect(fulfilled[0].value.snapshotCommitted).toBe(true)
+    expect(rejected).toHaveLength(1)
+    expect(rejected[0].reason.code).toBe('locked')
   })
 })

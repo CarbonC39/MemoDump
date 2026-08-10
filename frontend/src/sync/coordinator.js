@@ -18,7 +18,7 @@ import {
   loadSyncIndex, assignMissingSyncIds, removeIndexEntry, reserveConflictNote,
   applyNoteMutation, writeRecovery, SyncStateError, SNAPSHOT_SCHEMA_VERSION,
 } from '../storage/syncDb.js'
-import { allOf, getNoteRec } from '../storage/localVaultDb.js'
+import { getNoteRec } from '../storage/localVaultDb.js'
 import { StoreError } from './s3store.js'
 import { normalizeMarkdown } from './markdown.js'
 import {
@@ -69,13 +69,14 @@ async function withReplicaLock(vaultId, fn, locks) {
 // runSyncCycle runs one full serialized cycle for the current replica. store is
 // the RemoteStore (S3Store) the enable flow configured. locks defaults to
 // navigator.locks and is injectable for tests. signal carries cancellation.
-export async function runSyncCycle(store, { locks = globalThis.navigator?.locks, signal } = {}) {
+// commitSnapshotFn is a test-only seam for snapshot-commit-loss restart tests.
+export async function runSyncCycle(store, { locks = globalThis.navigator?.locks, signal, commitSnapshotFn } = {}) {
   const identity = await loadIdentity()
   if (!identity) throw runError('not-enabled', 'sync is not enabled')
   return withReplicaLock(identity.vaultId, async () => {
     const state = await observeAndDecide(store, { signal })
     const { deferred } = await executeDecisions(store, state.decisions, state.baselines, { index: state.index, signal })
-    await commitSnapshot(state)
+    await (commitSnapshotFn || commitSnapshot)(state)
     const blocked = state.decisions.filter((d) => d.kind === 'block').length
     const retry = state.decisions.filter((d) => d.kind === 'retry').length + deferred
     return {
@@ -136,10 +137,11 @@ export async function observeAndDecide(store, { signal } = {}) {
     repositoryId: repo.repositoryId,
   }
 
-  // Assign durable identities to definite new notes BEFORE any upload.
-  await assignMissingSyncIds()
+  // Assign durable identities to definite new notes BEFORE any upload. The
+  // transaction returns the full updated notes snapshot, so IndexedDB is
+  // enumerated exactly once per cycle.
+  const { notes } = await assignMissingSyncIds()
   const index = await loadSyncIndex()
-  const notes = await allOf('notes')
 
   // Load the disposable snapshot; a missing/corrupt snapshot means conservative
   // onboarding with no baseline. A profile/repository mismatch stops.
@@ -187,31 +189,50 @@ function unionOf(index, baselines, keys) {
 }
 
 // buildLocalObservations derives the immutable local observation per union Sync
-// ID from the note records and the index. An unindexed id is absent; an
-// unrepresentable path is unknown (never absent); a present indexed note is
-// read fresh and given its canonical content hash over LF-normalized Markdown.
+// ID from the note records and the index. An unindexed id with no mirrored
+// record is absent; an unrepresentable path — indexed OR mirrored on a live
+// record — is unknown (never absent, which would authorize a tombstone); a
+// present indexed note is read fresh and given its canonical content hash over
+// LF-normalized Markdown.
 async function buildLocalObservations(notes, index, unionIds) {
   const byPath = new Map()
-  for (const n of notes) byPath.set(n.path, n)
+  const bySyncId = new Map()
+  for (const n of notes) {
+    byPath.set(n.path, n)
+    if (n.syncId) bySyncId.set(n.syncId, n)
+  }
   const obs = {}
   for (const id of unionIds) {
     const path = index[id]
-    if (path === undefined) {
-      obs[id] = { syncId: id, state: LocalState.ABSENT }
+    if (path !== undefined) {
+      if (!validNotePath(path)) {
+        obs[id] = { syncId: id, state: LocalState.UNKNOWN, path }
+        continue
+      }
+      const rec = byPath.get(path)
+      if (!rec) {
+        obs[id] = { syncId: id, state: LocalState.ABSENT, path }
+        continue
+      }
+      const markdown = normalizeMarkdown(rec.markdown)
+      const contentHash = await computeContentHash({ schemaVersion: NOTE_SCHEMA_VERSION, syncId: id, path, markdown, deleted: false })
+      obs[id] = { syncId: id, state: LocalState.LIVE, path, markdown, contentHash, revision: rec.revision }
       continue
     }
-    if (!validNotePath(path)) {
-      obs[id] = { syncId: id, state: LocalState.UNKNOWN, path }
+    // Not indexed, but a note record mirrors this Sync ID. An unrepresentable
+    // path is UNKNOWN; a valid-path mirror is the local source of truth.
+    const mirrored = bySyncId.get(id)
+    if (mirrored) {
+      if (!validNotePath(mirrored.path)) {
+        obs[id] = { syncId: id, state: LocalState.UNKNOWN, path: mirrored.path }
+        continue
+      }
+      const markdown = normalizeMarkdown(mirrored.markdown)
+      const contentHash = await computeContentHash({ schemaVersion: NOTE_SCHEMA_VERSION, syncId: id, path: mirrored.path, markdown, deleted: false })
+      obs[id] = { syncId: id, state: LocalState.LIVE, path: mirrored.path, markdown, contentHash, revision: mirrored.revision }
       continue
     }
-    const rec = byPath.get(path)
-    if (!rec) {
-      obs[id] = { syncId: id, state: LocalState.ABSENT, path }
-      continue
-    }
-    const markdown = normalizeMarkdown(rec.markdown)
-    const contentHash = await computeContentHash({ schemaVersion: NOTE_SCHEMA_VERSION, syncId: id, path, markdown, deleted: false })
-    obs[id] = { syncId: id, state: LocalState.LIVE, path, markdown, contentHash, revision: rec.revision }
+    obs[id] = { syncId: id, state: LocalState.ABSENT }
   }
   return obs
 }
@@ -285,9 +306,11 @@ function pathConflicts(localObs, remoteObs) {
 // executeDecisions applies the plan serially. baselines is mutated in place for
 // final known-equal states and returned so the caller can commit the snapshot.
 // The returned deferred count is the number of notes not converged (a raced
-// local write, a stale remote CAS, a retryable failure).
-export async function executeDecisions(store, decisions, baselines, { index, signal } = {}) {
-  const ctx = { index }
+// local write, a stale remote CAS, a retryable failure). fault is a test-only
+// crash seam: a non-nil function is awaited at named execution boundaries and
+// its error aborts the cycle exactly as a crash would.
+export async function executeDecisions(store, decisions, baselines, { index, signal, fault } = {}) {
+  const ctx = { index, fault }
   let deferred = 0
   for (const d of decisions) {
     if (signal && signal.aborted) throw abortError()
@@ -295,6 +318,10 @@ export async function executeDecisions(store, decisions, baselines, { index, sig
     deferred += await executeOne(store, d, baselines, ctx, signal)
   }
   return { deferred, baselines }
+}
+
+async function checkFault(fault, point) {
+  if (fault) await fault(point)
 }
 
 async function executeOne(store, d, baselines, ctx, signal) {
@@ -404,14 +431,15 @@ async function confirmWrite(store, key, signal, want) {
 
 // pullLive materializes the remote note locally with the observed local
 // revision CAS (create-if-absent when the note is remote-only or locally
-// absent). An in-app path change only applies when a LIVE local note sits at
-// the indexed path and the remote moved it — deleting an already-absent note
-// would otherwise hand applyNoteMutation an empty revision. An editor racing
-// the pull wins: the CAS failure defers the note.
+// absent). Whether to move is decided by the IMMUTABLE observation — a LIVE
+// local observation carries a revision, so an indexed path that differs from
+// the remote path is a path-change; a locally-absent note (empty revision) is a
+// plain create-if-absent. Execution-time existence changes are left to the
+// transactional CAS inside applyNoteMutation, which returns deferred instead of
+// misclassifying a delete/rename or throwing on an empty revision.
 async function pullLive(d, baselines, ctx) {
   const indexedPath = ctx.index[d.syncId]
-  const localRec = indexedPath ? await getNoteRec(indexedPath) : null
-  const moving = Boolean(indexedPath && indexedPath !== d.path && localRec)
+  const moving = Boolean(indexedPath && indexedPath !== d.path && d.localRevision)
   const res = moving
     ? await applyNoteMutation({
         mode: 'path-change', syncId: d.syncId, oldPath: indexedPath, path: d.path,
@@ -419,7 +447,7 @@ async function pullLive(d, baselines, ctx) {
       })
     : await applyNoteMutation({
         mode: 'pull', syncId: d.syncId, path: d.path, markdown: d.markdown,
-        expectedRevision: indexedPath ? d.localRevision : '',
+        expectedRevision: d.localRevision,
       })
   if (!res.applied) return false
   baselines[d.syncId] = { contentHash: d.contentHash, deleted: false, remoteVersion: d.version }
@@ -441,6 +469,7 @@ async function applyTombstone(d, baselines, ctx) {
   const markdown = normalizeMarkdown(rec.markdown)
   const contentHash = await computeContentHash({ schemaVersion: NOTE_SCHEMA_VERSION, syncId: d.syncId, path, markdown, deleted: false })
   await writeRecovery(d.syncId, await stateHash(contentHash, false), path, rec.markdown)
+  await checkFault(ctx.fault, 'tombstone:before-delete')
   const res = await applyNoteMutation({ mode: 'delete', syncId: d.syncId, path, expectedRevision: d.localRevision })
   if (!res.applied) return false
   baselines[d.syncId] = { contentHash: d.contentHash, deleted: true, remoteVersion: d.version }
@@ -460,6 +489,7 @@ async function executeConflict(store, d, baselines, ctx, signal) {
 
   // 1. Reserve the conflict identity/path (replay-safe).
   await reserveConflictNote(conf.conflictSyncId, conf.conflictPath, conf.conflictMarkdown)
+  await checkFault(ctx.fault, 'conflict:reserved')
 
   // 2. Create/verify the remote conflict record (create-if-absent, idempotent).
   const rec = {
@@ -472,9 +502,10 @@ async function executeConflict(store, d, baselines, ctx, signal) {
   try {
     conflictVersion = await store.create(key, data, { signal })
   } catch (e) {
-    if (e instanceof StoreError && e.kind === 'precondition-failed') {
-      // Re-read to learn the true outcome: an identical conflict record is an
-      // idempotent success; an unavailable or unlanded state defers; a record
+    if (e instanceof StoreError && (e.kind === 'precondition-failed' || isRetryableStoreError(e))) {
+      // An uncertain response is never guessed: re-read to learn whether the
+      // write landed. An identical conflict record is an idempotent success at
+      // the actual version; an unavailable or unlanded state defers; a record
       // with a different identity/state is a hard collision.
       let existing, version
       try {
@@ -494,14 +525,13 @@ async function executeConflict(store, d, baselines, ctx, signal) {
         throw new Error(`remote conflict collision at ${key}`)
       }
       conflictVersion = version
-    } else if (e instanceof StoreError && isRetryableStoreError(e)) {
-      return 1
     } else {
       throw e
     }
   }
 
   // 3. Only now act on the original; each helper sets the baseline on success.
+  await checkFault(ctx.fault, 'conflict:remote')
   let deferred = 0
   if (d.kind === 'preserve_local_then_pull') {
     if (!(await pullLive(d, baselines, ctx))) deferred++
@@ -510,6 +540,7 @@ async function executeConflict(store, d, baselines, ctx, signal) {
   } else if (d.kind === 'preserve_remote_then_tombstone') {
     if (!(await pushTombstone(store, d, baselines, signal))) deferred++
   }
+  await checkFault(ctx.fault, 'conflict:original')
 
   // 4. The conflict note is now known equal locally and remotely.
   baselines[conf.conflictSyncId] = {

@@ -198,19 +198,21 @@ export async function replaceSnapshot(snapshot) {
 
 // ---- sync index ----------------------------------------------------------
 
-// loadSyncIndex returns the full Sync ID -> path mapping. Every entry is
-// validated; an invalid one is index corruption, never ignored, because a
-// dropped tombstone mapping could silently mint a fresh identity for a deleted
-// note's path.
+// loadSyncIndex returns the full Sync ID -> path mapping. Every entry's Sync ID
+// key is validated and duplicate valid paths are rejected (structural
+// corruption). An entry with an UNREPRESENTABLE path is not corruption: it is an
+// unsyncable note the coordinator must observe as UNKNOWN (never absent, which
+// would authorize a tombstone), so the entry is returned as-is for the
+// observation layer to classify.
 export async function loadSyncIndex() {
   const entries = await allOf('syncIndex')
   const index = {}
   const byPath = new Map()
   for (const e of entries) {
-    if (!isSyncID(e.syncId) || !validNotePath(e.path)) {
-      throw new SyncStateError('index-corrupt', 'sync index holds an invalid entry')
+    if (!isSyncID(e.syncId)) {
+      throw new SyncStateError('index-corrupt', 'sync index holds an invalid Sync ID')
     }
-    if (byPath.has(e.path)) {
+    if (byPath.has(e.path) && validNotePath(e.path)) {
       throw new SyncStateError('index-corrupt', `sync index maps two Sync IDs to "${e.path}"`)
     }
     index[e.syncId] = e.path
@@ -231,8 +233,10 @@ export async function removeIndexEntry(syncId) {
 // assignMissingSyncIds assigns a stable UUID v4 to every live note that does
 // not yet mirror one, in ONE transaction over notes + syncIndex. A path that is
 // still indexed (a recreated note, or an Enable re-run) reuses its existing ID;
-// a fresh path gets a new ID. Note and index writes share the transaction, so
-// two racing cycles can never assign two different identities to one note.
+// a fresh path gets a new ID. Notes with an UNREPRESENTABLE path are never
+// indexed (assigning one would poison the index) — they stay unsyncable and the
+// coordinator observes them as UNKNOWN. The transaction's full updated notes
+// snapshot is returned so a cycle enumerates IndexedDB exactly once.
 export async function assignMissingSyncIds() {
   return runTx(['notes', 'syncIndex'], async (t, reqP) => {
     const notesStore = t.objectStore('notes')
@@ -244,28 +248,34 @@ export async function assignMissingSyncIds() {
     const byPath = new Map()
     for (const e of entries) byPath.set(e.path, e.syncId)
     const assigned = []
+    const resultNotes = []
     for (const note of notes) {
-      const mapped = byPath.get(note.path)
-      if (note.syncId) {
-        if (mapped && mapped !== note.syncId) {
-          throw new SyncStateError('index-corrupt', `note "${note.path}" disagrees with its index mapping`)
+      let updated = note
+      if (validNotePath(note.path)) {
+        const mapped = byPath.get(note.path)
+        if (note.syncId) {
+          if (mapped && mapped !== note.syncId) {
+            throw new SyncStateError('index-corrupt', `note "${note.path}" disagrees with its index mapping`)
+          }
+          if (!mapped) {
+            indexStore.put({ syncId: note.syncId, path: note.path })
+            byPath.set(note.path, note.syncId)
+          }
+        } else {
+          let syncId = mapped
+          if (!syncId) {
+            syncId = newUUIDv4()
+            indexStore.put({ syncId, path: note.path })
+            byPath.set(note.path, syncId)
+          }
+          updated = { ...note, syncId }
+          notesStore.put(updated)
+          assigned.push({ syncId, path: note.path })
         }
-        if (!mapped) {
-          indexStore.put({ syncId: note.syncId, path: note.path })
-          byPath.set(note.path, note.syncId)
-        }
-        continue
       }
-      let syncId = mapped
-      if (!syncId) {
-        syncId = newUUIDv4()
-        indexStore.put({ syncId, path: note.path })
-        byPath.set(note.path, syncId)
-      }
-      notesStore.put({ ...note, syncId })
-      assigned.push({ syncId, path: note.path })
+      resultNotes.push(updated)
     }
-    return { assigned }
+    return { assigned, notes: resultNotes }
   })
 }
 
