@@ -119,6 +119,86 @@ async function putNote(rec) {
 
 const runCycle = (remote, opts) => runSyncCycle(remote, { locks: fakeLocks, ...opts })
 
+// ---- conflict-scenario builders (each leaves the ACTING replica current) ----
+
+// A pushes 'A edit'; B holds a divergent 'B edit' (preserve_local_then_pull).
+async function setupBothEdit(remote) {
+  const fa = freshReplica()
+  const fb = freshReplica()
+  await setReplica(fa)
+  await enableReplica(remote)
+  await localApi.createNote({ name: 'shared', content: 'v1\n' })
+  await runCycle(remote)
+  await setReplica(fb)
+  await enableReplica(remote)
+  await runCycle(remote)
+  await localApi.updateNote('shared.md', { content: 'B edit\n' })
+  await setReplica(fa)
+  await localApi.updateNote('shared.md', { content: 'A edit\n' })
+  await runCycle(remote)
+  await setReplica(fb)
+}
+
+// B deletes + syncs the tombstone; A holds a divergent edit
+// (preserve_local_then_delete on A).
+async function setupEditVsTombstone(remote) {
+  const fa = freshReplica()
+  const fb = freshReplica()
+  await setReplica(fa)
+  await enableReplica(remote)
+  await localApi.createNote({ name: 'n', content: 'v1\n' })
+  await runCycle(remote)
+  await setReplica(fb)
+  await enableReplica(remote)
+  await runCycle(remote)
+  const bRec = await localApi.getNote('n.md')
+  await localApi.deleteNote('n.md', bRec.data.revision)
+  await runCycle(remote)
+  await setReplica(fa)
+  await localApi.updateNote('n.md', { content: 'A edit\n' })
+}
+
+// A deletes locally; B edits + syncs (preserve_remote_then_tombstone on A).
+async function setupAbsentVsRemoteEdit(remote) {
+  const fa = freshReplica()
+  const fb = freshReplica()
+  await setReplica(fa)
+  await enableReplica(remote)
+  await localApi.createNote({ name: 'm', content: 'v1\n' })
+  await runCycle(remote)
+  await setReplica(fb)
+  await enableReplica(remote)
+  await runCycle(remote)
+  await setReplica(fa)
+  const aRec = await localApi.getNote('m.md')
+  await localApi.deleteNote('m.md', aRec.data.revision)
+  await setReplica(fb)
+  await localApi.updateNote('m.md', { content: 'B edit\n' })
+  await runCycle(remote)
+  await setReplica(fa)
+}
+
+// Crashes the acting replica's cycle at a fault point, then restarts and asserts
+// the cycle converges with exactly ONE conflict note and the right content.
+async function crashAndConverge(remote, point, originalPath, originalContent, conflictContent, prefix) {
+  const state = await observeAndDecide(remote)
+  await expect(executeDecisions(remote, state.decisions, state.baselines, {
+    index: state.index,
+    fault: async (p) => { if (p === point) throw new Error('crash') },
+  })).rejects.toThrow('crash')
+
+  await runCycle(remote)
+  const notes = (await localApi.listNotes('')).data
+  const conflicts = notes.filter((n) => new RegExp(`^${prefix} \\(conflict [0-9a-f]{12}\\)$`).test(n.name))
+  expect(conflicts).toHaveLength(1)
+  if (originalContent === null) {
+    await expect(localApi.getNote(originalPath)).rejects.toMatchObject({ response: { status: 404 } })
+  } else {
+    expect((await localApi.getNote(originalPath)).data.content).toBe(originalContent)
+  }
+  expect((await localApi.getNote(conflicts[0].path)).data.content).toBe(conflictContent)
+}
+
 describe('serialized cycle lifecycle', () => {
   it('creates a note, pulls it on the other replica, and propagates edits and deletes', async () => {
     const remote = new FakeRemote()
@@ -435,39 +515,85 @@ describe('uncertain writes and restart', () => {
     expect(res.retry).toBe(0)
   })
 
-  it('a conflict-preservation crash restarts and converges without duplicating the conflict note', async () => {
+  it('a lost response on the conflict record create is confirmed by re-read', async () => {
+    const remote = new FakeRemote()
+    await setupBothEdit(remote) // active replica = B, pending preserve_local_then_pull
+    let loseResponse = true
+    const flaky = {
+      profile: () => remote.profile(),
+      read: (k, o) => remote.read(k, o),
+      list: (p, o) => remote.list(p, o),
+      replace: (k, d, e, o) => remote.replace(k, d, e, o),
+      create: async (k, d, o) => {
+        const v = await remote.create(k, d, o)
+        if (loseResponse) {
+          loseResponse = false
+          throw new StoreError('retryable-transport', 'response lost')
+        }
+        return v
+      },
+    }
+    await runCycle(flaky) // the conflict create landed but threw; re-read confirms
+    const notes = (await localApi.listNotes('')).data
+    const conflict = notes.find((n) => /^shared \(conflict [0-9a-f]{12}\)$/.test(n.name))
+    expect(conflict).toBeDefined()
+    expect((await localApi.getNote('shared.md')).data.content).toBe('A edit\n')
+    expect((await localApi.getNote(conflict.path)).data.content).toBe('B edit\n')
+  })
+
+  for (const point of ['conflict:reserved', 'conflict:remote', 'conflict:original']) {
+    it(`preserve_local_then_pull restarts after a crash at ${point}`, async () => {
+      const remote = new FakeRemote()
+      await setupBothEdit(remote)
+      await crashAndConverge(remote, point, 'shared.md', 'A edit\n', 'B edit\n', 'shared')
+    })
+  }
+  for (const point of ['conflict:reserved', 'conflict:remote', 'conflict:original']) {
+    it(`preserve_local_then_delete restarts after a crash at ${point}`, async () => {
+      const remote = new FakeRemote()
+      await setupEditVsTombstone(remote)
+      await crashAndConverge(remote, point, 'n.md', null, 'A edit\n', 'n')
+    })
+  }
+  for (const point of ['conflict:reserved', 'conflict:remote', 'conflict:original']) {
+    it(`preserve_remote_then_tombstone restarts after a crash at ${point}`, async () => {
+      const remote = new FakeRemote()
+      await setupAbsentVsRemoteEdit(remote)
+      await crashAndConverge(remote, point, 'm.md', null, 'B edit\n', 'm')
+    })
+  }
+
+  it('a crash after the recovery copy but before the tombstone delete restarts and converges', async () => {
     const remote = new FakeRemote()
     const fa = freshReplica()
     const fb = freshReplica()
     await setReplica(fa)
     await enableReplica(remote)
-    await localApi.createNote({ name: 'shared', content: 'v1\n' })
+    await localApi.createNote({ name: 'd', content: 'v1\n' })
     await runCycle(remote)
     await setReplica(fb)
     await enableReplica(remote)
     await runCycle(remote)
-    await localApi.updateNote('shared.md', { content: 'B edit\n' })
-    await setReplica(fa)
-    await localApi.updateNote('shared.md', { content: 'A edit\n' })
+    const bRec = await localApi.getNote('d.md')
+    await localApi.deleteNote('d.md', bRec.data.revision)
     await runCycle(remote)
 
-    // B's cycle crashes right after the conflict note is created locally and the
-    // remote conflict record is written, before the original is touched.
-    await setReplica(fb)
+    // A applies the tombstone; the crash lands between the durable recovery
+    // copy and the delete.
+    await setReplica(fa)
     const state = await observeAndDecide(remote)
+    expect(state.decisions.find((d) => d.kind === 'apply_tombstone')).toBeDefined()
     await expect(executeDecisions(remote, state.decisions, state.baselines, {
       index: state.index,
-      fault: async (point) => { if (point === 'conflict:remote') throw new Error('crash') },
+      fault: async (p) => { if (p === 'tombstone:before-delete') throw new Error('crash') },
     })).rejects.toThrow('crash')
-    expect((await localApi.listNotes('')).data.filter((n) => /^shared \(conflict/.test(n.name))).toHaveLength(1)
+    expect((await listRecovery()).length).toBe(1)
+    expect(await localApi.getNote('d.md')).toBeDefined()
 
-    // Restart: the reservation is replay-safe; still exactly one conflict note.
+    // Restart converges: the delete applies, the recovery copy stays.
     await runCycle(remote)
-    const notes = (await localApi.listNotes('')).data
-    const conflicts = notes.filter((n) => /^shared \(conflict/.test(n.name))
-    expect(conflicts).toHaveLength(1)
-    expect((await localApi.getNote('shared.md')).data.content).toBe('A edit\n')
-    expect((await localApi.getNote(conflicts[0].path)).data.content).toBe('B edit\n')
+    await expect(localApi.getNote('d.md')).rejects.toMatchObject({ response: { status: 404 } })
+    expect((await listRecovery()).length).toBe(1)
   })
 
   it('a lost snapshot commit restarts with conservative onboarding and converges', async () => {

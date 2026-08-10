@@ -199,11 +199,12 @@ export async function replaceSnapshot(snapshot) {
 // ---- sync index ----------------------------------------------------------
 
 // loadSyncIndex returns the full Sync ID -> path mapping. Every entry's Sync ID
-// key is validated and duplicate valid paths are rejected (structural
-// corruption). An entry with an UNREPRESENTABLE path is not corruption: it is an
-// unsyncable note the coordinator must observe as UNKNOWN (never absent, which
-// would authorize a tombstone), so the entry is returned as-is for the
-// observation layer to classify.
+// key is validated, every path must be a STRING (a null/object/missing path is
+// structural corruption, not an unsyncable note), and duplicate valid paths are
+// rejected. An entry with a string path that merely fails the sync suitability
+// rules is not corruption: it is an unsyncable note the coordinator must observe
+// as UNKNOWN (never absent, which would authorize a tombstone), so the entry is
+// returned as-is for the observation layer to classify.
 export async function loadSyncIndex() {
   const entries = await allOf('syncIndex')
   const index = {}
@@ -211,6 +212,9 @@ export async function loadSyncIndex() {
   for (const e of entries) {
     if (!isSyncID(e.syncId)) {
       throw new SyncStateError('index-corrupt', 'sync index holds an invalid Sync ID')
+    }
+    if (typeof e.path !== 'string') {
+      throw new SyncStateError('index-corrupt', 'sync index holds a non-string path')
     }
     if (byPath.has(e.path) && validNotePath(e.path)) {
       throw new SyncStateError('index-corrupt', `sync index maps two Sync IDs to "${e.path}"`)

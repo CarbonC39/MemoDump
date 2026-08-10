@@ -256,6 +256,21 @@ describe('sync index and atomic ID assignment', () => {
     await put('syncIndex', { syncId: 'nope', path: 'a.md' })
     await expect(loadSyncIndex()).rejects.toMatchObject({ code: 'index-corrupt' })
   })
+
+  it('rejects a stored index entry with a non-string path as corruption', async () => {
+    await put('syncIndex', { syncId: validUUID(), path: null })
+    await expect(loadSyncIndex()).rejects.toMatchObject({ code: 'index-corrupt' })
+    await put('syncIndex', { syncId: validUUID(), path: { nope: 1 } })
+    await expect(loadSyncIndex()).rejects.toMatchObject({ code: 'index-corrupt' })
+    await put('syncIndex', { syncId: validUUID() })
+    await expect(loadSyncIndex()).rejects.toMatchObject({ code: 'index-corrupt' })
+  })
+
+  it('tolerates a string path that is merely unsyncable (UNKNOWN, not corruption)', async () => {
+    const id = validUUID()
+    await put('syncIndex', { syncId: id, path: '.images/a.md' })
+    expect(await loadSyncIndex()).toEqual({ [id]: '.images/a.md' })
+  })
 })
 
 describe('in-app rename/move preserves the Sync ID and the indexed path', () => {
