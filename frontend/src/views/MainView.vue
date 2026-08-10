@@ -76,6 +76,11 @@
         @new-note="createNewNoteIn(currentFolder)"
       />
 
+      <div v-if="syncChangedNotice" class="sync-changed-notice" role="status">
+        <span>{{ syncChangedNotice }}</span>
+        <button type="button" class="btn btn-sm" @click="dismissSyncNotice">✕</button>
+      </div>
+
       <div class="content-area" :class="{ 'is-editing': editingNote }">
         <!-- Settings page (v-show: editor stays mounted behind) -->
         <SettingsPanel v-show="showSettings" @close="showSettings = false" />
@@ -235,6 +240,8 @@ import { useNoteSearch } from '../composables/useNoteSearch.js'
 import { useNotePersistence } from '../composables/useNotePersistence.js'
 import { useFolderActions } from '../composables/useFolderActions.js'
 import { useWorkspaceNavigation } from '../composables/useWorkspaceNavigation.js'
+import { useSyncPolling } from '../composables/useSyncPolling.js'
+import { refreshSyncSettings } from '../composables/useSyncSettings.js'
 import { preloadMilkdownEditor } from '../components/milkdownLoader.js'
 
 const router = useRouter()
@@ -345,6 +352,31 @@ const {
 })
 updateUrlHandler = updateUrl
 
+// R5.4: lightweight automatic-sync poller. A connected replica's backend can
+// change local Markdown without a frontend request, so while the document is
+// visible we poll the redacted status every 30s, refresh the list when an
+// automatic attempt completes, adopt a clean open note's new revision, close a
+// remotely-deleted note, and never replace a dirty buffer.
+const syncChangedNotice = ref('')
+const syncPolling = useSyncPolling({
+  api: apiClient,
+  editor: noteEditor,
+  isLocalBuild,
+  onAutoSync: loadAll,
+  onNotice: () => {
+    syncChangedNotice.value = t('sync.syncedVersionChanged')
+  },
+  onNoteClosed: () => {
+    syncChangedNotice.value = t('sync.noteDeletedBySync')
+  },
+  onRecoveryChanged: () => {
+    refreshSyncSettings()
+  },
+})
+function dismissSyncNotice() {
+  syncChangedNotice.value = ''
+}
+
 const {
   promptNewFolder,
   promptRenameFolder,
@@ -411,10 +443,12 @@ onMounted(async () => {
   await initialize({
     onReady: () => { isInitializing.value = false },
   })
+  syncPolling.start()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
+  syncPolling.stop()
 })
 
 // ===== FOLDER PICKER FOR META PANEL =====
@@ -448,6 +482,17 @@ provide('dnd', dnd)
   min-width: 0;
 }
 /* ======= CONTENT AREA ======= */
+.sync-changed-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 8px 16px;
+  font-size: 13px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+}
 .content-area {
   flex: 1;
   overflow-y: auto;

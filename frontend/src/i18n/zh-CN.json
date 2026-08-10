@@ -129,7 +129,11 @@
     "syncRecoveryCopies": "可恢复副本",
     "syncRestore": "恢复",
     "syncRestoredOk": "已恢复。",
-    "syncRecoveryError": "无法加载恢复副本"
+    "syncRecoveryError": "无法加载恢复副本",
+    "syncAutoNote": "已连接的副本会在 MemoDump 运行时于启动后及每五分钟自动同步。",
+    "syncRunningLabel": "正在同步…",
+    "syncNextRun": "下次运行",
+    "syncPausedLabel": "自动同步已暂停"
   },
   "media": {
     "imageOff": "图片上传未配置，请先在设置中配置图床。",
@@ -208,5 +212,9 @@
     "fileTypeUnsupported": "仅支持 .md 和 .txt 文件。",
     "importFailed": "导入 \"{name}\" 失败：{msg}"
   },
-  "editorPlaceholder": "输入 / 唤出快捷菜单，或直接开始写作..."
+  "editorPlaceholder": "输入 / 唤出快捷菜单，或直接开始写作...",
+  "sync": {
+    "syncedVersionChanged": "同步版本已变化；请保存或重新加载以协调。",
+    "noteDeletedBySync": "该笔记已被同步删除。"
+  }
 }

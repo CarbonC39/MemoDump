@@ -129,7 +129,11 @@
     "syncRecoveryCopies": "Recoverable copies",
     "syncRestore": "Restore",
     "syncRestoredOk": "Restored.",
-    "syncRecoveryError": "Could not load recovery copies"
+    "syncRecoveryError": "Could not load recovery copies",
+    "syncAutoNote": "A connected replica synchronizes at startup and every five minutes while MemoDump is running.",
+    "syncRunningLabel": "Syncing…",
+    "syncNextRun": "Next run",
+    "syncPausedLabel": "Automatic sync paused"
   },
   "media": {
     "imageOff": "Image upload is not configured — set it up in Settings first.",
@@ -208,5 +212,9 @@
     "fileTypeUnsupported": "Only .md and .txt files are supported.",
     "importFailed": "Failed to import \"{name}\": {msg}"
   },
-  "editorPlaceholder": "Type / to open the quick menu, or just start typing..."
+  "editorPlaceholder": "Type / to open the quick menu, or just start typing...",
+  "sync": {
+    "syncedVersionChanged": "The synced version changed; save or reload to reconcile.",
+    "noteDeletedBySync": "This note was deleted by sync."
+  }
 }

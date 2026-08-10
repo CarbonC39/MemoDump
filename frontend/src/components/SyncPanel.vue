@@ -30,6 +30,18 @@
       <div v-if="state.experimental" class="setting-row">
         <span class="setting-row-label">{{ t('settings.syncExperimental') }}</span>
       </div>
+      <div v-if="state.connected" class="setting-row">
+        <span class="setting-row-label">{{ t('settings.syncAutoNote') }}</span>
+      </div>
+      <div v-if="state.connected && state.syncRunning" class="setting-row">
+        <span class="setting-row-label">{{ t('settings.syncRunningLabel') }}</span>
+      </div>
+      <div v-if="state.connected && state.nextRun" class="setting-row">
+        <span class="setting-row-label">{{ t('settings.syncNextRun') }}: {{ formatTime(state.nextRun) }}</span>
+      </div>
+      <div v-if="state.connected && state.autoPaused" class="setting-row">
+        <span class="setting-row-label sync-warning">{{ t('settings.syncPausedLabel') }}<template v-if="state.pauseReason"> — {{ state.pauseReason }}</template></span>
+      </div>
 
       <div class="sync-actions">
         <button type="button" class="btn btn-sm" :disabled="state.busy || state.enabled" @click="onEnable">

@@ -17,6 +17,13 @@ const state = reactive({
   noE2EE: false,
   lastRun: null,
   lastCompleted: null,
+  lastTrigger: '',
+  autoEnabled: false,
+  autoIntervalSecs: 0,
+  syncRunning: false,
+  nextRun: null,
+  autoPaused: false,
+  pauseReason: '',
   recovery: [],
   recoveryError: '',
   busy: false,
@@ -43,6 +50,13 @@ export async function refreshSyncSettings() {
     state.noE2EE = !!d.noE2EE
     state.lastRun = d.lastRun || null
     state.lastCompleted = d.lastCompleted || null
+    state.lastTrigger = d.lastTrigger || ''
+    state.autoEnabled = !!d.autoEnabled
+    state.autoIntervalSecs = d.autoIntervalSecs || 0
+    state.syncRunning = !!d.syncRunning
+    state.nextRun = d.nextRun || null
+    state.autoPaused = !!d.autoPaused
+    state.pauseReason = d.pauseReason || ''
     // The status carries only the count; fetch the detailed copies always (the
     // endpoint safely returns an empty list when sync was never enabled), and
     // surface a failure instead of faking an empty list — a corrupt index must
