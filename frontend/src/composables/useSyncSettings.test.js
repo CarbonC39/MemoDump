@@ -117,6 +117,19 @@ describe('sync settings', () => {
     expect(s.recoveryCount).toBe(1)
   })
 
+  it('refreshSyncSettings re-fetches recovery details on every call (panel reopen retries)', async () => {
+    // A temporarily-failed recovery fetch must be retried when the panel is
+    // opened again: refreshSyncSettings is not guarded by initialized.
+    await refreshSyncSettings()
+    const first = apiClient.syncRecovery.mock.calls.length
+    apiClient.syncRecovery.mockRejectedValueOnce({ response: { data: { error: 'temporary' } } })
+    await refreshSyncSettings()
+    expect(getSyncSettings().recoveryError).toContain('temporary')
+    await refreshSyncSettings()
+    expect(apiClient.syncRecovery.mock.calls.length).toBeGreaterThan(first + 1)
+    expect(getSyncSettings().recovery).toHaveLength(1)
+  })
+
   it('refreshes the UI after a manual run even when the cycle reports Synced=false', async () => {
     const onSyncChanged = vi.fn()
     setOnSyncChanged(onSyncChanged)

@@ -271,6 +271,9 @@ async function retryPendingImages() {
 async function openImageSettings() {
   showSettings.value = true
   await refreshImageSettings()
+  // Refresh cloud-sync recovery details whenever the panel opens, so a stale or
+  // temporarily-failed recovery fetch is retried on every open (R5.4).
+  refreshSyncSettings()
 }
 
 async function toggleSettings() {

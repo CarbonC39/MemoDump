@@ -1,6 +1,6 @@
 # MemoDump Versioned-Note Sync — Implementation Plan
 
-Status: R0–R4 implemented and reviewed; R5 ready for staged handoff
+Status: R0–R5 implemented and reviewed
 Date: 2026-08-09
 Architecture contract: [`sync-spec-lite.md`](sync-spec-lite.md)
 
@@ -562,28 +562,20 @@ authorize porting the new coordinator to TypeScript.
 
 ## 11. Next handoff to a smaller agent
 
-R0–R4 are complete. Start R5 with R5.1 only:
+R0–R5 are complete and the experimental cloud-sync feature is fully implemented.
+Any next small assignment should come from the R5.5 release-review checklist
+(three-platform manual convergence, conflict/recovery UX, and one successful
+opt-in live S3 test) or one of the explicitly deferred future proposals below.
+The follow-up proposals remain separate: filesystem watchers, delta cursors,
+parallel transfers, tombstone GC, pure frontend synchronization, and removing
+the experimental flag.
 
 ```text
-Read CLAUDE.md, docs/sync-spec-lite.md, the R5 product contract, and R5.1 of
-docs/sync-lite-implementation-plan.md. Implement R5.1 only.
-
-Extract the state-mutating manual-run body into one shared backend attempt
-function. The HTTP endpoint must remain a thin adapter with compatible response
-behavior. Manual and future background callers must share syncOpMu, the same
-replica-lock critical section, connection/provider/repository validation, and
-last-attempt recording. Preserve syncservice.Result as the redacted public
-shape; carry typed retry metadata only in a private backend type. A completed
-cycle with Retry > 0 is internally retryable, Blocked > 0 is not a transport
-retry, and cross-process lock contention reports the stable label "locked".
-
-Do not add a goroutine, timer, startup hook, Wails/CLI lifecycle change,
-frontend polling/UI, settings, or documentation in this task. Do not change the
-note protocol or coordinator decisions. Add narrow tests for the shared attempt
-boundary, redaction, retry metadata, and non-overlap; then run go test ./...,
-go test -race ./..., and go vet ./.... Stop at the R5.1 exit gate and do not
-continue to R5.2.
+Read CLAUDE.md, docs/sync-spec-lite.md, and the R5.5 release checklist. Pick one
+concrete deferred proposal, implement it against the existing R0–R5 stack, run
+go test ./..., go test -race ./..., go vet ./..., and the frontend gates, and
+stop at that proposal's own exit gate.
 ```
 
-Expected review: one shared backend attempt path plus tests, with no scheduling
-or user-visible behavior change.
+Expected review: one focused follow-up on top of the reviewed R0–R5 stack, with
+no regression to the reviewed scheduler or lifecycle behavior.
