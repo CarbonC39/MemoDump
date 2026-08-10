@@ -158,6 +158,76 @@ identity and device state survive container recreation.
 
 Lines starting with `#` and blank lines are ignored. Values are not quote-stripped.
 
+### Cloud sync (experimental)
+
+Cloud sync keeps two or more MemoDump installations' Markdown notes in sync
+through an S3-compatible bucket. It is **experimental and off by default**; the
+settings panel shows a plaintext/no-E2EE warning. It is eventual, not
+real-time, synchronization: a change on device A is uploaded on A's next run
+and downloaded on B's next run, so normal latency is about two intervals.
+
+**Provider configuration.** Set these environment variables on each installation
+(the CLI flags mirror them only for the state root; the provider uses env vars):
+
+| Variable | Meaning |
+|----------|---------|
+| `MEMODUMP_SYNC_ENDPOINT` | S3-compatible endpoint URL (e.g. `https://s3.region.amazonaws.com`). Plain HTTP is allowed only for `localhost`/loopback development. The endpoint must not carry a path. |
+| `MEMODUMP_SYNC_BUCKET` | A **private** bucket (never public-read). |
+| `MEMODUMP_SYNC_PREFIX` | Optional object prefix (e.g. `memo/vault-a`). |
+| `MEMODUMP_SYNC_REGION` | Region (default `us-east-1`). |
+| `MEMODUMP_SYNC_ACCESS_KEY` / `MEMODUMP_SYNC_SECRET_KEY` | Credentials. They are never stored in the vault or sent to the frontend; the secret-free provider profile is a hash of endpoint/bucket/prefix only. |
+| `MEMODUMP_SYNC_FORCE_PATH_STYLE` | `1` for path-style addressing (MinIO, R2, LocalStack). |
+
+All note content is synced **unencrypted** (no E2EE). Use a private bucket and
+restrict its credentials. Prefer HTTPS; plain HTTP is refused except for
+loopback development.
+
+**Behavior.** A connected replica (you clicked **Enable** once) runs automatically
+while MemoDump is open: once after a **10-second startup delay**, then every
+**five minutes**, plus immediately after a successful Enable. `Run now` in the
+settings panel still forces an immediate run. No sync runs while the process is
+closed (a browser tab alone does not keep the CLI server alive — the server
+process must be running). A transient provider failure retries with in-memory
+backoff (`1m, 2m, 5m, 10m, 30m`, reset by success; restart forgets it). An
+auth/permission/quota/mismatch failure **pauses automatic sync** for the rest of
+the process — the status shows the paused reason — while `Run now` still works;
+a successful manual run or Enable clears the pause.
+
+**Cloud sync is not a backup.** Deletes propagate to every device. Provider-side
+versioning/history is external to MemoDump. The durable **recovery copies** the
+app writes before a pulled deletion are local safety aids: inspect and restore
+them from the settings panel.
+
+**State root contents.** The `--sync-root` state directory holds, per replica:
+Device identity and the path→Replica registry, the connection record (provider
+pin + repository ID), one disposable snapshot, and the recovery copies. It
+contains **no WAL, cursor, or durable scheduler queue**, stays **outside the
+vault**, and must persist across container/app recreation (mount a volume).
+
+**Do not combine with another filesystem sync tool.** Do not place the same
+vault under Dropbox/iCloud/OneDrive, git automation, or another file-sync tool
+while MemoDump cloud sync is enabled — the two tools would race on the same
+Markdown files.
+
+**Managing the connection.** The settings panel shows connection state, the last
+(redacted) run, the next scheduled run, and recovery copies. **Disable** stops
+automatic runs and keeps your identity, so re-enabling with the same provider
+reconnects cleanly. **Reset & reconnect** (with confirmation) discards this
+replica's snapshot and connection pin so you can deliberately switch providers
+or recreate a lost repository. A normal run never re-creates a lost repository
+on its own.
+
+**Testing a provider.** The opt-in live S3 test uses a random isolated prefix and
+cleans up after itself; it never prints credentials:
+
+```sh
+MEMODUMP_S3_LIVE_ENDPOINT=https://… \
+MEMODUMP_S3_LIVE_BUCKET=… \
+MEMODUMP_S3_LIVE_ACCESS=… \
+MEMODUMP_S3_LIVE_SECRET=… \
+go test ./internal/syncprovider/s3/ -run TestS3Live -v
+```
+
 ### No-auth mode
 
 If no credentials are configured from any source, the server starts in **no-auth mode** — all API endpoints are accessible without a session cookie.

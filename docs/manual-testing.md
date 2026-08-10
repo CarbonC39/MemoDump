@@ -175,6 +175,44 @@ real) if available.
 14. Confirm no `.tmp` files or `uploads` artifacts remain in the vault
     directory after uploads.
 
+## Cloud sync checklist (R5)
+
+Run against a real or fake S3-compatible provider (MinIO) with two temporary
+data directories, `--sync-root` pointing at a second temporary directory, and
+two browser profiles. Record the application build, provider, date, and result
+for each step on Windows, macOS, and Linux.
+
+1. **Startup and periodic convergence.** Enable sync on replica A, create a
+   note, and wait up to 10 seconds: the note uploads without a browser action.
+   On replica B (already enabled), the note downloads within the next automatic
+   interval. Confirm the settings panel shows the next scheduled run.
+2. **Run-now / automatic single-flight.** Trigger `Run now` while an automatic
+   run is in progress and confirm they serialize (no overlapping cycles, no
+   duplicate conflict notes). Shut the process down mid-cycle and confirm no
+   background sync work remains and the process exits cleanly.
+3. **Concurrent edit and both edit/delete conflicts.** Edit the same note on A
+   and B; edit on A while deleting on B; delete on A while editing on B. Confirm
+   all edited Markdown survives as exactly one conflict note each (never
+   duplicates).
+4. **Pulled deletion, recovery, restore.** Delete a note on A; confirm B applies
+   the deletion and writes a durable recovery copy, and that Restore in the
+   settings panel brings the note back at its original path.
+5. **Remote update while the editor is clean and while it is dirty.** Edit a
+   note on A while B has it open (clean): B's editor adopts the new revision.
+   Repeat with an unsaved edit in B's editor: the buffer is not replaced, a
+   non-blocking "synced version changed" notice appears, and the existing
+   revision CAS prevents overwrite.
+6. **Unicode/case-portable paths and state-root persistence.** Create notes with
+   Unicode names and case-differing names on case-insensitive platforms; confirm
+   both converge. Restart the process (and the container) and confirm identity,
+   the connection pin, and recovery copies survive via the persisted state root.
+7. **Failure behavior.** Revoke the provider credentials (auth failure) and
+   confirm the status shows the redacted reason and automatic sync pauses;
+   restore them and confirm a manual `Run now` succeeds and clears the pause.
+   Disconnect the network mid-run and confirm a transient error is shown and a
+   later automatic run retries. Confirm **Disable** stops future attempts, and
+   **Reset & reconnect** switches to a second repository deliberately.
+
 ## Completion criteria
 
 A release passes this checklist when:
