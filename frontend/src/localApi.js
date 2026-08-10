@@ -281,7 +281,11 @@ const localApi = {
       }
       const newPath = dir ? dir + '/' + filename : filename
       const now = Date.now()
-      return { type: 'put', rec: { ...src, path: newPath, modTime: now, created: now }, deleteOld: false }
+      // A duplicate is a NEW local note: strip the source's syncId so the next
+      // sync cycle assigns it a fresh identity instead of mirroring the source.
+      const rec = { ...src, path: newPath, modTime: now, created: now }
+      delete rec.syncId
+      return { type: 'put', rec, deleteOld: false }
     }).then((outcome) => ({ data: toFull(outcome.rec) }))
   },
 

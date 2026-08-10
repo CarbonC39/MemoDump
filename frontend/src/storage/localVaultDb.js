@@ -11,8 +11,17 @@
 import { serializeTags, parseDocument } from './frontmatter'
 import { sha256Hex } from './sha256'
 
+// Since version 3 the database also carries the note-sync state the R6 browser
+// engine needs, each in its own object store: `syncIndex` (Sync ID -> last
+// known Markdown path), `syncState` (Vault/Replica identity, the strict
+// connection pin, and one disposable schema-v2 snapshot), and the split
+// `recovery` / `recoveryContent` stores (metadata without Markdown so a
+// recovery list never loads document bodies). Live note records optionally
+// mirror their assigned `syncId`; the note and index stores are always updated
+// together (see the write helpers below), never in separate transactions.
+
 const DB_NAME = 'memodump'
-const DB_VERSION = 2
+const DB_VERSION = 3
 
 let dbPromise = null
 
@@ -28,6 +37,10 @@ export function openDB() {
       const db = req.result
       if (!db.objectStoreNames.contains('notes')) db.createObjectStore('notes', { keyPath: 'path' })
       if (!db.objectStoreNames.contains('folders')) db.createObjectStore('folders', { keyPath: 'path' })
+      if (!db.objectStoreNames.contains('syncIndex')) db.createObjectStore('syncIndex', { keyPath: 'syncId' })
+      if (!db.objectStoreNames.contains('syncState')) db.createObjectStore('syncState', { keyPath: 'key' })
+      if (!db.objectStoreNames.contains('recovery')) db.createObjectStore('recovery', { keyPath: 'id' })
+      if (!db.objectStoreNames.contains('recoveryContent')) db.createObjectStore('recoveryContent', { keyPath: 'id' })
     }
     req.onsuccess = () => {
       const db = req.result
@@ -123,12 +136,17 @@ export async function getNoteRec(path) {
  * note update with a stale snapshot. fn(notes, folders) is async and returns:
  *   { type: 'apply', writes } – [{ store: 'notes'|'folders', delete?: path, put?: rec }]
  *   { type: 'error', status, code, message }
+ * A rewritten note record that carries a `syncId` also updates the sync index in
+ * the same transaction, so an in-app rename/move preserves the note's Sync ID
+ * while atomically changing its indexed path. Locally deleted notes keep their
+ * index mapping on purpose: it must survive until the tombstone converges.
  */
 export function atomicFolderWrite(fn) {
   return openDB().then((db) => new Promise((resolve, reject) => {
-    const t = db.transaction(['notes', 'folders'], 'readwrite')
+    const t = db.transaction(['notes', 'folders', 'syncIndex'], 'readwrite')
     const notes = t.objectStore('notes')
     const folders = t.objectStore('folders')
+    const syncIndex = t.objectStore('syncIndex')
     const reqP = (request) => new Promise((res, rej) => {
       request.onsuccess = () => res(request.result)
       request.onerror = () => rej(request.error)
@@ -145,10 +163,41 @@ export function atomicFolderWrite(fn) {
           fail({ response: { status: outcome.status, data: { error: { code: outcome.code, message: outcome.message } } } })
           return
         }
+        // Read the sync index ONCE, not once per synced note: a folder move over
+        // F notes must not become O(F x S) IndexedDB reads/clones. The maps are
+        // kept in sync as claims are consumed so a later write in the same batch
+        // sees the updated ownership.
+        const entries = await reqP(syncIndex.getAll())
+        const claimedByPath = new Map()
+        const claimedBySync = new Map()
+        for (const e of entries) {
+          claimedByPath.set(e.path, e.syncId)
+          claimedBySync.set(e.syncId, e.path)
+        }
         for (const w of outcome.writes) {
           const store = w.store === 'folders' ? folders : notes
           if (w.delete) store.delete(w.delete)
-          if (w.put) store.put(w.put)
+          if (w.put) {
+            if (w.store === 'notes' && w.put.syncId) {
+              const syncId = w.put.syncId
+              // Drop this note's own stale claim (its old path) first, then
+              // reject a move into a path still claimed by a DIFFERENT Sync ID:
+              // a tombstone-pending deletion keeps its mapping, and letting two
+              // IDs point at one path is index corruption. The whole transaction
+              // aborts instead of writing it.
+              const oldPath = claimedBySync.get(syncId)
+              if (oldPath) claimedByPath.delete(oldPath)
+              const at = claimedByPath.get(w.put.path)
+              if (at !== undefined && at !== syncId) {
+                fail({ response: { status: 409, data: { error: { code: 'sync_path_conflict', message: `path "${w.put.path}" is already claimed by another synced note` } } } })
+                return
+              }
+              claimedByPath.set(w.put.path, syncId)
+              claimedBySync.set(syncId, w.put.path)
+              syncIndex.put({ syncId, path: w.put.path })
+            }
+            store.put(w.put)
+          }
         }
         t.oncomplete = () => resolve(outcome)
       } catch (e) {
@@ -171,12 +220,17 @@ export function atomicFolderWrite(fn) {
  *   { type: 'noop', rec }    – nothing to write
  *   { type: 'error', status, code, message } – reject with that API error
  * Resolves with the returned outcome once the transaction commits.
+ * When the written record carries a `syncId` its index mapping is upserted to
+ * `rec.path` in the same transaction (in-app rename/move preservation). A local
+ * delete never touches the index: the mapping survives until the sync cycle
+ * knows the deletion converged.
  */
 export function atomicNoteWrite(path, fn) {
   return openDB().then((db) => new Promise((resolve, reject) => {
-    const t = db.transaction(['notes', 'folders'], 'readwrite')
+    const t = db.transaction(['notes', 'folders', 'syncIndex'], 'readwrite')
     const notes = t.objectStore('notes')
     const folders = t.objectStore('folders')
+    const syncIndex = t.objectStore('syncIndex')
     const reqP = (request) => new Promise((res, rej) => {
       request.onsuccess = () => res(request.result)
       request.onerror = () => rej(request.error)
@@ -195,8 +249,23 @@ export function atomicNoteWrite(path, fn) {
           return
         }
         if (outcome.type === 'put') {
+          if (outcome.rec.syncId) {
+            // Reject a move into a path still claimed by a different Sync ID
+            // before writing anything: the whole transaction aborts, so the
+            // note and the index can never diverge onto one path.
+            const entries = await reqP(syncIndex.getAll())
+            for (const e of entries) {
+              if (e.path === outcome.rec.path && e.syncId !== outcome.rec.syncId) {
+                apiError(409, 'sync_path_conflict', `path "${outcome.rec.path}" is already claimed by another synced note`)
+                return
+              }
+            }
+          }
           if (outcome.deleteOld && outcome.rec.path !== path) notes.delete(path)
           notes.put(outcome.rec)
+          if (outcome.rec.syncId) {
+            syncIndex.put({ syncId: outcome.rec.syncId, path: outcome.rec.path })
+          }
         } else if (outcome.type === 'delete') {
           notes.delete(path)
         }

@@ -26,6 +26,21 @@ export function isSyncID(s) {
   return UUID_V4_RE.test(s) || UUID_V5_RE.test(s)
 }
 
+// newUUIDv4 returns a fresh random version-4 UUID for note, Vault, and Replica
+// identity assignment. crypto.randomUUID is available in secure browser
+// contexts and in Node; the getRandomValues fallback covers non-secure test
+// environments.
+export function newUUIDv4() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  return formatUUID(bytes)
+}
+
 // uuidBytes parses a canonical hyphenated UUID string into its 16 bytes.
 function uuidBytes(s) {
   const hex = s.replace(/-/g, '')
