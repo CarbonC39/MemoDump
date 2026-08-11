@@ -99,7 +99,6 @@
             @search="doSearch"
             @dragstart="onNoteDragStart"
             @contextmenu="openContextMenuBtn"
-            @open-note="openNote"
           />
 
         <!-- Editor -->
@@ -126,7 +125,6 @@
           @load-more="loadMoreNotes"
           @dragstart="onNoteDragStart"
           @contextmenu="openContextMenuBtn"
-          @open-note="openNote"
         />
         </div>
       </div>

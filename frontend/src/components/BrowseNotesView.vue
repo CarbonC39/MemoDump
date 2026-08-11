@@ -10,7 +10,6 @@
       :hovered-note-path="hoveredNotePath"
       @dragstart="(...args) => $emit('dragstart', ...args)"
       @contextmenu="(...args) => $emit('contextmenu', ...args)"
-      @open-note="$emit('open-note', $event)"
       @update:hovered-note-path="$emit('update:hovered-note-path', $event)"
     />
     <div v-if="hasMore" class="load-more-row">
@@ -31,7 +30,7 @@ defineProps({
   hasMore: { type: Boolean, default: false },
   loadingMore: { type: Boolean, default: false },
 })
-defineEmits(['dragstart', 'contextmenu', 'open-note', 'update:hovered-note-path', 'load-more'])
+defineEmits(['dragstart', 'contextmenu', 'update:hovered-note-path', 'load-more'])
 
 const { t } = useI18n()
 </script>
