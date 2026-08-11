@@ -1,14 +1,16 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
-	"strconv"
-	"strings"
+
+	"memodump/internal/appstate"
+	"memodump/internal/httpx"
+	"memodump/internal/imagesvc"
+	"memodump/internal/syncsvc"
 )
 
 func verifyServerFrontend(frontend fs.FS) error {
@@ -28,121 +30,56 @@ func verifyServerFrontend(frontend fs.FS) error {
 	return nil
 }
 
-// Package-level config vars — shared by CLI (main_cli.go) and Wails (main_wails.go).
-var (
-	dataDir  string
-	username string
-	password string
-	port     int
-	noAuth   bool
-	cssFile  string
-	syncRoot string // cloud-sync device-state root; "" = OS application data dir
-)
-
-// parseEnvFile reads KEY=VALUE pairs from a .env file. Missing file is silently ignored.
-func parseEnvFile(path string) map[string]string {
-	result := make(map[string]string)
-	f, err := os.Open(path)
-	if err != nil {
-		return result
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		idx := strings.IndexByte(line, '=')
-		if idx < 0 {
-			continue
-		}
-
-		key := strings.TrimSpace(line[:idx])
-		if key == "" {
-			continue
-		}
-
-		val := strings.TrimSpace(line[idx+1:])
-		if len(val) > 0 {
-			if (val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'') {
-				if unquoted, err := strconv.Unquote(val); err == nil {
-					val = unquoted
-				} else if val[0] == '\'' {
-					val = strings.Trim(val, "'")
-				}
-			} else {
-				// Strip an inline comment, but only when the '#' follows
-				// whitespace, so values like passwords or "#fff" survive.
-				for i := 1; i < len(val); i++ {
-					if val[i] == '#' && (val[i-1] == ' ' || val[i-1] == '\t') {
-						val = strings.TrimSpace(val[:i])
-						break
-					}
-				}
-			}
-		}
-		result[key] = val
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "error reading env file %s: %v\n", path, err)
-	}
-	return result
-}
-
 // buildAPIMux registers all API routes on a new ServeMux.
 func buildAPIMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/login", handleLogin)
-	mux.HandleFunc("POST /api/logout", handleLogout)
-	mux.HandleFunc("GET /api/notes", authMiddleware(handleListNotes))
-	mux.HandleFunc("GET /api/notes/{path...}", authMiddleware(handleGetNote))
-	mux.HandleFunc("POST /api/notes", authMiddleware(handleCreateNote))
-	mux.HandleFunc("PUT /api/notes/{path...}", authMiddleware(handleUpdateNote))
-	mux.HandleFunc("DELETE /api/notes/{path...}", authMiddleware(handleDeleteNote))
-	mux.HandleFunc("PUT /api/move/{path...}", authMiddleware(handleMoveNote))
-	mux.HandleFunc("POST /api/duplicate/{path...}", authMiddleware(handleDuplicateNote))
-	mux.HandleFunc("GET /api/folders", authMiddleware(handleListFolders))
-	mux.HandleFunc("POST /api/folders", authMiddleware(handleCreateFolder))
-	mux.HandleFunc("PUT /api/folders/{path...}", authMiddleware(handleRenameFolder))
-	mux.HandleFunc("DELETE /api/folders/{path...}", authMiddleware(handleDeleteFolder))
-	mux.HandleFunc("GET /api/search", authMiddleware(handleSearch))
-	mux.HandleFunc("PUT /api/move/folder/{path...}", authMiddleware(handleMoveFolder))
-	mux.HandleFunc("PUT /api/images/{key}", authMiddleware(handleImagePut))
-	mux.HandleFunc("GET /api/images/{key}", authMiddleware(handleImageGet))
-	mux.HandleFunc("POST /api/images/gc", authMiddleware(handleImageCleanup))
-	mux.HandleFunc("GET /api/config/image", authMiddleware(handleImageConfigGet))
-	mux.HandleFunc("PUT /api/config/image", authMiddleware(handleImageConfigSave))
-	mux.HandleFunc("POST /api/config/image/test", authMiddleware(handleImageConfigTest))
-	mux.HandleFunc("GET /api/ping", authMiddleware(handlePing))
-	mux.HandleFunc("POST /api/upload", authMiddleware(handleUploadNote))
+	mux.HandleFunc("POST /api/login", httpx.HandleLogin)
+	mux.HandleFunc("POST /api/logout", httpx.HandleLogout)
+	mux.HandleFunc("GET /api/notes", httpx.AuthMiddleware(handleListNotes))
+	mux.HandleFunc("GET /api/notes/{path...}", httpx.AuthMiddleware(handleGetNote))
+	mux.HandleFunc("POST /api/notes", httpx.AuthMiddleware(handleCreateNote))
+	mux.HandleFunc("PUT /api/notes/{path...}", httpx.AuthMiddleware(handleUpdateNote))
+	mux.HandleFunc("DELETE /api/notes/{path...}", httpx.AuthMiddleware(handleDeleteNote))
+	mux.HandleFunc("PUT /api/move/{path...}", httpx.AuthMiddleware(handleMoveNote))
+	mux.HandleFunc("POST /api/duplicate/{path...}", httpx.AuthMiddleware(handleDuplicateNote))
+	mux.HandleFunc("GET /api/folders", httpx.AuthMiddleware(handleListFolders))
+	mux.HandleFunc("POST /api/folders", httpx.AuthMiddleware(handleCreateFolder))
+	mux.HandleFunc("PUT /api/folders/{path...}", httpx.AuthMiddleware(handleRenameFolder))
+	mux.HandleFunc("DELETE /api/folders/{path...}", httpx.AuthMiddleware(handleDeleteFolder))
+	mux.HandleFunc("GET /api/search", httpx.AuthMiddleware(handleSearch))
+	mux.HandleFunc("PUT /api/move/folder/{path...}", httpx.AuthMiddleware(handleMoveFolder))
+	mux.HandleFunc("PUT /api/images/{key}", httpx.AuthMiddleware(imagesvc.HandleImagePut))
+	mux.HandleFunc("GET /api/images/{key}", httpx.AuthMiddleware(imagesvc.HandleImageGet))
+	mux.HandleFunc("POST /api/images/gc", httpx.AuthMiddleware(imagesvc.HandleImageCleanup))
+	mux.HandleFunc("GET /api/config/image", httpx.AuthMiddleware(imagesvc.HandleImageConfigGet))
+	mux.HandleFunc("PUT /api/config/image", httpx.AuthMiddleware(imagesvc.HandleImageConfigSave))
+	mux.HandleFunc("POST /api/config/image/test", httpx.AuthMiddleware(imagesvc.HandleImageConfigTest))
+	mux.HandleFunc("GET /api/ping", httpx.AuthMiddleware(handlePing))
+	mux.HandleFunc("POST /api/upload", httpx.AuthMiddleware(handleUploadNote))
 	mux.HandleFunc("GET /api/config", handleConfig)
-	mux.HandleFunc("GET /api/v2/notes", authMiddleware(handleV2ListNotes))
-	mux.HandleFunc("POST /api/v2/notes", authMiddleware(handleV2CreateNote))
-	mux.HandleFunc("GET /api/v2/notes/{path...}", authMiddleware(handleV2GetNote))
-	mux.HandleFunc("PUT /api/v2/notes/{path...}", authMiddleware(handleV2UpdateNote))
-	mux.HandleFunc("DELETE /api/v2/notes/{path...}", authMiddleware(handleV2DeleteNote))
-	mux.HandleFunc("PUT /api/v2/move/{path...}", authMiddleware(handleV2MoveNote))
-	mux.HandleFunc("POST /api/v2/duplicate/{path...}", authMiddleware(handleV2DuplicateNote))
-	mux.HandleFunc("GET /api/v2/folders", authMiddleware(handleV2ListFolders))
-	mux.HandleFunc("GET /api/v2/search", authMiddleware(handleV2Search))
+	mux.HandleFunc("GET /api/v2/notes", httpx.AuthMiddleware(handleV2ListNotes))
+	mux.HandleFunc("POST /api/v2/notes", httpx.AuthMiddleware(handleV2CreateNote))
+	mux.HandleFunc("GET /api/v2/notes/{path...}", httpx.AuthMiddleware(handleV2GetNote))
+	mux.HandleFunc("PUT /api/v2/notes/{path...}", httpx.AuthMiddleware(handleV2UpdateNote))
+	mux.HandleFunc("DELETE /api/v2/notes/{path...}", httpx.AuthMiddleware(handleV2DeleteNote))
+	mux.HandleFunc("PUT /api/v2/move/{path...}", httpx.AuthMiddleware(handleV2MoveNote))
+	mux.HandleFunc("POST /api/v2/duplicate/{path...}", httpx.AuthMiddleware(handleV2DuplicateNote))
+	mux.HandleFunc("GET /api/v2/folders", httpx.AuthMiddleware(handleV2ListFolders))
+	mux.HandleFunc("GET /api/v2/search", httpx.AuthMiddleware(handleV2Search))
 	// Cloud sync is owned by the Wails runtime only (R6.0). The CLI Web server
 	// shares one server vault across all its browser clients, so it exposes no
 	// sync surface: every /api/sync route returns the single stable unavailable
 	// response below instead of leaking engine state or falling through to the
 	// SPA fallback handler.
-	if cloudSyncCapable {
-		mux.HandleFunc("GET /api/sync/status", authMiddleware(handleSyncStatus))
-		mux.HandleFunc("POST /api/sync/enable", authMiddleware(handleSyncEnable))
-		mux.HandleFunc("POST /api/sync/run", authMiddleware(handleSyncRun))
-		mux.HandleFunc("POST /api/sync/disable", authMiddleware(handleSyncDisable))
-		mux.HandleFunc("POST /api/sync/reset", authMiddleware(handleSyncReset))
-		mux.HandleFunc("POST /api/sync/test", authMiddleware(handleSyncTest))
-		mux.HandleFunc("GET /api/sync/recovery", authMiddleware(handleSyncRecoveryList))
-		mux.HandleFunc("POST /api/sync/recovery/restore", authMiddleware(handleSyncRecoveryRestore))
+	if appstate.CloudSyncCapable {
+		mux.HandleFunc("GET /api/sync/status", httpx.AuthMiddleware(syncsvc.HandleSyncStatus))
+		mux.HandleFunc("POST /api/sync/enable", httpx.AuthMiddleware(syncsvc.HandleSyncEnable))
+		mux.HandleFunc("POST /api/sync/run", httpx.AuthMiddleware(syncsvc.HandleSyncRun))
+		mux.HandleFunc("POST /api/sync/disable", httpx.AuthMiddleware(syncsvc.HandleSyncDisable))
+		mux.HandleFunc("POST /api/sync/reset", httpx.AuthMiddleware(syncsvc.HandleSyncReset))
+		mux.HandleFunc("POST /api/sync/test", httpx.AuthMiddleware(syncsvc.HandleSyncTest))
+		mux.HandleFunc("GET /api/sync/recovery", httpx.AuthMiddleware(syncsvc.HandleSyncRecoveryList))
+		mux.HandleFunc("POST /api/sync/recovery/restore", httpx.AuthMiddleware(syncsvc.HandleSyncRecoveryRestore))
 	} else {
 		mux.HandleFunc("/api/sync", syncUnavailable)
 		mux.HandleFunc("/api/sync/", syncUnavailable)
@@ -156,7 +93,7 @@ func buildAPIMux() *http.ServeMux {
 // authMiddleware: availability is a property of the runtime, not of the
 // caller, so the answer is identical for every request.
 func syncUnavailable(w http.ResponseWriter, r *http.Request) {
-	writeErr(w, http.StatusNotFound, "cloud sync is not available on this runtime")
+	httpx.WriteErr(w, http.StatusNotFound, "cloud sync is not available on this runtime")
 }
 
 // handleCustomCSS serves the user-supplied stylesheet (via --css flag).
@@ -166,10 +103,10 @@ func syncUnavailable(w http.ResponseWriter, r *http.Request) {
 func handleCustomCSS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	if cssFile == "" {
+	if appstate.CSSFile == "" {
 		return
 	}
-	data, err := os.ReadFile(cssFile)
+	data, err := os.ReadFile(appstate.CSSFile)
 	if err != nil {
 		return
 	}

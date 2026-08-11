@@ -1,4 +1,4 @@
-package main
+package syncsvc
 
 import (
 	"encoding/json"
@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"memodump/internal/appstate"
+	"memodump/internal/httpx"
 	"memodump/internal/syncindex"
 	"memodump/internal/syncservice"
 	"memodump/internal/syncstate"
@@ -18,14 +20,14 @@ import (
 // redacted run result without importing the service package.
 type syncserviceResult = syncservice.Result
 
-// handleSyncStatus reports the current sync state. "enabled" and "connected"
+// HandleSyncStatus reports the current sync state. "enabled" and "connected"
 // both reflect the persistent connection record, so a disabled vault is never
 // shown as enabled. A corrupt or unreadable connection record is surfaced as
 // connectionError rather than silently reported "disabled". The last (redacted)
 // run and its completion time are omitted until a run has happened, and only
 // the recovery copy COUNT is returned — detailed content is served by the
 // recovery endpoint.
-func handleSyncStatus(w http.ResponseWriter, r *http.Request) {
+func HandleSyncStatus(w http.ResponseWriter, r *http.Request) {
 	rec, cerr := syncReadConnected()
 	connected := rec != nil && rec.Connected
 	nextRun, paused, pauseRsn := syncSchedulerStatusSnapshot()
@@ -57,7 +59,7 @@ func handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 			resp["recoveryCount"] = n
 		}
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 // formatNextRun renders a scheduled run time as an RFC3339 UTC string, or nil
@@ -78,7 +80,7 @@ func lastRunSnapshot() (syncserviceResult, time.Time, string) {
 	return syncLastRun.Result, syncLastRun.Completed, syncLastRun.Trigger
 }
 
-// handleSyncEnable enables sync for the vault through the EXPLICIT setup flow.
+// HandleSyncEnable enables sync for the vault through the EXPLICIT setup flow.
 // The empty index identity (a fresh Vault ID, no note mappings) is created
 // outside the replica lock — it never scans or assigns Sync IDs — so two
 // first-time enables cannot race each other into mutating an existing index
@@ -89,18 +91,18 @@ func lastRunSnapshot() (syncserviceResult, time.Time, string) {
 // repository — the only place repo.json is ever created — and records the
 // connection with the verified provider profile and pinned repository ID. It
 // never modifies existing Markdown.
-func handleSyncEnable(w http.ResponseWriter, r *http.Request) {
+func HandleSyncEnable(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
-	if _, cerr := syncindex.CreateNoteStore(dataDir, uuid.NewString()); cerr != nil && !errors.Is(cerr, syncindex.ErrAlreadyEnabled) {
-		writeErr(w, http.StatusBadRequest, cerr.Error())
+	if _, cerr := syncindex.CreateNoteStore(appstate.DataDir, uuid.NewString()); cerr != nil && !errors.Is(cerr, syncindex.ErrAlreadyEnabled) {
+		httpx.WriteErr(w, http.StatusBadRequest, cerr.Error())
 		return
 	}
 	var vaultID, replicaID, repoID string
 	err := withSyncLifecycleLock(func(v, rep, stateRoot string, lock *syncstate.Lock) error {
 		vaultID, replicaID = v, rep
 		// Scan and assign stable Sync IDs to every note under the replica lock.
-		if _, err := syncindex.EnableNoteStore(dataDir); err != nil {
+		if _, err := syncindex.EnableNoteStore(appstate.DataDir); err != nil {
 			return err
 		}
 		prev, err := syncReadConnected()
@@ -122,33 +124,33 @@ func handleSyncEnable(w http.ResponseWriter, r *http.Request) {
 		return syncWriteConnected(&syncConnectionRecord{Connected: true, Profile: profile, RepoID: repoID})
 	})
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	// A successful Enable requests one immediate asynchronous run.
-	wakeSyncScheduler()
-	writeJSON(w, http.StatusOK, map[string]any{
+	WakeSyncScheduler()
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"enabled": true, "vaultId": vaultID, "replicaId": replicaID, "repoId": repoID,
 		"experimental": true, "noE2EE": true,
 	})
 }
 
-// handleSyncRun is the thin manual HTTP adapter over the shared attempt
+// HandleSyncRun is the thin manual HTTP adapter over the shared attempt
 // boundary: runSyncAttempt does the process-mutex + replica-lock critical
 // section, connection/provider/repository validation, cycle, redacted
 // classification, and last-attempt recording. A disabled connection is the one
 // refusal surfaced as a 400.
-func handleSyncRun(w http.ResponseWriter, r *http.Request) {
+func HandleSyncRun(w http.ResponseWriter, r *http.Request) {
 	att := runSyncAttempt(r.Context(), triggerManual)
 	if att.disabled {
-		writeErr(w, http.StatusBadRequest, errSyncDisabled.Error())
+		httpx.WriteErr(w, http.StatusBadRequest, errSyncDisabled.Error())
 		return
 	}
 	if att.Result != nil && att.Result.Synced {
 		// A successful manual run clears a permanent scheduler pause.
-		clearSyncSchedulerPause()
+		ClearSyncSchedulerPause()
 	}
-	writeJSON(w, http.StatusOK, att.Result)
+	httpx.WriteJSON(w, http.StatusOK, att.Result)
 }
 
 // recordLastRunError records a failed outcome in syncLastRun so the status
@@ -170,7 +172,7 @@ func clearLastRun() {
 	syncLastRunMu.Unlock()
 }
 
-// handleSyncDisable disconnects sync for the replica: it flips only the
+// HandleSyncDisable disconnects sync for the replica: it flips only the
 // Connected flag in the connection record, under the replica OS lock so it
 // never interleaves with a cycle in another process. The verified provider
 // profile and pinned repository ID are preserved, so re-enabling with the same
@@ -178,7 +180,7 @@ func clearLastRun() {
 // It never deletes local notes, remote records, the identity index, the
 // snapshot, or recovery copies. Switching repositories is the explicit reset
 // flow.
-func handleSyncDisable(w http.ResponseWriter, r *http.Request) {
+func HandleSyncDisable(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
 	err := withSyncLifecycleLock(func(v, rep, stateRoot string, lock *syncstate.Lock) error {
@@ -195,23 +197,23 @@ func handleSyncDisable(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, syncindex.ErrNotEnabled) {
 			clearLastRun()
-			writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "disconnected": true})
+			httpx.WriteJSON(w, http.StatusOK, map[string]any{"enabled": false, "disconnected": true})
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	clearLastRun()
-	resetSyncScheduler()
-	writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "disconnected": true})
+	ResetSyncScheduler()
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"enabled": false, "disconnected": true})
 }
 
-// handleSyncReset is the explicit reconnect/reset flow, serialized with any
+// HandleSyncReset is the explicit reconnect/reset flow, serialized with any
 // running cycle by the replica OS lock: it discards the replica's disposable
 // snapshot and clears the connection record (identity pin), so the next enable
 // starts a fresh setup. This is the ONLY deliberate way to switch repositories
 // or recreate a lost one. Local notes and recovery copies are preserved.
-func handleSyncReset(w http.ResponseWriter, r *http.Request) {
+func HandleSyncReset(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
 	err := withSyncLifecycleLock(func(v, rep, stateRoot string, lock *syncstate.Lock) error {
@@ -220,51 +222,51 @@ func handleSyncReset(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, syncindex.ErrNotEnabled) {
 			clearLastRun()
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reset": true})
+			httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "reset": true})
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	clearLastRun()
-	resetSyncScheduler()
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reset": true})
+	ResetSyncScheduler()
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "reset": true})
 }
 
-// handleSyncTest probes the configured provider's capabilities.
-func handleSyncTest(w http.ResponseWriter, r *http.Request) {
+// HandleSyncTest probes the configured provider's capabilities.
+func HandleSyncTest(w http.ResponseWriter, r *http.Request) {
 	remote, err := syncProvider()
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	caps, err := remote.Test(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "conditionalWrites": caps.ConditionalWrites, "pagedListing": caps.PagedListing,
 	})
 }
 
-// handleSyncRecoveryList returns every recoverable-delete copy, including the
+// HandleSyncRecoveryList returns every recoverable-delete copy, including the
 // original note path recorded when the copy was made. A vault that has not
 // enabled sync returns an empty list; real I/O and state errors are reported.
-func handleSyncRecoveryList(w http.ResponseWriter, r *http.Request) {
+func HandleSyncRecoveryList(w http.ResponseWriter, r *http.Request) {
 	recs, err := listRecovery()
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"recovery": recs})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"recovery": recs})
 }
 
-// handleSyncRecoveryRestore writes a recovered copy back to the vault. The
+// HandleSyncRecoveryRestore writes a recovered copy back to the vault. The
 // restore target is the original path recorded with the copy (safe-guarded
 // against traversal), so it works even after the index mapping was cleaned up.
 // It is serialized with the other lifecycle operations.
-func handleSyncRecoveryRestore(w http.ResponseWriter, r *http.Request) {
+func HandleSyncRecoveryRestore(w http.ResponseWriter, r *http.Request) {
 	syncOpMu.Lock()
 	defer syncOpMu.Unlock()
 	var body struct {
@@ -272,46 +274,46 @@ func handleSyncRecoveryRestore(w http.ResponseWriter, r *http.Request) {
 		StateHash string `json:"stateHash"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+		httpx.WriteErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	store, err := recoveryStore()
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	markdown, path, ok, err := store.Read(body.SyncID, body.StateHash)
 	if err != nil || !ok {
-		writeErr(w, http.StatusNotFound, "no such recovery copy")
+		httpx.WriteErr(w, http.StatusNotFound, "no such recovery copy")
 		return
 	}
 	if path == "" {
 		// A copy predating path recording falls back to the indexed mapping.
-		idx, lerr := syncindex.LoadNoteStore(dataDir)
+		idx, lerr := syncindex.LoadNoteStore(appstate.DataDir)
 		if lerr != nil {
-			writeErr(w, http.StatusInternalServerError, lerr.Error())
+			httpx.WriteErr(w, http.StatusInternalServerError, lerr.Error())
 			return
 		}
 		path, ok = idx.PathByID(body.SyncID)
 		if !ok {
-			writeErr(w, http.StatusNotFound, "no indexed path for the recovery copy")
+			httpx.WriteErr(w, http.StatusNotFound, "no indexed path for the recovery copy")
 			return
 		}
 	}
-	if _, err := vaultfs.SafePath(dataDir, path); err != nil {
-		writeErr(w, http.StatusBadRequest, "unsafe recovery path")
+	if _, err := vaultfs.SafePath(appstate.DataDir, path); err != nil {
+		httpx.WriteErr(w, http.StatusBadRequest, "unsafe recovery path")
 		return
 	}
-	repo, err := vaultfs.New(dataDir)
+	repo, err := vaultfs.New(appstate.DataDir)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if _, err := repo.Apply(path, markdown, ""); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		httpx.WriteErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": path})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "path": path})
 }
 
 // listRecovery returns the recovery copies as JSON-friendly records, including

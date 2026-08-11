@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"memodump/internal/appstate"
 	"memodump/internal/vaultfs"
 )
 
@@ -58,20 +59,20 @@ func TestV2AscendingCursorPagination(t *testing.T) {
 }
 
 func TestSearchExcludesSyncMetadataDir(t *testing.T) {
-	oldDataDir := dataDir
-	dataDir = t.TempDir()
-	t.Cleanup(func() { dataDir = oldDataDir })
-	initRepo()
+	oldDataDir := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	t.Cleanup(func() { appstate.DataDir = oldDataDir })
+	appstate.InitRepo()
 
 	// A stray .md inside .memodump must never be searchable, even though a real
 	// note elsewhere with the same content is.
-	if err := os.MkdirAll(filepath.Join(dataDir, ".memodump"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(appstate.DataDir, ".memodump"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dataDir, ".memodump", "stray.md"), []byte("needle"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(appstate.DataDir, ".memodump", "stray.md"), []byte("needle"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dataDir, "visible.md"), []byte("needle"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(appstate.DataDir, "visible.md"), []byte("needle"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -103,13 +104,13 @@ func TestSearchExcludesSyncMetadataDir(t *testing.T) {
 }
 
 func TestApiCannotTouchSyncMetadataDir(t *testing.T) {
-	oldDataDir := dataDir
-	dataDir = t.TempDir()
-	t.Cleanup(func() { dataDir = oldDataDir })
-	initRepo()
+	oldDataDir := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	t.Cleanup(func() { appstate.DataDir = oldDataDir })
+	appstate.InitRepo()
 
 	// Simulate a vault that has enabled sync.
-	index := filepath.Join(dataDir, ".memodump", "sync-index.json")
+	index := filepath.Join(appstate.DataDir, ".memodump", "sync-index.json")
 	if err := os.MkdirAll(filepath.Dir(index), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -224,15 +225,15 @@ func TestFrontMatterTagsRoundTrip(t *testing.T) {
 }
 
 func TestUpdateNoteRenameDoesNotOverwrite(t *testing.T) {
-	oldDataDir := dataDir
-	dataDir = t.TempDir()
-	t.Cleanup(func() { dataDir = oldDataDir })
-	initRepo()
+	oldDataDir := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	t.Cleanup(func() { appstate.DataDir = oldDataDir })
+	appstate.InitRepo()
 
-	if err := os.WriteFile(filepath.Join(dataDir, "source.md"), []byte("source"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(appstate.DataDir, "source.md"), []byte("source"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dataDir, "target.md"), []byte("target"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(appstate.DataDir, "target.md"), []byte("target"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -246,14 +247,14 @@ func TestUpdateNoteRenameDoesNotOverwrite(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
 	}
-	target, err := os.ReadFile(filepath.Join(dataDir, "target.md"))
+	target, err := os.ReadFile(filepath.Join(appstate.DataDir, "target.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(target) != "target" {
 		t.Fatalf("target content = %q, want target", target)
 	}
-	source, err := os.ReadFile(filepath.Join(dataDir, "source.md"))
+	source, err := os.ReadFile(filepath.Join(appstate.DataDir, "source.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,18 +264,18 @@ func TestUpdateNoteRenameDoesNotOverwrite(t *testing.T) {
 }
 
 func TestV2ListingsAreDirectAndPaginated(t *testing.T) {
-	oldDataDir := dataDir
-	dataDir = t.TempDir()
-	t.Cleanup(func() { dataDir = oldDataDir })
-	initRepo()
+	oldDataDir := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	t.Cleanup(func() { appstate.DataDir = oldDataDir })
+	appstate.InitRepo()
 
 	for _, dir := range []string{"a", "a/deep", "b"} {
-		if err := os.MkdirAll(filepath.Join(dataDir, dir), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(appstate.DataDir, dir), 0755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, path := range []string{"a/one.md", "a/two.md", "a/deep/hidden.md"} {
-		if err := os.WriteFile(filepath.Join(dataDir, path), []byte(path), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(appstate.DataDir, path), []byte(path), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -321,10 +322,10 @@ func TestV2ListingsAreDirectAndPaginated(t *testing.T) {
 
 func apiNoteRepo(t *testing.T) {
 	t.Helper()
-	oldDataDir := dataDir
-	dataDir = t.TempDir()
-	t.Cleanup(func() { dataDir = oldDataDir })
-	initRepo()
+	oldDataDir := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	t.Cleanup(func() { appstate.DataDir = oldDataDir })
+	appstate.InitRepo()
 }
 
 func createNoteViaAPI(t *testing.T, name, content string) vaultfs.Note {
@@ -370,7 +371,7 @@ func updateNoteViaAPI(t *testing.T, path, body string) *httptest.ResponseRecorde
 
 func currentRevision(t *testing.T, path string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dataDir, path))
+	data, err := os.ReadFile(filepath.Join(appstate.DataDir, path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +439,7 @@ func TestExternalModificationDetectedBetweenReadAndUpdate(t *testing.T) {
 	base := currentRevision(t, "a.md")
 
 	// An external editor rewrites the file behind the server's back.
-	if err := os.WriteFile(filepath.Join(dataDir, "a.md"), []byte("external"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(appstate.DataDir, "a.md"), []byte("external"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -469,7 +470,7 @@ func TestLegacyDeleteStaleRevisionConflicts(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("stale delete status = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, "a.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(appstate.DataDir, "a.md")); err != nil {
 		t.Fatal("note was deleted despite a stale base revision")
 	}
 
@@ -480,7 +481,7 @@ func TestLegacyDeleteStaleRevisionConflicts(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("fresh delete status = %d; body=%s", rec.Code, rec.Body.String())
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, "a.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(appstate.DataDir, "a.md")); !os.IsNotExist(err) {
 		t.Fatal("note still exists after delete")
 	}
 }

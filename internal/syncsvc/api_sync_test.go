@@ -1,4 +1,4 @@
-package main
+package syncsvc
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"memodump/internal/appstate"
 	"memodump/internal/cloudsync"
 	"memodump/internal/syncindex"
 	"memodump/internal/syncservice"
@@ -22,18 +23,18 @@ import (
 // and restores them at cleanup. A nil provider selects a fresh memory store.
 func setSyncEnv(t *testing.T, dir, stateRoot string, provider syncservice.Provider) {
 	t.Helper()
-	oldDataDir, oldSyncRoot, oldProvider := dataDir, syncRoot, syncProvider
+	oldDataDir, oldSyncRoot, oldProvider := appstate.DataDir, appstate.SyncRoot, syncProvider
 	if provider == nil {
 		store := cloudsync.NewMemoryStore()
 		provider = func() (cloudsync.RemoteStore, error) { return store, nil }
 	}
-	dataDir, syncRoot, syncProvider = dir, stateRoot, provider
+	appstate.DataDir, appstate.SyncRoot, syncProvider = dir, stateRoot, provider
 	syncLastRunMu.Lock()
 	syncLastRun.Result = syncservice.Result{}
 	syncLastRun.Completed = time.Time{}
 	syncLastRun.Trigger = ""
 	syncLastRunMu.Unlock()
-	t.Cleanup(func() { dataDir, syncRoot, syncProvider = oldDataDir, oldSyncRoot, oldProvider })
+	t.Cleanup(func() { appstate.DataDir, appstate.SyncRoot, syncProvider = oldDataDir, oldSyncRoot, oldProvider })
 }
 
 func doJSON(t *testing.T, method, path string, body any) *httptest.ResponseRecorder {
@@ -52,14 +53,14 @@ func doJSON(t *testing.T, method, path string, body any) *httptest.ResponseRecor
 	}
 	rec := httptest.NewRecorder()
 	dispatch := map[string]http.HandlerFunc{
-		"GET /api/sync/status":            handleSyncStatus,
-		"POST /api/sync/enable":           handleSyncEnable,
-		"POST /api/sync/run":              handleSyncRun,
-		"POST /api/sync/disable":          handleSyncDisable,
-		"POST /api/sync/reset":            handleSyncReset,
-		"POST /api/sync/test":             handleSyncTest,
-		"GET /api/sync/recovery":          handleSyncRecoveryList,
-		"POST /api/sync/recovery/restore": handleSyncRecoveryRestore,
+		"GET /api/sync/status":            HandleSyncStatus,
+		"POST /api/sync/enable":           HandleSyncEnable,
+		"POST /api/sync/run":              HandleSyncRun,
+		"POST /api/sync/disable":          HandleSyncDisable,
+		"POST /api/sync/reset":            HandleSyncReset,
+		"POST /api/sync/test":             HandleSyncTest,
+		"GET /api/sync/recovery":          HandleSyncRecoveryList,
+		"POST /api/sync/recovery/restore": HandleSyncRecoveryRestore,
 	}
 	dispatch[method+" "+path](rec, req)
 	return rec
@@ -103,7 +104,7 @@ func TestSyncApiRecoveryListReportsRealErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	handleSyncRecoveryList(rec, httptest.NewRequest(http.MethodGet, "/api/sync/recovery", nil))
+	HandleSyncRecoveryList(rec, httptest.NewRequest(http.MethodGet, "/api/sync/recovery", nil))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("corrupt recovery list status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -124,7 +125,7 @@ func TestSyncApiRecoveryListReportsCorruptIndex(t *testing.T) {
 		}
 	}
 	rec := httptest.NewRecorder()
-	handleSyncRecoveryList(rec, httptest.NewRequest(http.MethodGet, "/api/sync/recovery", nil))
+	HandleSyncRecoveryList(rec, httptest.NewRequest(http.MethodGet, "/api/sync/recovery", nil))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("corrupt index recovery list status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -463,9 +464,9 @@ func TestSyncApiTwoReplicasConverge(t *testing.T) {
 	}
 
 	// Replica B: a different vault, same state root + shared remote; run pulls.
-	oldDataDir, oldSyncRoot, oldProvider := dataDir, syncRoot, syncProvider
-	dataDir, syncRoot = dirB, state
-	t.Cleanup(func() { dataDir, syncRoot, syncProvider = oldDataDir, oldSyncRoot, oldProvider })
+	oldDataDir, oldSyncRoot, oldProvider := appstate.DataDir, appstate.SyncRoot, syncProvider
+	appstate.DataDir, appstate.SyncRoot = dirB, state
+	t.Cleanup(func() { appstate.DataDir, appstate.SyncRoot, syncProvider = oldDataDir, oldSyncRoot, oldProvider })
 	doJSON(t, "POST", "/api/sync/enable", nil)
 	if run := decodeSync[syncRunJSON](t, doJSON(t, "POST", "/api/sync/run", nil)); !run.Synced {
 		t.Fatalf("replica B run = %+v", run)
@@ -525,7 +526,7 @@ func TestSyncApiRecoveryListRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, err := syncstate.NewRecoveryStore(syncRoot, vaultID, replicaID)
+	rec, err := syncstate.NewRecoveryStore(appstate.SyncRoot, vaultID, replicaID)
 	if err != nil {
 		t.Fatal(err)
 	}

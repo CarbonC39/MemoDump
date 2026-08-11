@@ -14,6 +14,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"memodump/internal/appstate"
+	"memodump/internal/httpx"
+	"memodump/internal/imagesvc"
 	"memodump/internal/vaultfs"
 )
 
@@ -24,49 +27,42 @@ const maxBodySize = 10 << 20 // 10 MB
 type Note = vaultfs.Note
 type Folder = vaultfs.Folder
 
-// writeErr writes a legacy-shaped error body: {"error":"message"}.
-func writeErr(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
-}
-
 // handleListNotes lists .md files in a specific directory (default: root)
 func handleListNotes(w http.ResponseWriter, r *http.Request) {
 	folder := r.URL.Query().Get("folder")
-	notes, err := repo.ListNotes(folder)
+	notes, err := appstate.Repo.ListNotes(folder)
 	if err != nil {
 		if errors.Is(err, vaultfs.ErrInvalidPath) {
-			writeErr(w, http.StatusBadRequest, "Path is illegal")
+			httpx.WriteErr(w, http.StatusBadRequest, "Path is illegal")
 			return
 		}
 		// A missing folder lists as empty, preserving historical behavior.
 		notes = []Note{}
 	}
-	writeJSON(w, http.StatusOK, notes)
+	httpx.WriteJSON(w, http.StatusOK, notes)
 }
 
 // handleGetNote reads a single note
 func handleGetNote(w http.ResponseWriter, r *http.Request) {
 	notePath := r.PathValue("path")
 	if notePath == "" {
-		writeErr(w, http.StatusBadRequest, "Path is illegal")
+		httpx.WriteErr(w, http.StatusBadRequest, "Path is illegal")
 		return
 	}
-	note, err := repo.Get(notePath, true)
+	note, err := appstate.Repo.Get(notePath, true)
 	if err != nil {
 		if errors.Is(err, vaultfs.ErrInvalidPath) {
-			writeErr(w, http.StatusBadRequest, "Path is illegal")
+			httpx.WriteErr(w, http.StatusBadRequest, "Path is illegal")
 			return
 		}
 		if errors.Is(err, vaultfs.ErrNotFound) {
-			writeErr(w, http.StatusNotFound, "File not found")
+			httpx.WriteErr(w, http.StatusNotFound, "File not found")
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, "Failed to read note")
+		httpx.WriteErr(w, http.StatusInternalServerError, "Failed to read note")
 		return
 	}
-	writeJSON(w, http.StatusOK, note)
+	httpx.WriteJSON(w, http.StatusOK, note)
 }
 
 // handleCreateNote creates a new note
@@ -79,11 +75,11 @@ func handleCreateNote(w http.ResponseWriter, r *http.Request) {
 		Tags    []string `json:"tags"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "Request format error")
+		httpx.WriteErr(w, http.StatusBadRequest, "Request format error")
 		return
 	}
 
-	note, err := repo.Create(vaultfs.CreateOptions{
+	note, err := appstate.Repo.Create(vaultfs.CreateOptions{
 		Name:    req.Name,
 		Folder:  req.Folder,
 		Content: req.Content,
@@ -91,13 +87,13 @@ func handleCreateNote(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, vaultfs.ErrInvalidPath) || errors.Is(err, vaultfs.ErrFrontMatterNotEditable) {
-			writeErr(w, http.StatusBadRequest, "Path is illegal")
+			httpx.WriteErr(w, http.StatusBadRequest, "Path is illegal")
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, "Failed to save note")
+		httpx.WriteErr(w, http.StatusInternalServerError, "Failed to save note")
 		return
 	}
-	writeJSON(w, http.StatusCreated, note)
+	httpx.WriteJSON(w, http.StatusCreated, note)
 }
 
 // handleUpdateNote updates an existing note. baseRevision is optional: when
@@ -113,7 +109,7 @@ func handleUpdateNote(w http.ResponseWriter, r *http.Request) {
 		BaseRevision string   `json:"baseRevision"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "Request format error")
+		httpx.WriteErr(w, http.StatusBadRequest, "Request format error")
 		return
 	}
 
@@ -126,25 +122,25 @@ func handleUpdateNote(w http.ResponseWriter, r *http.Request) {
 		opts.Tags = &req.Tags
 	}
 
-	note, err := repo.Update(notePath, opts)
+	note, err := appstate.Repo.Update(notePath, opts)
 	if err != nil {
 		switch {
 		case errors.Is(err, vaultfs.ErrInvalidPath):
-			writeErr(w, http.StatusBadRequest, "Path is illegal")
+			httpx.WriteErr(w, http.StatusBadRequest, "Path is illegal")
 		case errors.Is(err, vaultfs.ErrNotFound):
-			writeErr(w, http.StatusNotFound, "File not found")
+			httpx.WriteErr(w, http.StatusNotFound, "File not found")
 		case errors.Is(err, vaultfs.ErrNameConflict):
-			writeErr(w, http.StatusConflict, "A note with that name already exists")
+			httpx.WriteErr(w, http.StatusConflict, "A note with that name already exists")
 		case errors.Is(err, vaultfs.ErrRevisionConflict):
-			writeErr(w, http.StatusConflict, "local_revision_conflict")
+			httpx.WriteErr(w, http.StatusConflict, "local_revision_conflict")
 		case errors.Is(err, vaultfs.ErrFrontMatterNotEditable):
-			writeErr(w, http.StatusBadRequest, "Front matter cannot be edited safely")
+			httpx.WriteErr(w, http.StatusBadRequest, "Front matter cannot be edited safely")
 		default:
-			writeErr(w, http.StatusInternalServerError, "Failed to save note")
+			httpx.WriteErr(w, http.StatusInternalServerError, "Failed to save note")
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, note)
+	httpx.WriteJSON(w, http.StatusOK, note)
 }
 
 // handleDeleteNote deletes a note. baseRevision is optional; when present and
@@ -153,21 +149,21 @@ func handleDeleteNote(w http.ResponseWriter, r *http.Request) {
 	notePath := r.PathValue("path")
 	baseRevision := r.URL.Query().Get("baseRevision")
 
-	err := repo.Delete(notePath, baseRevision)
+	err := appstate.Repo.Delete(notePath, baseRevision)
 	if err != nil {
 		switch {
 		case errors.Is(err, vaultfs.ErrInvalidPath):
-			writeErr(w, http.StatusBadRequest, "Path is illegal")
+			httpx.WriteErr(w, http.StatusBadRequest, "Path is illegal")
 		case errors.Is(err, vaultfs.ErrNotFound):
-			writeErr(w, http.StatusNotFound, "File not found")
+			httpx.WriteErr(w, http.StatusNotFound, "File not found")
 		case errors.Is(err, vaultfs.ErrRevisionConflict):
-			writeErr(w, http.StatusConflict, "local_revision_conflict")
+			httpx.WriteErr(w, http.StatusConflict, "local_revision_conflict")
 		default:
-			writeErr(w, http.StatusInternalServerError, "Failed to delete note")
+			httpx.WriteErr(w, http.StatusInternalServerError, "Failed to delete note")
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleMoveNote moves a note to a different folder
@@ -177,49 +173,49 @@ func handleMoveNote(w http.ResponseWriter, r *http.Request) {
 		Destination string `json:"destination"` // empty string means root
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "Request format error")
+		httpx.WriteErr(w, http.StatusBadRequest, "Request format error")
 		return
 	}
 
-	note, err := repo.Move(notePath, req.Destination)
+	note, err := appstate.Repo.Move(notePath, req.Destination)
 	if err != nil {
 		switch {
 		case errors.Is(err, vaultfs.ErrInvalidPath):
-			writeErr(w, http.StatusBadRequest, "Path is illegal")
+			httpx.WriteErr(w, http.StatusBadRequest, "Path is illegal")
 		case errors.Is(err, vaultfs.ErrNotFound):
-			writeErr(w, http.StatusNotFound, "File not found")
+			httpx.WriteErr(w, http.StatusNotFound, "File not found")
 		case errors.Is(err, vaultfs.ErrNameConflict):
-			writeErr(w, http.StatusConflict, "A note with that name already exists in the destination")
+			httpx.WriteErr(w, http.StatusConflict, "A note with that name already exists in the destination")
 		default:
-			writeErr(w, http.StatusInternalServerError, "Failed to move note")
+			httpx.WriteErr(w, http.StatusInternalServerError, "Failed to move note")
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, note)
+	httpx.WriteJSON(w, http.StatusOK, note)
 }
 
 // handleDuplicateNote creates a copy of a note in the same folder. The raw file
 // bytes are copied verbatim so YAML front matter and tags survive byte-for-byte.
 func handleDuplicateNote(w http.ResponseWriter, r *http.Request) {
 	notePath := r.PathValue("path")
-	note, err := repo.Duplicate(notePath)
+	note, err := appstate.Repo.Duplicate(notePath)
 	if err != nil {
 		switch {
 		case errors.Is(err, vaultfs.ErrInvalidPath):
-			writeErr(w, http.StatusBadRequest, "Path is illegal")
+			httpx.WriteErr(w, http.StatusBadRequest, "Path is illegal")
 		case errors.Is(err, vaultfs.ErrNotFound):
-			writeErr(w, http.StatusNotFound, "File not found")
+			httpx.WriteErr(w, http.StatusNotFound, "File not found")
 		default:
-			writeErr(w, http.StatusInternalServerError, "Failed to save note")
+			httpx.WriteErr(w, http.StatusInternalServerError, "Failed to save note")
 		}
 		return
 	}
-	writeJSON(w, http.StatusCreated, note)
+	httpx.WriteJSON(w, http.StatusCreated, note)
 }
 
 // handleListFolders returns the folder tree
 func handleListFolders(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, repo.FolderTree())
+	httpx.WriteJSON(w, http.StatusOK, appstate.Repo.FolderTree())
 }
 
 // handleCreateFolder creates a new folder
@@ -228,22 +224,22 @@ func handleCreateFolder(w http.ResponseWriter, r *http.Request) {
 		Path string `json:"path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "Request format error")
+		httpx.WriteErr(w, http.StatusBadRequest, "Request format error")
 		return
 	}
 	if vaultfs.ContainsReservedSegment(req.Path) {
-		writeErr(w, http.StatusBadRequest, "Reserved folder name")
+		httpx.WriteErr(w, http.StatusBadRequest, "Reserved folder name")
 		return
 	}
-	if err := repo.CreateFolder(req.Path); err != nil {
+	if err := appstate.Repo.CreateFolder(req.Path); err != nil {
 		if errors.Is(err, vaultfs.ErrInvalidPath) {
-			writeErr(w, http.StatusBadRequest, "Path is illegal")
+			httpx.WriteErr(w, http.StatusBadRequest, "Path is illegal")
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, "Failed to create folder")
+		httpx.WriteErr(w, http.StatusInternalServerError, "Failed to create folder")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok", "path": req.Path})
+	httpx.WriteJSON(w, http.StatusCreated, map[string]string{"status": "ok", "path": req.Path})
 }
 
 // handleRenameFolder renames a folder
@@ -253,41 +249,41 @@ func handleRenameFolder(w http.ResponseWriter, r *http.Request) {
 		NewName string `json:"newName"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "Request format error")
+		httpx.WriteErr(w, http.StatusBadRequest, "Request format error")
 		return
 	}
 
 	newRel := path.Join(path.Dir(folderPath), req.NewName)
 	if vaultfs.ContainsReservedSegment(newRel) {
-		writeErr(w, http.StatusBadRequest, "Reserved folder name")
+		httpx.WriteErr(w, http.StatusBadRequest, "Reserved folder name")
 		return
 	}
-	if err := repo.RenameFolder(folderPath, req.NewName); err != nil {
+	if err := appstate.Repo.RenameFolder(folderPath, req.NewName); err != nil {
 		switch {
 		case errors.Is(err, vaultfs.ErrInvalidPath):
-			writeErr(w, http.StatusBadRequest, "Path is illegal")
+			httpx.WriteErr(w, http.StatusBadRequest, "Path is illegal")
 		case errors.Is(err, vaultfs.ErrNotFound):
-			writeErr(w, http.StatusNotFound, "File not found")
+			httpx.WriteErr(w, http.StatusNotFound, "File not found")
 		default:
-			writeErr(w, http.StatusInternalServerError, "Failed to rename folder")
+			httpx.WriteErr(w, http.StatusInternalServerError, "Failed to rename folder")
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleDeleteFolder deletes a folder and all contents
 func handleDeleteFolder(w http.ResponseWriter, r *http.Request) {
 	folderPath := r.PathValue("path")
-	if err := repo.DeleteFolder(folderPath); err != nil {
+	if err := appstate.Repo.DeleteFolder(folderPath); err != nil {
 		if errors.Is(err, vaultfs.ErrInvalidPath) {
-			writeErr(w, http.StatusBadRequest, "Path is illegal")
+			httpx.WriteErr(w, http.StatusBadRequest, "Path is illegal")
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, "Failed to delete folder")
+		httpx.WriteErr(w, http.StatusInternalServerError, "Failed to delete folder")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleSearch searches notes by content or tag.
@@ -296,7 +292,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	tag := strings.ToLower(r.URL.Query().Get("tag"))
 
 	var results []Note
-	_ = filepath.Walk(dataDir, func(p string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(appstate.DataDir, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -309,11 +305,11 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(info.Name(), ".md") {
 			return nil
 		}
-		rel, relErr := repo.Rel(p)
+		rel, relErr := appstate.Repo.Rel(p)
 		if relErr != nil {
 			return nil
 		}
-		note, readErr := repo.Get(rel, true)
+		note, readErr := appstate.Repo.Get(rel, true)
 		if readErr != nil {
 			return nil
 		}
@@ -343,7 +339,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	if results == nil {
 		results = []Note{}
 	}
-	writeJSON(w, http.StatusOK, results)
+	httpx.WriteJSON(w, http.StatusOK, results)
 }
 
 // handleMoveFolder moves a folder (and all its contents) to a new parent.
@@ -353,41 +349,41 @@ func handleMoveFolder(w http.ResponseWriter, r *http.Request) {
 		Destination string `json:"destination"` // empty = root
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "Request format error")
+		httpx.WriteErr(w, http.StatusBadRequest, "Request format error")
 		return
 	}
 
 	newRel := path.Join(req.Destination, path.Base(folderPath))
 	if vaultfs.ContainsReservedSegment(newRel) {
-		writeErr(w, http.StatusBadRequest, "Reserved folder name")
+		httpx.WriteErr(w, http.StatusBadRequest, "Reserved folder name")
 		return
 	}
-	if err := repo.MoveFolder(folderPath, req.Destination); err != nil {
+	if err := appstate.Repo.MoveFolder(folderPath, req.Destination); err != nil {
 		switch {
 		case errors.Is(err, vaultfs.ErrInvalidPath):
-			writeErr(w, http.StatusBadRequest, "Path is illegal")
+			httpx.WriteErr(w, http.StatusBadRequest, "Path is illegal")
 		case errors.Is(err, vaultfs.ErrNameConflict):
-			writeErr(w, http.StatusConflict, "A folder with that name already exists in the destination")
+			httpx.WriteErr(w, http.StatusConflict, "A folder with that name already exists in the destination")
 		default:
-			writeErr(w, http.StatusInternalServerError, "Failed to move folder")
+			httpx.WriteErr(w, http.StatusInternalServerError, "Failed to move folder")
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handlePing is a lightweight authenticated endpoint used by the frontend
 // keepalive to prevent session expiry during long idle periods.
 func handlePing(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleConfig is unauthenticated and returns server configuration the UI needs
 // before login (e.g. whether auth is required so the Sign Out button can be hidden).
 func handleConfig(w http.ResponseWriter, r *http.Request) {
-	cfg := effectiveImageS3Config()
-	image := imageConfigPublic(cfg)
-	writeJSON(w, http.StatusOK, map[string]any{"noAuth": noAuth, "image": image})
+	cfg := imagesvc.EffectiveImageS3Config()
+	image := imagesvc.ImageConfigPublic(cfg)
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"noAuth": appstate.NoAuth, "image": image})
 }
 
 // handleUploadNote accepts a multipart .md/.txt file upload and saves it as a
@@ -397,7 +393,7 @@ func handleUploadNote(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, uploadLimit+4096)
 	if err := r.ParseMultipartForm(uploadLimit); err != nil {
-		writeErr(w, http.StatusRequestEntityTooLarge, "File too large or invalid request (max 1 MB)")
+		httpx.WriteErr(w, http.StatusRequestEntityTooLarge, "File too large or invalid request (max 1 MB)")
 		return
 	}
 	if r.MultipartForm != nil {
@@ -406,7 +402,7 @@ func handleUploadNote(w http.ResponseWriter, r *http.Request) {
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "No file provided")
+		httpx.WriteErr(w, http.StatusBadRequest, "No file provided")
 		return
 	}
 	defer file.Close()
@@ -418,31 +414,31 @@ func handleUploadNote(w http.ResponseWriter, r *http.Request) {
 
 	ext := strings.ToLower(filepath.Ext(origName))
 	if ext != ".md" && ext != ".txt" {
-		writeErr(w, http.StatusBadRequest, "Only .md and .txt files are accepted")
+		httpx.WriteErr(w, http.StatusBadRequest, "Only .md and .txt files are accepted")
 		return
 	}
 
 	if header.Size > uploadLimit {
-		writeErr(w, http.StatusRequestEntityTooLarge, "File too large (max 1 MB)")
+		httpx.WriteErr(w, http.StatusRequestEntityTooLarge, "File too large (max 1 MB)")
 		return
 	}
 
 	content, err := io.ReadAll(io.LimitReader(file, uploadLimit+1))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "Failed to read file")
+		httpx.WriteErr(w, http.StatusInternalServerError, "Failed to read file")
 		return
 	}
 	if len(content) > uploadLimit {
-		writeErr(w, http.StatusRequestEntityTooLarge, "File too large (max 1 MB)")
+		httpx.WriteErr(w, http.StatusRequestEntityTooLarge, "File too large (max 1 MB)")
 		return
 	}
 
 	if !utf8.Valid(content) {
-		writeErr(w, http.StatusBadRequest, "File must be valid UTF-8 text")
+		httpx.WriteErr(w, http.StatusBadRequest, "File must be valid UTF-8 text")
 		return
 	}
 	if bytes.IndexByte(content, 0) >= 0 {
-		writeErr(w, http.StatusBadRequest, "File contains binary data")
+		httpx.WriteErr(w, http.StatusBadRequest, "File contains binary data")
 		return
 	}
 
@@ -452,20 +448,14 @@ func handleUploadNote(w http.ResponseWriter, r *http.Request) {
 	}
 	folder := r.FormValue("folder")
 
-	note, err := repo.CreateMarkdown(noteName, folder, string(content))
+	note, err := appstate.Repo.CreateMarkdown(noteName, folder, string(content))
 	if err != nil {
 		if errors.Is(err, vaultfs.ErrInvalidPath) {
-			writeErr(w, http.StatusBadRequest, "Invalid folder path")
+			httpx.WriteErr(w, http.StatusBadRequest, "Invalid folder path")
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, "Failed to save file")
+		httpx.WriteErr(w, http.StatusInternalServerError, "Failed to save file")
 		return
 	}
-	writeJSON(w, http.StatusCreated, note)
-}
-
-func writeJSON(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	httpx.WriteJSON(w, http.StatusCreated, note)
 }

@@ -8,6 +8,11 @@ import (
 	"os"
 	"path/filepath"
 
+	"memodump/internal/appstate"
+	"memodump/internal/httpx"
+	"memodump/internal/imagesvc"
+	"memodump/internal/syncsvc"
+
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -48,7 +53,7 @@ func (a *App) startup(ctx context.Context) {
 
 	cfg := loadWailsCfg()
 	if cfg.DataDir == "" {
-		if d := parseEnvFile(".env")["DATA"]; d != "" {
+		if d := appstate.ParseEnvFile(".env")["DATA"]; d != "" {
 			cfg.DataDir = d
 		} else {
 			cwd, _ := os.Getwd()
@@ -57,38 +62,38 @@ func (a *App) startup(ctx context.Context) {
 		saveWailsCfg(cfg)
 	}
 
-	noAuth = true
+	appstate.NoAuth = true
 	abs, err := filepath.Abs(cfg.DataDir)
 	if err != nil {
 		cwd, _ := os.Getwd()
 		abs = filepath.Join(cwd, "data")
 	}
-	dataDir = abs
-	os.MkdirAll(dataDir, 0755)
-	initRepo()
-	sessionFile = filepath.Join(dataDir, ".sessions.json")
+	appstate.DataDir = abs
+	os.MkdirAll(appstate.DataDir, 0755)
+	appstate.InitRepo()
+	httpx.SessionFile = filepath.Join(appstate.DataDir, ".sessions.json")
 	if cfgDir, err := os.UserConfigDir(); err == nil {
-		imageConfigFile = filepath.Join(cfgDir, "memodump", "image-config.json")
+		imagesvc.ConfigFile = filepath.Join(cfgDir, "memodump", "image-config.json")
 	}
-	loadSessions()
-	startSessionCleanup()
-	startImageCleanupLoop()
+	httpx.LoadSessions()
+	httpx.StartSessionCleanup()
+	imagesvc.StartImageCleanupLoop()
 
 	// Automatic cloud sync: a connected replica runs once after a 10s startup
 	// delay and then every five minutes while the app is open. OnShutdown stops
 	// and waits for it.
-	startSyncScheduler(ctx)
+	syncsvc.StartSyncScheduler(ctx)
 }
 
 // shutdown stops the automatic sync scheduler and waits for any in-flight
 // attempt to exit. Wails v2 invokes it with the app context on teardown.
 func (a *App) shutdown(ctx context.Context) {
-	stopSyncScheduler()
+	syncsvc.StopSyncScheduler()
 }
 
 // GetDataDir returns the active data directory path (shown in the sidebar).
 func (a *App) GetDataDir() string {
-	return dataDir
+	return appstate.DataDir
 }
 
 // ChangeDataDir opens a folder picker; on confirmation saves the new path and

@@ -1,4 +1,4 @@
-package main
+package imagesvc
 
 import (
 	"net/http"
@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"memodump/internal/appstate"
 )
 
 // testImageKey builds a valid content-hash key from a hex char repeated 64×.
@@ -24,21 +26,21 @@ func setOldMtime(t *testing.T, path string) {
 }
 
 func TestCollectReferencedImageKeys(t *testing.T) {
-	old := dataDir
-	dataDir = t.TempDir()
-	defer func() { dataDir = old }()
+	old := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	defer func() { appstate.DataDir = old }()
 
 	k1 := testImageKey('a', ".png")
 	k2 := testImageKey('b', ".jpg")
 	k3 := testImageKey('c', ".gif")
 	k4 := testImageKey('d', ".webp")
 
-	mustWrite(t, filepath.Join(dataDir, "note1.md"), "![x](/api/images/"+k1+")")
-	mustWrite(t, filepath.Join(dataDir, "sub", "note2.md"), "img https://cdn.example.com/img/"+k2)
+	mustWrite(t, filepath.Join(appstate.DataDir, "note1.md"), "![x](/api/images/"+k1+")")
+	mustWrite(t, filepath.Join(appstate.DataDir, "sub", "note2.md"), "img https://cdn.example.com/img/"+k2)
 	// Non-note files must never contribute references.
-	mustWrite(t, filepath.Join(dataDir, "draft.txt"), "/api/images/"+k3)
+	mustWrite(t, filepath.Join(appstate.DataDir, "draft.txt"), "/api/images/"+k3)
 	// Dot-prefixed notes are still notes: their references must protect images.
-	mustWrite(t, filepath.Join(dataDir, ".hidden.md"), "/api/images/"+k4)
+	mustWrite(t, filepath.Join(appstate.DataDir, ".hidden.md"), "/api/images/"+k4)
 
 	keys := collectReferencedImageKeys()
 	for _, want := range []string{k1, k2, k4} {
@@ -52,16 +54,16 @@ func TestCollectReferencedImageKeys(t *testing.T) {
 }
 
 func TestCollectReferencedImageKeysSkipsSyncMetadata(t *testing.T) {
-	old := dataDir
-	dataDir = t.TempDir()
-	defer func() { dataDir = old }()
+	old := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	defer func() { appstate.DataDir = old }()
 
 	kStray := testImageKey('f', ".png")
 	kHidden := testImageKey('e', ".png")
 	// A stray .md inside .memodump must never protect an image from GC, while a
 	// hidden note at the vault root still does.
-	mustWrite(t, filepath.Join(dataDir, ".memodump", "stray.md"), "/api/images/"+kStray)
-	mustWrite(t, filepath.Join(dataDir, ".hidden.md"), "/api/images/"+kHidden)
+	mustWrite(t, filepath.Join(appstate.DataDir, ".memodump", "stray.md"), "/api/images/"+kStray)
+	mustWrite(t, filepath.Join(appstate.DataDir, ".hidden.md"), "/api/images/"+kHidden)
 
 	keys := collectReferencedImageKeys()
 	if keys[kStray] {
@@ -73,11 +75,11 @@ func TestCollectReferencedImageKeysSkipsSyncMetadata(t *testing.T) {
 }
 
 func TestGCVaultImages(t *testing.T) {
-	old := dataDir
-	dataDir = t.TempDir()
-	defer func() { dataDir = old }()
+	old := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	defer func() { appstate.DataDir = old }()
 
-	vault := filepath.Join(dataDir, imageVaultDir)
+	vault := filepath.Join(appstate.DataDir, imageVaultDir)
 	mustWrite(t, filepath.Join(vault, "a"+strings.Repeat("a", 63)+".png"), "x")
 	mustWrite(t, filepath.Join(vault, "b"+strings.Repeat("b", 63)+".jpg"), "x")
 	mustWrite(t, filepath.Join(vault, "c"+strings.Repeat("c", 63)+".webp"), "x")
@@ -111,9 +113,9 @@ func TestGCVaultImages(t *testing.T) {
 }
 
 func TestGCVaultImagesMissingVault(t *testing.T) {
-	old := dataDir
-	dataDir = t.TempDir()
-	defer func() { dataDir = old }()
+	old := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	defer func() { appstate.DataDir = old }()
 	removed, _, err := gcVaultImages(map[string]bool{}, time.Hour)
 	if err != nil || removed != 0 {
 		t.Fatalf("expected no-op on missing vault, got removed=%d err=%v", removed, err)
@@ -153,35 +155,35 @@ func TestS3GarbageDecision(t *testing.T) {
 }
 
 func TestImageCleanupEndpointGated(t *testing.T) {
-	oldDataDir, oldFile := dataDir, imageConfigFile
-	dataDir = t.TempDir()
-	imageConfigFile = filepath.Join(dataDir, ".image-config.json")
-	defer func() { dataDir, imageConfigFile = oldDataDir, oldFile }()
+	oldDataDir, oldFile := appstate.DataDir, ConfigFile
+	appstate.DataDir = t.TempDir()
+	ConfigFile = filepath.Join(appstate.DataDir, ".image-config.json")
+	defer func() { appstate.DataDir, ConfigFile = oldDataDir, oldFile }()
 
 	orphan := testImageKey('f', ".jpg")
-	mustWrite(t, filepath.Join(dataDir, imageVaultDir, orphan), "x")
-	setOldMtime(t, filepath.Join(dataDir, imageVaultDir, orphan))
+	mustWrite(t, filepath.Join(appstate.DataDir, imageVaultDir, orphan), "x")
+	setOldMtime(t, filepath.Join(appstate.DataDir, imageVaultDir, orphan))
 
 	// Disabled → 403, file untouched.
 	req := httptest.NewRequest(http.MethodPost, "/api/images/gc", nil)
 	rec := httptest.NewRecorder()
-	handleImageCleanup(rec, req)
+	HandleImageCleanup(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("disabled cleanup: got %d, want 403", rec.Code)
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, imageVaultDir, orphan)); err != nil {
+	if _, err := os.Stat(filepath.Join(appstate.DataDir, imageVaultDir, orphan)); err != nil {
 		t.Fatalf("orphan removed while cleanup disabled: %v", err)
 	}
 
 	// Enabled → 200, orphan removed.
-	mustWrite(t, imageConfigFile, `{"provider":"local","cleanup":{"enabled":true}}`)
+	mustWrite(t, ConfigFile, `{"provider":"local","cleanup":{"enabled":true}}`)
 	req = httptest.NewRequest(http.MethodPost, "/api/images/gc", nil)
 	rec = httptest.NewRecorder()
-	handleImageCleanup(rec, req)
+	HandleImageCleanup(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("enabled cleanup: got %d (%s), want 200", rec.Code, rec.Body.String())
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, imageVaultDir, orphan)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(appstate.DataDir, imageVaultDir, orphan)); !os.IsNotExist(err) {
 		t.Errorf("orphan should have been removed by enabled cleanup")
 	}
 }

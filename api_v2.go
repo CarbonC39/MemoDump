@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	"memodump/internal/appstate"
+	"memodump/internal/httpx"
 	"memodump/internal/vaultfs"
 )
 
@@ -64,7 +66,7 @@ type noteCursorV2 struct {
 }
 
 func writeV2Error(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, map[string]any{
+	httpx.WriteJSON(w, status, map[string]any{
 		"error": map[string]string{"code": code, "message": message},
 	})
 }
@@ -192,7 +194,7 @@ func handleV2ListNotes(w http.ResponseWriter, r *http.Request) {
 		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is reserved")
 		return
 	}
-	dir, err := vaultfs.SafePath(dataDir, parent)
+	dir, err := vaultfs.SafePath(appstate.DataDir, parent)
 	if err != nil {
 		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is invalid")
 		return
@@ -211,13 +213,13 @@ func handleV2ListNotes(w http.ResponseWriter, r *http.Request) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
-		note, readErr := repo.Get(path.Join(parent, entry.Name()), false)
+		note, readErr := appstate.Repo.Get(path.Join(parent, entry.Name()), false)
 		if readErr == nil {
 			notes = append(notes, noteToSummaryV2(*note))
 		}
 	}
 	sortNotesV2(notes, order)
-	writeJSON(w, http.StatusOK, pageNotesV2(notes, cursor, limit, order))
+	httpx.WriteJSON(w, http.StatusOK, pageNotesV2(notes, cursor, limit, order))
 }
 
 func handleV2ListFolders(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +228,7 @@ func handleV2ListFolders(w http.ResponseWriter, r *http.Request) {
 		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is reserved")
 		return
 	}
-	dir, err := vaultfs.SafePath(dataDir, parent)
+	dir, err := vaultfs.SafePath(appstate.DataDir, parent)
 	if err != nil {
 		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is invalid")
 		return
@@ -263,7 +265,7 @@ func handleV2ListFolders(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
-	writeJSON(w, http.StatusOK, folderPageV2{Items: items})
+	httpx.WriteJSON(w, http.StatusOK, folderPageV2{Items: items})
 }
 
 func handleV2Search(w http.ResponseWriter, r *http.Request) {
@@ -274,7 +276,7 @@ func handleV2Search(w http.ResponseWriter, r *http.Request) {
 	query := strings.ToLower(r.URL.Query().Get("q"))
 	tagQuery := strings.ToLower(r.URL.Query().Get("tag"))
 	notes := make([]noteSummaryV2, 0)
-	_ = filepath.Walk(dataDir, func(path string, info os.FileInfo, walkErr error) error {
+	_ = filepath.Walk(appstate.DataDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return nil
 		}
@@ -287,11 +289,11 @@ func handleV2Search(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(info.Name(), ".md") {
 			return nil
 		}
-		rel, relErr := repo.Rel(path)
+		rel, relErr := appstate.Repo.Rel(path)
 		if relErr != nil {
 			return nil
 		}
-		note, readErr := repo.Get(rel, true)
+		note, readErr := appstate.Repo.Get(rel, true)
 		if readErr != nil {
 			return nil
 		}
@@ -314,7 +316,7 @@ func handleV2Search(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	sortNotesV2(notes, order)
-	writeJSON(w, http.StatusOK, pageNotesV2(notes, cursor, limit, order))
+	httpx.WriteJSON(w, http.StatusOK, pageNotesV2(notes, cursor, limit, order))
 }
 
 // --- v2 note mutations (Phase 0 revision contract) -------------------------
@@ -345,11 +347,11 @@ func mapV2NoteErr(w http.ResponseWriter, err error) bool {
 // handleV2GetNote returns a note document including its revision.
 func handleV2GetNote(w http.ResponseWriter, r *http.Request) {
 	notePath := r.PathValue("path")
-	note, err := repo.Get(notePath, true)
+	note, err := appstate.Repo.Get(notePath, true)
 	if mapV2NoteErr(w, err) {
 		return
 	}
-	writeJSON(w, http.StatusOK, noteToDocumentV2(note))
+	httpx.WriteJSON(w, http.StatusOK, noteToDocumentV2(note))
 }
 
 // handleV2CreateNote creates a note and returns its document.
@@ -365,7 +367,7 @@ func handleV2CreateNote(w http.ResponseWriter, r *http.Request) {
 		writeV2Error(w, http.StatusBadRequest, "invalid_request", "request body is invalid")
 		return
 	}
-	note, err := repo.Create(vaultfs.CreateOptions{
+	note, err := appstate.Repo.Create(vaultfs.CreateOptions{
 		Name:    req.Name,
 		Folder:  req.Folder,
 		Content: req.Content,
@@ -374,7 +376,7 @@ func handleV2CreateNote(w http.ResponseWriter, r *http.Request) {
 	if mapV2NoteErr(w, err) {
 		return
 	}
-	writeJSON(w, http.StatusCreated, noteToDocumentV2(note))
+	httpx.WriteJSON(w, http.StatusCreated, noteToDocumentV2(note))
 }
 
 // handleV2UpdateNote updates a note's content/tags (and optionally renames it).
@@ -406,7 +408,7 @@ func handleV2UpdateNote(w http.ResponseWriter, r *http.Request) {
 	if req.Tags != nil {
 		opts.Tags = &req.Tags
 	}
-	note, err := repo.Update(notePath, opts)
+	note, err := appstate.Repo.Update(notePath, opts)
 	if mapV2NoteErr(w, err) {
 		return
 	}
@@ -414,7 +416,7 @@ func handleV2UpdateNote(w http.ResponseWriter, r *http.Request) {
 	if doc.ID != notePath {
 		doc.PreviousID = notePath
 	}
-	writeJSON(w, http.StatusOK, doc)
+	httpx.WriteJSON(w, http.StatusOK, doc)
 }
 
 // handleV2DeleteNote deletes a note. baseRevision is required; a stale base is
@@ -426,10 +428,10 @@ func handleV2DeleteNote(w http.ResponseWriter, r *http.Request) {
 		writeV2Error(w, http.StatusBadRequest, "base_revision_required", "baseRevision is required")
 		return
 	}
-	if err := repo.Delete(notePath, baseRevision); mapV2NoteErr(w, err) {
+	if err := appstate.Repo.Delete(notePath, baseRevision); mapV2NoteErr(w, err) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleV2MoveNote moves a note to a folder ("" = root) and returns its
@@ -443,7 +445,7 @@ func handleV2MoveNote(w http.ResponseWriter, r *http.Request) {
 		writeV2Error(w, http.StatusBadRequest, "invalid_request", "request body is invalid")
 		return
 	}
-	note, err := repo.Move(notePath, req.Destination)
+	note, err := appstate.Repo.Move(notePath, req.Destination)
 	if mapV2NoteErr(w, err) {
 		return
 	}
@@ -451,15 +453,15 @@ func handleV2MoveNote(w http.ResponseWriter, r *http.Request) {
 	if doc.ID != notePath {
 		doc.PreviousID = notePath
 	}
-	writeJSON(w, http.StatusOK, doc)
+	httpx.WriteJSON(w, http.StatusOK, doc)
 }
 
 // handleV2DuplicateNote copies a note to a "(copy)" sibling and returns it.
 func handleV2DuplicateNote(w http.ResponseWriter, r *http.Request) {
 	notePath := r.PathValue("path")
-	note, err := repo.Duplicate(notePath)
+	note, err := appstate.Repo.Duplicate(notePath)
 	if mapV2NoteErr(w, err) {
 		return
 	}
-	writeJSON(w, http.StatusCreated, noteToDocumentV2(note))
+	httpx.WriteJSON(w, http.StatusCreated, noteToDocumentV2(note))
 }

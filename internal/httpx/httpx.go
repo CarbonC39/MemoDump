@@ -1,4 +1,7 @@
-package main
+// Package httpx holds the shared HTTP helpers and the session-based auth for
+// the note/image/sync API. It depends only on appstate for the runtime's
+// no-auth / credential configuration.
+package httpx
 
 import (
 	"crypto/rand"
@@ -8,7 +11,25 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"memodump/internal/appstate"
 )
+
+// WriteErr writes a legacy-shaped error body: {"error":"message"}.
+func WriteErr(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+// WriteJSON writes a JSON response with the given status.
+func WriteJSON(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
+}
+
+// ---- session auth ----
 
 type session struct {
 	token   string
@@ -19,7 +40,7 @@ var (
 	sessions    = make(map[string]*session)
 	sessionMu   sync.RWMutex
 	sessionTTL  = 30 * 24 * time.Hour // 30 days
-	sessionFile string
+	SessionFile string
 )
 
 func generateToken() (string, error) {
@@ -30,12 +51,12 @@ func generateToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// loadSessions reads persisted sessions from disk, discarding already-expired ones.
-func loadSessions() {
-	if sessionFile == "" {
+// LoadSessions reads persisted sessions from disk, discarding expired ones.
+func LoadSessions() {
+	if SessionFile == "" {
 		return
 	}
-	data, err := os.ReadFile(sessionFile)
+	data, err := os.ReadFile(SessionFile)
 	if err != nil {
 		return
 	}
@@ -55,7 +76,7 @@ func loadSessions() {
 
 // saveSessions writes current sessions to disk. Caller must hold sessionMu.
 func saveSessions() {
-	if sessionFile == "" {
+	if SessionFile == "" {
 		return
 	}
 	stored := make(map[string]int64, len(sessions))
@@ -66,11 +87,11 @@ func saveSessions() {
 	if err != nil {
 		return
 	}
-	os.WriteFile(sessionFile, data, 0600)
+	os.WriteFile(SessionFile, data, 0600)
 }
 
-// startSessionCleanup removes expired sessions every hour and saves to disk.
-func startSessionCleanup() {
+// StartSessionCleanup removes expired sessions every hour and saves to disk.
+func StartSessionCleanup() {
 	go func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
@@ -88,7 +109,8 @@ func startSessionCleanup() {
 	}()
 }
 
-func handleLogin(w http.ResponseWriter, r *http.Request) {
+// HandleLogin authenticates and issues a session cookie.
+func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -98,7 +120,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !noAuth && (req.Username != username || req.Password != password) {
+	if !appstate.NoAuth && (req.Username != appstate.Username || req.Password != appstate.Password) {
 		http.Error(w, `{"error":"Username or password error"}`, http.StatusUnauthorized)
 		return
 	}
@@ -126,7 +148,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-func handleLogout(w http.ResponseWriter, r *http.Request) {
+// HandleLogout invalidates the session cookie.
+func HandleLogout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session")
 	if err == nil {
 		sessionMu.Lock()
@@ -147,9 +170,11 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+// AuthMiddleware guards authenticated endpoints. In no-auth mode it passes
+// every request through.
+func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if noAuth {
+		if appstate.NoAuth {
 			next(w, r)
 			return
 		}
@@ -173,7 +198,7 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Extend session on activity
+		// Extend session on activity.
 		sessionMu.Lock()
 		sess.expires = time.Now().Add(sessionTTL)
 		sessionMu.Unlock()

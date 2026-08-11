@@ -1,4 +1,4 @@
-package main
+package imagesvc
 
 import (
 	"context"
@@ -16,13 +16,16 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
+	"memodump/internal/appstate"
+	"memodump/internal/httpx"
 )
 
-// imageConfigFile is where the settings panel persists the S3 config. It is a
+// ConfigFile is where the settings panel persists the S3 config. It is a
 // per-build package var (same seam as sessionFile): CLI web server stores it in
 // the data dir, Wails stores it in the OS user-config dir so cloud-synced data
 // folders never carry long-lived credentials.
-var imageConfigFile string
+var ConfigFile string
 
 // imageCleanupConfig controls the periodic orphan-image cleanup. It defaults to
 // disabled; enabling it is an explicit, warned choice in the settings panel.
@@ -31,7 +34,7 @@ type imageCleanupConfig struct {
 }
 
 // imageS3Config is the server-side S3 image host configuration. The JSON form
-// is what <dataDir>/.image-config.json (or the Wails config file) stores.
+// is what <appstate.DataDir>/.image-config.json (or the Wails config file) stores.
 type imageS3Config struct {
 	Provider       string              `json:"provider"` // "local" or "s3"
 	Endpoint       string              `json:"endpoint,omitempty"`
@@ -58,21 +61,21 @@ func (e *imageTransferError) Unwrap() error { return e.Err }
 
 // CLI flag overrides (bound in main_cli.go). They have the highest priority.
 var (
-	imageS3Endpoint  string
-	imageS3Region    string
-	imageS3Bucket    string
-	imageS3Prefix    string
-	imageS3PublicURL string
-	imageS3AccessKey string
-	imageS3SecretKey string
+	FlagEndpoint  string
+	FlagRegion    string
+	FlagBucket    string
+	FlagPrefix    string
+	FlagPublicURL string
+	FlagAccessKey string
+	FlagSecretKey string
 )
 
 func loadImageConfigFile() (imageS3Config, bool) {
 	var cfg imageS3Config
-	if imageConfigFile == "" {
+	if ConfigFile == "" {
 		return cfg, false
 	}
-	data, err := os.ReadFile(imageConfigFile)
+	data, err := os.ReadFile(ConfigFile)
 	if err != nil {
 		return cfg, false
 	}
@@ -92,17 +95,17 @@ func loadImageConfigFile() (imageS3Config, bool) {
 }
 
 func saveImageConfigFile(cfg imageS3Config) error {
-	if imageConfigFile == "" {
+	if ConfigFile == "" {
 		return fmt.Errorf("image config file is not configured for this build")
 	}
-	if err := os.MkdirAll(filepath.Dir(imageConfigFile), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(ConfigFile), 0755); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(imageConfigFile), "image-config-*.tmp")
+	tmp, err := os.CreateTemp(filepath.Dir(ConfigFile), "image-config-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -117,14 +120,14 @@ func saveImageConfigFile(cfg imageS3Config) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, imageConfigFile)
+	return os.Rename(tmpPath, ConfigFile)
 }
 
 func imageConfigEnv(key string) string {
 	if v := os.Getenv("MEMODUMP_IMAGE_S3_" + key); v != "" {
 		return v
 	}
-	if v := parseEnvFile(".env")["IMAGE_S3_"+key]; v != "" {
+	if v := appstate.ParseEnvFile(".env")["IMAGE_S3_"+key]; v != "" {
 		return v
 	}
 	return ""
@@ -154,10 +157,10 @@ func overlayImageConfigValue(cfg *imageS3Config, key, val string) {
 	}
 }
 
-// effectiveImageS3Config resolves the config per request with precedence
+// EffectiveImageS3Config resolves the config per request with precedence
 // flags → env → .env → data-dir file, so changing the persisted file applies
 // immediately without a restart.
-func effectiveImageS3Config() imageS3Config {
+func EffectiveImageS3Config() imageS3Config {
 	cfg, hasFile := loadImageConfigFile()
 	if !hasFile {
 		cfg.ForcePathStyle = true
@@ -168,13 +171,13 @@ func effectiveImageS3Config() imageS3Config {
 	} {
 		overlayImageConfigValue(&cfg, key, imageConfigEnv(key))
 	}
-	overlayImageConfigValue(&cfg, "ENDPOINT", imageS3Endpoint)
-	overlayImageConfigValue(&cfg, "REGION", imageS3Region)
-	overlayImageConfigValue(&cfg, "BUCKET", imageS3Bucket)
-	overlayImageConfigValue(&cfg, "PREFIX", imageS3Prefix)
-	overlayImageConfigValue(&cfg, "PUBLIC_URL", imageS3PublicURL)
-	overlayImageConfigValue(&cfg, "ACCESS_KEY", imageS3AccessKey)
-	overlayImageConfigValue(&cfg, "SECRET_KEY", imageS3SecretKey)
+	overlayImageConfigValue(&cfg, "ENDPOINT", FlagEndpoint)
+	overlayImageConfigValue(&cfg, "REGION", FlagRegion)
+	overlayImageConfigValue(&cfg, "BUCKET", FlagBucket)
+	overlayImageConfigValue(&cfg, "PREFIX", FlagPrefix)
+	overlayImageConfigValue(&cfg, "PUBLIC_URL", FlagPublicURL)
+	overlayImageConfigValue(&cfg, "ACCESS_KEY", FlagAccessKey)
+	overlayImageConfigValue(&cfg, "SECRET_KEY", FlagSecretKey)
 	// A persisted `provider: local` must not suppress a higher-priority S3
 	// configuration supplied by flags/env/.env.
 	if imageConfigHasHigherOverride() {
@@ -187,8 +190,8 @@ func effectiveImageS3Config() imageS3Config {
 // imageConfigHasHigherOverride reports whether flags/env/.env supply any S3
 // config, in which case the settings panel must be read-only.
 func imageConfigHasHigherOverride() bool {
-	flagSet := imageS3Endpoint != "" || imageS3Region != "" || imageS3Bucket != "" ||
-		imageS3Prefix != "" || imageS3PublicURL != "" || imageS3AccessKey != "" || imageS3SecretKey != ""
+	flagSet := FlagEndpoint != "" || FlagRegion != "" || FlagBucket != "" ||
+		FlagPrefix != "" || FlagPublicURL != "" || FlagAccessKey != "" || FlagSecretKey != ""
 	if flagSet {
 		return true
 	}
@@ -425,7 +428,7 @@ func testImageS3Config(cfg imageS3Config) (warnings []string, err error) {
 	return warnings, nil
 }
 
-func imageConfigPublic(cfg imageS3Config) map[string]any {
+func ImageConfigPublic(cfg imageS3Config) map[string]any {
 	if !s3Active(cfg) {
 		return map[string]any{
 			"provider":   "local",
@@ -451,7 +454,7 @@ func imageConfigPublic(cfg imageS3Config) map[string]any {
 // endpoint. It includes every non-secret field required to edit and save the
 // config after a reload; secretKey remains server-only.
 func imageConfigEditorPublic(cfg imageS3Config) map[string]any {
-	result := imageConfigPublic(cfg)
+	result := ImageConfigPublic(cfg)
 	if s3Active(cfg) {
 		result["endpoint"] = cfg.Endpoint
 		result["region"] = cfg.Region
@@ -461,15 +464,15 @@ func imageConfigEditorPublic(cfg imageS3Config) map[string]any {
 	return result
 }
 
-func handleImageConfigGet(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, imageConfigEditorPublic(effectiveImageS3Config()))
+func HandleImageConfigGet(w http.ResponseWriter, _ *http.Request) {
+	httpx.WriteJSON(w, http.StatusOK, imageConfigEditorPublic(EffectiveImageS3Config()))
 }
 
-// handleImageConfigSave persists the S3 settings from the panel. Secrets are
+// HandleImageConfigSave persists the S3 settings from the panel. Secrets are
 // stored server-side and never returned; an empty secretKey means "unchanged"
 // unless the endpoint/bucket/accessKey identity changed, in which case the
 // secret must be provided again.
-func handleImageConfigSave(w http.ResponseWriter, r *http.Request) {
+func HandleImageConfigSave(w http.ResponseWriter, r *http.Request) {
 	var req imageS3Config
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 		writeImageErrorCode(w, http.StatusBadRequest, "invalid_config", "Request format error")
@@ -511,13 +514,13 @@ func handleImageConfigSave(w http.ResponseWriter, r *http.Request) {
 		writeImageErrorCode(w, http.StatusInternalServerError, "save_failed", "Failed to save image config")
 		return
 	}
-	writeJSON(w, http.StatusOK, imageConfigEditorPublic(effectiveImageS3Config()))
+	httpx.WriteJSON(w, http.StatusOK, imageConfigEditorPublic(EffectiveImageS3Config()))
 }
 
-// handleImageConfigTest runs the server-side probe against the effective config
+// HandleImageConfigTest runs the server-side probe against the effective config
 // (or a candidate config from the request body, merged over the effective one).
-func handleImageConfigTest(w http.ResponseWriter, r *http.Request) {
-	cfg := effectiveImageS3Config()
+func HandleImageConfigTest(w http.ResponseWriter, r *http.Request) {
+	cfg := EffectiveImageS3Config()
 	original := cfg
 	var req imageS3Config
 	if r.ContentLength != 0 {
@@ -548,7 +551,7 @@ func handleImageConfigTest(w http.ResponseWriter, r *http.Request) {
 		writeImageErrorCode(w, http.StatusBadRequest, "test_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "warnings": warnings})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "warnings": warnings})
 }
 
 func mergeImageConfig(dst *imageS3Config, src imageS3Config, forcePathStylePresent bool) {

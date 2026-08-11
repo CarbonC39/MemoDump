@@ -1,4 +1,4 @@
-package main
+package imagesvc
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 
 	"github.com/minio/minio-go/v7"
 
+	"memodump/internal/appstate"
+	"memodump/internal/httpx"
 	"memodump/internal/vaultfs"
 )
 
@@ -35,7 +37,7 @@ const imageCleanupGrace = 7 * 24 * time.Hour
 // file that is still in use.
 func collectReferencedImageKeys() map[string]bool {
 	keys := make(map[string]bool)
-	_ = filepath.Walk(dataDir, func(path string, info os.FileInfo, walkErr error) error {
+	_ = filepath.Walk(appstate.DataDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return nil
 		}
@@ -66,7 +68,7 @@ func collectReferencedImageKeys() map[string]bool {
 // a candidate only when its name is a valid content-hash key, it is older than
 // grace, and its key is not in the referenced set.
 func gcVaultImages(keys map[string]bool, grace time.Duration) (removed int, bytes int64, err error) {
-	vaultDir := filepath.Join(dataDir, imageVaultDir)
+	vaultDir := filepath.Join(appstate.DataDir, imageVaultDir)
 	entries, err := os.ReadDir(vaultDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -162,7 +164,7 @@ func runImageCleanup() (vaultRemoved, s3Removed int, bytes int64, err error) {
 	if err != nil {
 		return vaultRemoved, s3Removed, bytes, err
 	}
-	if cfg := effectiveImageS3Config(); s3Active(cfg) {
+	if cfg := EffectiveImageS3Config(); s3Active(cfg) {
 		n, b, gcErr := gcS3Objects(cfg, keys, imageCleanupGrace)
 		if gcErr != nil {
 			return vaultRemoved, s3Removed, bytes, gcErr
@@ -172,10 +174,10 @@ func runImageCleanup() (vaultRemoved, s3Removed int, bytes int64, err error) {
 	return vaultRemoved, s3Removed, bytes, nil
 }
 
-// handleImageCleanup runs a cleanup sweep. Gated by the cleanup config: when
+// HandleImageCleanup runs a cleanup sweep. Gated by the cleanup config: when
 // disabled it returns 403 so an accidental call can never delete anything.
-func handleImageCleanup(w http.ResponseWriter, r *http.Request) {
-	if !cleanupEnabled(effectiveImageS3Config()) {
+func HandleImageCleanup(w http.ResponseWriter, r *http.Request) {
+	if !cleanupEnabled(EffectiveImageS3Config()) {
 		writeImageErrorCode(w, http.StatusForbidden, "cleanup_disabled", "Image cleanup is disabled in settings")
 		return
 	}
@@ -184,17 +186,17 @@ func handleImageCleanup(w http.ResponseWriter, r *http.Request) {
 		writeImageErrorCode(w, http.StatusInternalServerError, "cleanup_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"vaultRemoved": vaultRemoved,
 		"s3Removed":    s3Removed,
 		"bytes":        bytes,
 	})
 }
 
-// startImageCleanupLoop runs the periodic cleanup sweep in the background: once
+// StartImageCleanupLoop runs the periodic cleanup sweep in the background: once
 // shortly after startup, then every 24 hours. Each tick re-reads the current
 // data dir and effective config, and is a no-op while cleanup is disabled.
-func startImageCleanupLoop() {
+func StartImageCleanupLoop() {
 	go func() {
 		// Defer the first sweep so the server/UI is fully up first.
 		time.Sleep(5 * time.Second)
@@ -213,7 +215,7 @@ func sweepOnce() {
 			log.Printf("image gc: panic during sweep: %v", rec)
 		}
 	}()
-	if !cleanupEnabled(effectiveImageS3Config()) {
+	if !cleanupEnabled(EffectiveImageS3Config()) {
 		return
 	}
 	vaultRemoved, s3Removed, bytes, err := runImageCleanup()

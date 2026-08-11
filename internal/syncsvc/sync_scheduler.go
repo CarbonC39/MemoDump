@@ -1,4 +1,4 @@
-package main
+package syncsvc
 
 import (
 	"context"
@@ -177,9 +177,9 @@ var (
 	syncSched   *syncScheduler
 )
 
-// startSyncScheduler starts the process scheduler with the real clock and the
+// StartSyncScheduler starts the process scheduler with the real clock and the
 // shared attempt function. It is a no-op if already started.
-func startSyncScheduler(parent context.Context) {
+func StartSyncScheduler(parent context.Context) {
 	syncSchedMu.Lock()
 	defer syncSchedMu.Unlock()
 	if syncSched != nil {
@@ -190,8 +190,8 @@ func startSyncScheduler(parent context.Context) {
 	syncSched = s
 }
 
-// stopSyncScheduler stops and waits for the process scheduler.
-func stopSyncScheduler() {
+// StopSyncScheduler stops and waits for the process scheduler.
+func StopSyncScheduler() {
 	syncSchedMu.Lock()
 	defer syncSchedMu.Unlock()
 	if syncSched == nil {
@@ -201,9 +201,9 @@ func stopSyncScheduler() {
 	syncSched = nil
 }
 
-// wakeSyncScheduler requests an immediate coalesced attempt (a successful
+// WakeSyncScheduler requests an immediate coalesced attempt (a successful
 // Enable).
-func wakeSyncScheduler() {
+func WakeSyncScheduler() {
 	syncSchedMu.RLock()
 	defer syncSchedMu.RUnlock()
 	if syncSched != nil {
@@ -211,8 +211,8 @@ func wakeSyncScheduler() {
 	}
 }
 
-// resetSyncScheduler leaves the scheduler idle (Disable/Reset).
-func resetSyncScheduler() {
+// ResetSyncScheduler leaves the scheduler idle (Disable/Reset).
+func ResetSyncScheduler() {
 	syncSchedMu.RLock()
 	defer syncSchedMu.RUnlock()
 	if syncSched != nil {
@@ -220,9 +220,9 @@ func resetSyncScheduler() {
 	}
 }
 
-// clearSyncSchedulerPause clears a permanent pause after a successful manual
+// ClearSyncSchedulerPause clears a permanent pause after a successful manual
 // run and schedules the ordinary interval.
-func clearSyncSchedulerPause() {
+func ClearSyncSchedulerPause() {
 	syncSchedMu.RLock()
 	defer syncSchedMu.RUnlock()
 	if syncSched != nil {

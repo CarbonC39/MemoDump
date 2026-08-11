@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"memodump/internal/appstate"
 	"memodump/internal/vaultfs"
 )
 
@@ -228,7 +229,7 @@ func TestV2Duplicate(t *testing.T) {
 func TestV2PreservesUnknownFrontMatter(t *testing.T) {
 	apiNoteRepo(t)
 	// A note with unknown front-matter keys, written behind the server's back.
-	if err := os.WriteFile(filepath.Join(dataDir, "n.md"),
+	if err := os.WriteFile(filepath.Join(appstate.DataDir, "n.md"),
 		[]byte("---\ncreated: 2024\n# c\ntags: [\"a\"]\n---\nbody"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +239,7 @@ func TestV2PreservesUnknownFrontMatter(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("update status = %d; body=%s", rec.Code, rec.Body.String())
 	}
-	data, err := os.ReadFile(filepath.Join(dataDir, "n.md"))
+	data, err := os.ReadFile(filepath.Join(appstate.DataDir, "n.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +264,7 @@ var _ = vaultfs.ErrInvalidPath // keep the vaultfs import for error mapping test
 func TestV2UpdateWithDestinationMovesNote(t *testing.T) {
 	apiNoteRepo(t)
 	created := v2Create(t, `{"name":"a","content":"v0"}`)
-	if err := repo.CreateFolder("proj"); err != nil {
+	if err := appstate.Repo.CreateFolder("proj"); err != nil {
 		t.Fatal(err)
 	}
 	rec := v2Update(t, "a.md",

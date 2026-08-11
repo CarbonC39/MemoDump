@@ -1,4 +1,4 @@
-package main
+package syncsvc
 
 import (
 	"context"
@@ -94,18 +94,18 @@ func TestSyncStatusDisconnectedNotAuto(t *testing.T) {
 	}
 }
 
-// TestSyncLifecycleStartStop: startSyncScheduler/stopSyncScheduler round-trip
+// TestSyncLifecycleStartStop: StartSyncScheduler/StopSyncScheduler round-trip
 // cleanly, are idempotent, and Stop waits for the loop goroutine to exit.
 func TestSyncLifecycleStartStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	startSyncScheduler(ctx)
-	startSyncScheduler(ctx) // idempotent
-	stopSyncScheduler()
-	stopSyncScheduler() // idempotent
+	StartSyncScheduler(ctx)
+	StartSyncScheduler(ctx) // idempotent
+	StopSyncScheduler()
+	StopSyncScheduler() // idempotent
 
 	// A fresh start after stop works and leaves no goroutine behind.
-	startSyncScheduler(ctx)
-	stopSyncScheduler()
+	StartSyncScheduler(ctx)
+	StopSyncScheduler()
 }

@@ -5,7 +5,7 @@
 // .r2-test/image-config.json exists (the folder is gitignored). Secrets are
 // read programmatically and never logged: every piece of output is scrubbed
 // through redactR2 before it reaches the test log.
-package main
+package imagesvc
 
 import (
 	"bytes"
@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/minio/minio-go/v7"
+
+	"memodump/internal/appstate"
 )
 
 const r2ConfigRel = ".r2-test/image-config.json"
@@ -61,12 +63,12 @@ func redactR2(cfg imageS3Config, s string) string {
 // dir, and restores them afterwards.
 func r2TestEnv(t *testing.T, cfg imageS3Config) {
 	t.Helper()
-	oldFile, oldDir, oldAuth := imageConfigFile, dataDir, noAuth
-	imageConfigFile = filepath.Join(r2TestRoot(t), r2ConfigRel)
-	dataDir = t.TempDir()
-	noAuth = true
+	oldFile, oldDir, oldAuth := ConfigFile, appstate.DataDir, appstate.NoAuth
+	ConfigFile = filepath.Join(r2TestRoot(t), r2ConfigRel)
+	appstate.DataDir = t.TempDir()
+	appstate.NoAuth = true
 	t.Cleanup(func() {
-		imageConfigFile, dataDir, noAuth = oldFile, oldDir, oldAuth
+		ConfigFile, appstate.DataDir, appstate.NoAuth = oldFile, oldDir, oldAuth
 	})
 	_ = cfg
 }
@@ -96,7 +98,7 @@ func TestR2TestConnection(t *testing.T) {
 		}
 	}()
 
-	mux := buildAPIMux()
+	mux := imageConfigMux()
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/config/image/test", nil))
 	if rec.Code != http.StatusOK {
@@ -144,7 +146,7 @@ func TestR2ImageUploadRoundTrip(t *testing.T) {
 		}
 	}()
 
-	mux := buildAPIMux()
+	mux := imageConfigMux()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/api/images/"+key, bytes.NewReader(body))
 	req.Header.Set("X-MemoDump-Image-Target", imageTargetID(cfg))

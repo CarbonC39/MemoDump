@@ -1,16 +1,19 @@
-package main
+package imagesvc
 
 import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"memodump/internal/httpx"
+
+	"memodump/internal/appstate"
 )
 
 func imageHash(data []byte) string {
@@ -58,21 +61,28 @@ func avifBody(compatible bool) []byte {
 
 func imageTestMux(t *testing.T) http.Handler {
 	t.Helper()
-	oldDataDir, oldNoAuth := dataDir, noAuth
-	dataDir = t.TempDir()
-	noAuth = true
+	oldDataDir, oldNoAuth := appstate.DataDir, appstate.NoAuth
+	appstate.DataDir = t.TempDir()
+	appstate.NoAuth = true
 	t.Cleanup(func() {
-		dataDir = oldDataDir
-		noAuth = oldNoAuth
+		appstate.DataDir = oldDataDir
+		appstate.NoAuth = oldNoAuth
 	})
-	initRepo()
-	return buildAPIMux()
+	appstate.InitRepo()
+	mux := http.NewServeMux()
+	mux.HandleFunc("PUT /api/images/{key}", HandleImagePut)
+	mux.HandleFunc("GET /api/images/{key}", HandleImageGet)
+	mux.HandleFunc("POST /api/images/gc", HandleImageCleanup)
+	mux.HandleFunc("GET /api/config/image", HandleImageConfigGet)
+	mux.HandleFunc("PUT /api/config/image", HandleImageConfigSave)
+	mux.HandleFunc("POST /api/config/image/test", HandleImageConfigTest)
+	return mux
 }
 
 func putImage(t *testing.T, mux http.Handler, key string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPut, "/api/images/"+key, bytes.NewReader(body))
-	req.Header.Set("X-MemoDump-Image-Target", imageTargetID(effectiveImageS3Config()))
+	req.Header.Set("X-MemoDump-Image-Target", imageTargetID(EffectiveImageS3Config()))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec
@@ -112,7 +122,7 @@ func TestImagePutGetRoundTrip(t *testing.T) {
 		t.Fatal("GET body does not match uploaded body")
 	}
 
-	entries, err := os.ReadDir(filepath.Join(dataDir, imageVaultDir))
+	entries, err := os.ReadDir(filepath.Join(appstate.DataDir, imageVaultDir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +149,7 @@ func TestImagePutRepairsCorruptObject(t *testing.T) {
 	body := pngBody()
 	key := imageHash(body) + ".png"
 
-	vaultDir := filepath.Join(dataDir, imageVaultDir)
+	vaultDir := filepath.Join(appstate.DataDir, imageVaultDir)
 	if err := os.MkdirAll(vaultDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -265,14 +275,16 @@ func TestImageGetNotFound(t *testing.T) {
 }
 
 func TestImageRequiresAuth(t *testing.T) {
-	oldDataDir, oldNoAuth := dataDir, noAuth
-	dataDir = t.TempDir()
-	noAuth = false
+	oldDataDir, oldNoAuth := appstate.DataDir, appstate.NoAuth
+	appstate.DataDir = t.TempDir()
+	appstate.NoAuth = false
 	t.Cleanup(func() {
-		dataDir = oldDataDir
-		noAuth = oldNoAuth
+		appstate.DataDir = oldDataDir
+		appstate.NoAuth = oldNoAuth
 	})
-	mux := buildAPIMux()
+	mux := http.NewServeMux()
+	mux.HandleFunc("PUT /api/images/{key}", httpx.AuthMiddleware(HandleImagePut))
+	mux.HandleFunc("GET /api/images/{key}", httpx.AuthMiddleware(HandleImageGet))
 
 	body := pngBody()
 	key := imageHash(body) + ".png"
@@ -290,45 +302,5 @@ func TestImagePutTooLarge(t *testing.T) {
 	key := imageHash(body) + ".png"
 	if rec := putImage(t, mux, key, body); rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413", rec.Code)
-	}
-}
-
-func TestFolderTreeSkipsDotDirectories(t *testing.T) {
-	mux := imageTestMux(t)
-	if err := os.MkdirAll(filepath.Join(dataDir, imageVaultDir), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(dataDir, "notes"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dataDir, "notes", "a.md"), []byte("# a"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/api/folders", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
-	}
-	var tree []Folder
-	if err := json.Unmarshal(rec.Body.Bytes(), &tree); err != nil {
-		t.Fatal(err)
-	}
-	if len(tree) != 1 || tree[0].Name != "notes" {
-		t.Fatalf("folder tree = %#v, want only 'notes'", tree)
-	}
-}
-
-func TestCreateFolderRejectsReservedName(t *testing.T) {
-	mux := imageTestMux(t)
-	for _, path := range []string{".images", "a/.images"} {
-		req := httptest.NewRequest(http.MethodPost, "/api/folders",
-			bytes.NewBufferString(`{"path":"`+path+`"}`))
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("create %q: status = %d, want 400", path, rec.Code)
-		}
 	}
 }

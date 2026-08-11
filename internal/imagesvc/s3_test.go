@@ -1,4 +1,4 @@
-package main
+package imagesvc
 
 import (
 	"bytes"
@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/minio/minio-go/v7"
+
+	"memodump/internal/appstate"
 )
 
 type imageURLFixture struct {
@@ -31,7 +33,7 @@ type imageURLFixture struct {
 
 func loadImageURLFixture(t *testing.T) imageURLFixture {
 	t.Helper()
-	data, err := os.ReadFile("testdata/image-url-fixtures.json")
+	data, err := os.ReadFile("../../testdata/image-url-fixtures.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,17 +98,17 @@ func TestS3ActiveRequiresAllRequiredFields(t *testing.T) {
 }
 
 func TestImageConfigSaveSecretRotation(t *testing.T) {
-	oldDataDir, oldFile := dataDir, imageConfigFile
-	oldNoAuth := noAuth
-	dataDir = t.TempDir()
-	imageConfigFile = filepath.Join(dataDir, ".image-config.json")
-	noAuth = true
+	oldDataDir, oldFile := appstate.DataDir, ConfigFile
+	oldNoAuth := appstate.NoAuth
+	appstate.DataDir = t.TempDir()
+	ConfigFile = filepath.Join(appstate.DataDir, ".image-config.json")
+	appstate.NoAuth = true
 	t.Cleanup(func() {
-		dataDir = oldDataDir
-		imageConfigFile = oldFile
-		noAuth = oldNoAuth
+		appstate.DataDir = oldDataDir
+		ConfigFile = oldFile
+		appstate.NoAuth = oldNoAuth
 	})
-	mux := buildAPIMux()
+	mux := imageConfigMux()
 
 	base := imageS3Config{
 		Provider: "s3", Endpoint: "https://s3.example.com", Bucket: "b",
@@ -171,11 +173,11 @@ func TestImageConfigSaveSecretRotation(t *testing.T) {
 }
 
 func TestImageConfigDefaultsAndPersistsPathStyle(t *testing.T) {
-	oldFile := imageConfigFile
-	imageConfigFile = filepath.Join(t.TempDir(), ".image-config.json")
-	t.Cleanup(func() { imageConfigFile = oldFile })
+	oldFile := ConfigFile
+	ConfigFile = filepath.Join(t.TempDir(), ".image-config.json")
+	t.Cleanup(func() { ConfigFile = oldFile })
 
-	if cfg := effectiveImageS3Config(); !cfg.ForcePathStyle {
+	if cfg := EffectiveImageS3Config(); !cfg.ForcePathStyle {
 		t.Fatal("config without a file should default forcePathStyle to true")
 	}
 	if err := saveImageConfigFile(imageS3Config{Provider: "s3", ForcePathStyle: false}); err != nil {
@@ -187,11 +189,11 @@ func TestImageConfigDefaultsAndPersistsPathStyle(t *testing.T) {
 }
 
 func TestImageConfigGetSupportsReloadedEdits(t *testing.T) {
-	oldDataDir, oldFile, oldNoAuth := dataDir, imageConfigFile, noAuth
-	dataDir = t.TempDir()
-	imageConfigFile = filepath.Join(dataDir, ".image-config.json")
-	noAuth = true
-	t.Cleanup(func() { dataDir, imageConfigFile, noAuth = oldDataDir, oldFile, oldNoAuth })
+	oldDataDir, oldFile, oldNoAuth := appstate.DataDir, ConfigFile, appstate.NoAuth
+	appstate.DataDir = t.TempDir()
+	ConfigFile = filepath.Join(appstate.DataDir, ".image-config.json")
+	appstate.NoAuth = true
+	t.Cleanup(func() { appstate.DataDir, ConfigFile, appstate.NoAuth = oldDataDir, oldFile, oldNoAuth })
 
 	stored := imageS3Config{
 		Provider: "s3", Endpoint: "https://s3.example.com", Region: "us-west-2",
@@ -201,7 +203,7 @@ func TestImageConfigGetSupportsReloadedEdits(t *testing.T) {
 	if err := saveImageConfigFile(stored); err != nil {
 		t.Fatal(err)
 	}
-	mux := buildAPIMux()
+	mux := imageConfigMux()
 	req := httptest.NewRequest(http.MethodGet, "/api/config/image", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -235,9 +237,9 @@ func TestImageConfigGetSupportsReloadedEdits(t *testing.T) {
 }
 
 func TestHigherPriorityS3OverridesPersistedLocalProvider(t *testing.T) {
-	oldFile := imageConfigFile
-	imageConfigFile = filepath.Join(t.TempDir(), ".image-config.json")
-	t.Cleanup(func() { imageConfigFile = oldFile })
+	oldFile := ConfigFile
+	ConfigFile = filepath.Join(t.TempDir(), ".image-config.json")
+	t.Cleanup(func() { ConfigFile = oldFile })
 	if err := saveImageConfigFile(imageS3Config{Provider: "local", ForcePathStyle: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +248,7 @@ func TestHigherPriorityS3OverridesPersistedLocalProvider(t *testing.T) {
 	t.Setenv("MEMODUMP_IMAGE_S3_PUBLIC_URL", "https://cdn.example.com")
 	t.Setenv("MEMODUMP_IMAGE_S3_ACCESS_KEY", "ak")
 	t.Setenv("MEMODUMP_IMAGE_S3_SECRET_KEY", "sk")
-	if cfg := effectiveImageS3Config(); cfg.Provider != "s3" || !s3Active(cfg) {
+	if cfg := EffectiveImageS3Config(); cfg.Provider != "s3" || !s3Active(cfg) {
 		t.Fatalf("higher-priority S3 config did not activate: %#v", cfg)
 	}
 }
@@ -346,10 +348,10 @@ func TestImageConfigTestConnection(t *testing.T) {
 }
 
 func TestImageConfigTestRejectsIdentityChangeWithoutSecret(t *testing.T) {
-	oldFile, oldNoAuth := imageConfigFile, noAuth
-	imageConfigFile = filepath.Join(t.TempDir(), ".image-config.json")
-	noAuth = true
-	t.Cleanup(func() { imageConfigFile, noAuth = oldFile, oldNoAuth })
+	oldFile, oldNoAuth := ConfigFile, appstate.NoAuth
+	ConfigFile = filepath.Join(t.TempDir(), ".image-config.json")
+	appstate.NoAuth = true
+	t.Cleanup(func() { ConfigFile, appstate.NoAuth = oldFile, oldNoAuth })
 	if err := saveImageConfigFile(imageS3Config{
 		Provider: "s3", Endpoint: "https://old.example.com", Bucket: "b",
 		PublicBaseURL: "https://cdn.example.com", AccessKey: "ak", SecretKey: "sk",
@@ -359,7 +361,7 @@ func TestImageConfigTestRejectsIdentityChangeWithoutSecret(t *testing.T) {
 	body := []byte(`{"provider":"s3","endpoint":"https://new.example.com","bucket":"b","accessKey":"ak"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/config/image/test", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
-	buildAPIMux().ServeHTTP(rec, req)
+	imageConfigMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "secretKey") {
 		t.Fatalf("status = %d body=%s, want secret rotation rejection", rec.Code, rec.Body.String())
 	}
@@ -403,16 +405,16 @@ func TestImageConfigTestConnectionVerifyFails(t *testing.T) {
 }
 
 func TestImagePutInS3ModeProxies(t *testing.T) {
-	oldDataDir, oldNoAuth := dataDir, noAuth
-	dataDir = t.TempDir()
-	noAuth = true
+	oldDataDir, oldNoAuth := appstate.DataDir, appstate.NoAuth
+	appstate.DataDir = t.TempDir()
+	appstate.NoAuth = true
 	t.Cleanup(func() {
-		dataDir = oldDataDir
-		noAuth = oldNoAuth
+		appstate.DataDir = oldDataDir
+		appstate.NoAuth = oldNoAuth
 	})
 	srv, objects := fakeS3Server(t, false)
 
-	// Activate S3 via env so effectiveImageS3Config picks it up.
+	// Activate S3 via env so EffectiveImageS3Config picks it up.
 	t.Setenv("MEMODUMP_IMAGE_S3_ENDPOINT", srv.URL)
 	t.Setenv("MEMODUMP_IMAGE_S3_BUCKET", "test-bucket")
 	t.Setenv("MEMODUMP_IMAGE_S3_PUBLIC_URL", srv.URL+"/test-bucket")
@@ -420,7 +422,7 @@ func TestImagePutInS3ModeProxies(t *testing.T) {
 	t.Setenv("MEMODUMP_IMAGE_S3_SECRET_KEY", "sk")
 	t.Setenv("MEMODUMP_IMAGE_S3_FORCE_PATH_STYLE", "true")
 
-	mux := buildAPIMux()
+	mux := imageConfigMux()
 	body := pngBody()
 	key := imageHash(body) + ".png"
 	if rec := putImage(t, mux, key, body); rec.Code != http.StatusCreated {
@@ -432,12 +434,12 @@ func TestImagePutInS3ModeProxies(t *testing.T) {
 }
 
 func TestImagePutInS3ModeVerifyFailure(t *testing.T) {
-	oldDataDir, oldNoAuth := dataDir, noAuth
-	dataDir = t.TempDir()
-	noAuth = true
+	oldDataDir, oldNoAuth := appstate.DataDir, appstate.NoAuth
+	appstate.DataDir = t.TempDir()
+	appstate.NoAuth = true
 	t.Cleanup(func() {
-		dataDir = oldDataDir
-		noAuth = oldNoAuth
+		appstate.DataDir = oldDataDir
+		appstate.NoAuth = oldNoAuth
 	})
 	srv, _ := fakeS3Server(t, false)
 
@@ -448,7 +450,7 @@ func TestImagePutInS3ModeVerifyFailure(t *testing.T) {
 	t.Setenv("MEMODUMP_IMAGE_S3_SECRET_KEY", "sk")
 	t.Setenv("MEMODUMP_IMAGE_S3_FORCE_PATH_STYLE", "true")
 
-	mux := buildAPIMux()
+	mux := imageConfigMux()
 	body := pngBody()
 	key := imageHash(body) + ".png"
 	rec := putImage(t, mux, key, body)
@@ -461,10 +463,10 @@ func TestImagePutInS3ModeVerifyFailure(t *testing.T) {
 }
 
 func TestImagePutRejectsStaleS3Target(t *testing.T) {
-	oldDataDir, oldNoAuth := dataDir, noAuth
-	dataDir = t.TempDir()
-	noAuth = true
-	t.Cleanup(func() { dataDir, noAuth = oldDataDir, oldNoAuth })
+	oldDataDir, oldNoAuth := appstate.DataDir, appstate.NoAuth
+	appstate.DataDir = t.TempDir()
+	appstate.NoAuth = true
+	t.Cleanup(func() { appstate.DataDir, appstate.NoAuth = oldDataDir, oldNoAuth })
 	srv, _ := fakeS3Server(t, false)
 	t.Setenv("MEMODUMP_IMAGE_S3_ENDPOINT", srv.URL)
 	t.Setenv("MEMODUMP_IMAGE_S3_BUCKET", "test-bucket")
@@ -478,49 +480,21 @@ func TestImagePutRejectsStaleS3Target(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/images/"+key, bytes.NewReader(body))
 	req.Header.Set("X-MemoDump-Image-Target", "s3:stale")
 	rec := httptest.NewRecorder()
-	buildAPIMux().ServeHTTP(rec, req)
+	imageConfigMux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "invalid_config") {
 		t.Fatalf("status = %d body=%s, want stale-target conflict", rec.Code, rec.Body.String())
 	}
 }
 
-func TestConfigEndpointReportsS3(t *testing.T) {
-	oldDataDir := dataDir
-	dataDir = t.TempDir()
-	t.Cleanup(func() { dataDir = oldDataDir })
-	srv, _ := fakeS3Server(t, false)
-	t.Setenv("MEMODUMP_IMAGE_S3_ENDPOINT", srv.URL)
-	t.Setenv("MEMODUMP_IMAGE_S3_BUCKET", "test-bucket")
-	t.Setenv("MEMODUMP_IMAGE_S3_PUBLIC_URL", srv.URL)
-	t.Setenv("MEMODUMP_IMAGE_S3_ACCESS_KEY", "ak")
-	t.Setenv("MEMODUMP_IMAGE_S3_SECRET_KEY", "sk")
-
-	mux := buildAPIMux()
-	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	var resp struct {
-		Image map[string]any `json:"image"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	if resp.Image["provider"] != "s3" || resp.Image["configured"] != true {
-		t.Fatalf("image config = %#v, want s3 configured", resp.Image)
-	}
-	if _, hasSecret := resp.Image["secretKey"]; hasSecret {
-		t.Fatal("config endpoint must not expose secrets")
-	}
-	if _, hasEndpoint := resp.Image["endpoint"]; hasEndpoint {
-		t.Fatal("unauthenticated config endpoint must not expose the S3 endpoint")
-	}
-	if _, hasAccessKey := resp.Image["accessKey"]; hasAccessKey {
-		t.Fatal("unauthenticated config endpoint must not expose the access-key ID")
-	}
-	if resp.Image["editable"] != false {
-		t.Fatalf("editable = %v, want false when env-configured", resp.Image["editable"])
-	}
+// imageConfigMux registers the image-config endpoints for tests (the note/image
+// routes are not part of this package).
+func imageConfigMux() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("PUT /api/images/{key}", HandleImagePut)
+	mux.HandleFunc("GET /api/images/{key}", HandleImageGet)
+	mux.HandleFunc("POST /api/images/gc", HandleImageCleanup)
+	mux.HandleFunc("GET /api/config/image", HandleImageConfigGet)
+	mux.HandleFunc("PUT /api/config/image", HandleImageConfigSave)
+	mux.HandleFunc("POST /api/config/image/test", HandleImageConfigTest)
+	return mux
 }

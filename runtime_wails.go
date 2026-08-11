@@ -8,5 +8,5 @@ package main
 // buildAPIMux registers the sync routes and main_wails.go's scheduler lifecycle
 // is the only place sync runs.
 func init() {
-	cloudSyncCapable = true
+	appstate.CloudSyncCapable = true
 }

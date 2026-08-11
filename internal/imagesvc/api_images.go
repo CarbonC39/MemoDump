@@ -1,4 +1,4 @@
-package main
+package imagesvc
 
 import (
 	"bytes"
@@ -16,6 +16,8 @@ import (
 	"regexp"
 	"strings"
 
+	"memodump/internal/appstate"
+	"memodump/internal/httpx"
 	"memodump/internal/vaultfs"
 )
 
@@ -112,12 +114,12 @@ func writeImageErrorCode(w http.ResponseWriter, status int, code, msg string) {
 	_, _ = w.Write(body)
 }
 
-// handleImagePut stores a raw image body under a content-hash key. The key is
+// HandleImagePut stores a raw image body under a content-hash key. The key is
 // client-supplied but strictly validated: its hash segment must equal the
 // SHA-256 of the body (content↔key binding, preventing arbitrary overwrite of
 // the images namespace), and its extension must match the format detected from
 // the magic bytes.
-func handleImagePut(w http.ResponseWriter, r *http.Request) {
+func HandleImagePut(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if !imageKeyRe.MatchString(key) {
 		writeImageErrorCode(w, http.StatusBadRequest, "invalid_image_key", "Invalid image key")
@@ -127,7 +129,7 @@ func handleImagePut(w http.ResponseWriter, r *http.Request) {
 	// S3 uploads are bound to the destination revision captured when the image
 	// entered the browser outbox. If server config changed in the meantime, fail
 	// closed instead of sending the blob to the new destination.
-	s3Cfg := effectiveImageS3Config()
+	s3Cfg := EffectiveImageS3Config()
 	if r.Header.Get("X-MemoDump-Image-Target") != imageTargetID(s3Cfg) {
 		writeImageErrorCode(w, http.StatusConflict, "invalid_config", "Image destination config changed; review settings")
 		return
@@ -135,7 +137,7 @@ func handleImagePut(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, imageSizeLimit)
 
-	vaultDir := filepath.Join(dataDir, imageVaultDir)
+	vaultDir := filepath.Join(appstate.DataDir, imageVaultDir)
 	if err := os.MkdirAll(vaultDir, 0755); err != nil {
 		writeImageErrorCode(w, http.StatusInternalServerError, "storage_failed", "Failed to prepare image storage")
 		return
@@ -214,7 +216,7 @@ func handleImagePut(w http.ResponseWriter, r *http.Request) {
 			writeImageErrorCode(w, http.StatusBadGateway, code, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]string{"status": "ok", "key": key})
+		httpx.WriteJSON(w, http.StatusCreated, map[string]string{"status": "ok", "key": key})
 		return
 	}
 
@@ -224,7 +226,7 @@ func handleImagePut(w http.ResponseWriter, r *http.Request) {
 		if info.Size() == written {
 			// Same key, same size: the content-hash invariant guarantees the
 			// stored object already matches, so this is an idempotent no-op.
-			writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "key": key})
+			httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "key": key})
 			return
 		}
 		// The stored object violates the invariant (e.g. overwritten or
@@ -242,16 +244,16 @@ func handleImagePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if repaired {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "key": key})
+		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "key": key})
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok", "key": key})
+	httpx.WriteJSON(w, http.StatusCreated, map[string]string{"status": "ok", "key": key})
 }
 
-// handleImageGet serves a stored image. Content-Type comes from the canonical
+// HandleImageGet serves a stored image. Content-Type comes from the canonical
 // format map (keys are content-verified at PUT time), and responses are
 // private (the endpoint is authenticated) and immutable (content-hash URLs).
-func handleImageGet(w http.ResponseWriter, r *http.Request) {
+func HandleImageGet(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if !imageKeyRe.MatchString(key) {
 		writeImageErrorCode(w, http.StatusBadRequest, "invalid_image_key", "Invalid image key")
@@ -263,7 +265,7 @@ func handleImageGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, err := os.Open(filepath.Join(dataDir, imageVaultDir, key))
+	f, err := os.Open(filepath.Join(appstate.DataDir, imageVaultDir, key))
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeImageErrorCode(w, http.StatusNotFound, "image_not_found", "Image not found")

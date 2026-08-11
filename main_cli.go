@@ -16,111 +16,116 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"memodump/internal/appstate"
+	"memodump/internal/httpx"
+	"memodump/internal/imagesvc"
+	"memodump/internal/syncsvc"
 )
 
 //go:embed frontend/dist/*
 var frontendFS embed.FS
 
 func main() {
-	flag.StringVar(&dataDir, "data", "", "Data directory path")
-	flag.StringVar(&username, "user", "", "Login username")
-	flag.StringVar(&password, "pass", "", "Login password")
-	flag.IntVar(&port, "port", 0, "Service port (default 8080)")
-	flag.StringVar(&cssFile, "css", "", "Custom CSS file to inject")
-	flag.StringVar(&imageS3Endpoint, "image-s3-endpoint", "", "S3-compatible endpoint (e.g. https://s3.region.amazonaws.com)")
-	flag.StringVar(&imageS3Region, "image-s3-region", "", "S3 region (default us-east-1)")
-	flag.StringVar(&imageS3Bucket, "image-s3-bucket", "", "S3 bucket name")
-	flag.StringVar(&imageS3Prefix, "image-s3-prefix", "", "S3 object prefix")
-	flag.StringVar(&imageS3PublicURL, "image-s3-public-url", "", "Public base URL for S3 objects")
-	flag.StringVar(&imageS3AccessKey, "image-s3-access-key", "", "S3 access key")
-	flag.StringVar(&imageS3SecretKey, "image-s3-secret-key", "", "S3 secret key")
+	flag.StringVar(&appstate.DataDir, "data", "", "Data directory path")
+	flag.StringVar(&appstate.Username, "user", "", "Login username")
+	flag.StringVar(&appstate.Password, "pass", "", "Login password")
+	flag.IntVar(&appstate.Port, "port", 0, "Service port (default 8080)")
+	flag.StringVar(&appstate.CSSFile, "css", "", "Custom CSS file to inject")
+	flag.StringVar(&imagesvc.FlagEndpoint, "image-s3-endpoint", "", "S3-compatible endpoint (e.g. https://s3.region.amazonaws.com)")
+	flag.StringVar(&imagesvc.FlagRegion, "image-s3-region", "", "S3 region (default us-east-1)")
+	flag.StringVar(&imagesvc.FlagBucket, "image-s3-bucket", "", "S3 bucket name")
+	flag.StringVar(&imagesvc.FlagPrefix, "image-s3-prefix", "", "S3 object prefix")
+	flag.StringVar(&imagesvc.FlagPublicURL, "image-s3-public-url", "", "Public base URL for S3 objects")
+	flag.StringVar(&imagesvc.FlagAccessKey, "image-s3-access-key", "", "S3 access key")
+	flag.StringVar(&imagesvc.FlagSecretKey, "image-s3-secret-key", "", "S3 secret key")
 	flag.Parse()
 
 	// Load .env from CWD (lower priority than flags and env vars).
-	dotenv := parseEnvFile(".env")
+	dotenv := appstate.ParseEnvFile(".env")
 
 	// Precedence: CLI flag (non-empty / non-zero) > env var > .env file.
-	if dataDir == "" {
+	if appstate.DataDir == "" {
 		if v := os.Getenv("MEMODUMP_DATA"); v != "" {
-			dataDir = v
+			appstate.DataDir = v
 		} else if v := dotenv["DATA"]; v != "" {
-			dataDir = v
+			appstate.DataDir = v
 		}
 	}
-	if username == "" {
+	if appstate.Username == "" {
 		if v := os.Getenv("MEMODUMP_USER"); v != "" {
-			username = v
+			appstate.Username = v
 		} else if v := dotenv["USER"]; v != "" {
-			username = v
+			appstate.Username = v
 		}
 	}
-	if password == "" {
+	if appstate.Password == "" {
 		if v := os.Getenv("MEMODUMP_PASS"); v != "" {
-			password = v
+			appstate.Password = v
 		} else if v := dotenv["PASS"]; v != "" {
-			password = v
+			appstate.Password = v
 		}
 	}
-	if port == 0 {
+	if appstate.Port == 0 {
 		if v := os.Getenv("MEMODUMP_PORT"); v != "" {
 			if p, err := strconv.Atoi(v); err == nil && p > 0 {
-				port = p
+				appstate.Port = p
 			}
 		} else if v := dotenv["PORT"]; v != "" {
 			if p, err := strconv.Atoi(v); err == nil && p > 0 {
-				port = p
+				appstate.Port = p
 			}
 		}
 	}
-	if cssFile == "" {
+	if appstate.CSSFile == "" {
 		if v := os.Getenv("MEMODUMP_CSS"); v != "" {
-			cssFile = v
+			appstate.CSSFile = v
 		} else if v := dotenv["CSS"]; v != "" {
-			cssFile = v
+			appstate.CSSFile = v
 		}
 	}
-	if cssFile != "" {
-		if abs, err := filepath.Abs(cssFile); err == nil {
-			cssFile = abs
+	if appstate.CSSFile != "" {
+		if abs, err := filepath.Abs(appstate.CSSFile); err == nil {
+			appstate.CSSFile = abs
 		}
-		if _, err := os.Stat(cssFile); err != nil {
-			log.Fatalf("CSS file not found: %s", cssFile)
+		if _, err := os.Stat(appstate.CSSFile); err != nil {
+			log.Fatalf("CSS file not found: %s", appstate.CSSFile)
 		}
 	}
-	if port == 0 {
-		port = 8080
+	if appstate.Port == 0 {
+		appstate.Port = 8080
 	}
 
-	if dataDir == "" {
-		fmt.Println("Usage: memodump --data <folder> [--user <username> --pass <password>] [--port <port>] [--css <file>]")
+	if appstate.DataDir == "" {
+		fmt.Println("Usage: memodump --data <folder> [-user <username> --pass <password>] [--port <port>] [--css <file>]")
 		fmt.Println("  Credentials can also be set via MEMODUMP_USER / MEMODUMP_PASS env vars")
 		fmt.Println("  or a .env file in the current directory (DATA=, USER=, PASS=, PORT=, CSS=).")
 		fmt.Println("  Omitting username and password starts the server in no-auth mode.")
 		os.Exit(1)
 	}
 
-	if username == "" && password == "" {
-		noAuth = true
+	if appstate.Username == "" && appstate.Password == "" {
+		appstate.NoAuth = true
 		log.Println("WARNING: No credentials configured — running in no-auth mode (all requests allowed)")
 	}
 
-	absData, err := filepath.Abs(dataDir)
+	absData, err := filepath.Abs(appstate.DataDir)
 	if err != nil {
 		log.Fatalf("Failed to parse data directory: %v", err)
 	}
-	dataDir = absData
+	appstate.DataDir = absData
 
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(appstate.DataDir, 0755); err != nil {
 		log.Fatalf("Failed to create data directory: %v", err)
 	}
 
-	initRepo()
+	appstate.InitRepo()
 
-	sessionFile = filepath.Join(dataDir, ".sessions.json")
-	imageConfigFile = filepath.Join(dataDir, ".image-config.json")
-	loadSessions()
-	startSessionCleanup()
-	startImageCleanupLoop()
+	httpx.SessionFile = filepath.Join(appstate.DataDir, ".sessions.json")
+	imagesvc.ConfigFile = filepath.Join(appstate.DataDir, ".image-config.json")
+	httpx.LoadSessions()
+	httpx.StartSessionCleanup()
+	imagesvc.StartImageCleanupLoop()
 
 	mux := buildAPIMux()
 
@@ -148,9 +153,9 @@ func main() {
 		fileServer.ServeHTTP(w, r)
 	})
 
-	addr := fmt.Sprintf(":%d", port)
+	addr := fmt.Sprintf(":%d", appstate.Port)
 	log.Printf("MemoDump started at http://localhost%s", addr)
-	log.Printf("Data directory: %s", dataDir)
+	log.Printf("Data directory: %s", appstate.DataDir)
 
 	// The CLI Web server does not own cloud sync (R6.0): all of its browser
 	// clients already share this one server vault, so no scheduler is started
@@ -172,7 +177,7 @@ func main() {
 	}
 	// No-op on the CLI runtime (no scheduler is ever started); kept so shutdown
 	// is symmetric with the Wails lifecycle.
-	stopSyncScheduler()
+	syncsvc.StopSyncScheduler()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = server.Shutdown(shutdownCtx)

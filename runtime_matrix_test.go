@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+
+	"memodump/internal/appstate"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,13 +15,13 @@ import (
 // writes the real OS application-data directory.
 func runtimeMatrixCleanup(t *testing.T) {
 	t.Helper()
-	oldDataDir, oldSyncRoot, oldNoAuth, oldCapable := dataDir, syncRoot, noAuth, cloudSyncCapable
-	dataDir, syncRoot = t.TempDir(), t.TempDir()
-	noAuth = true
-	initRepo() // the note handlers dereference the package-level repo
+	oldDataDir, oldSyncRoot, oldNoAuth, oldCapable := appstate.DataDir, appstate.SyncRoot, appstate.NoAuth, appstate.CloudSyncCapable
+	appstate.DataDir, appstate.SyncRoot = t.TempDir(), t.TempDir()
+	appstate.NoAuth = true
+	appstate.InitRepo() // the note handlers dereference the package-level repo
 	t.Cleanup(func() {
-		dataDir, syncRoot, noAuth, cloudSyncCapable = oldDataDir, oldSyncRoot, oldNoAuth, oldCapable
-		initRepo()
+		appstate.DataDir, appstate.SyncRoot, appstate.NoAuth, appstate.CloudSyncCapable = oldDataDir, oldSyncRoot, oldNoAuth, oldCapable
+		appstate.InitRepo()
 	})
 }
 
@@ -28,7 +30,7 @@ func runtimeMatrixCleanup(t *testing.T) {
 // unavailable response while the ordinary note/image API keeps working.
 func TestRuntimeMatrixCLIServerHasNoSyncSurface(t *testing.T) {
 	runtimeMatrixCleanup(t)
-	cloudSyncCapable = false
+	appstate.CloudSyncCapable = false
 
 	mux := buildAPIMux()
 
@@ -76,7 +78,7 @@ func TestRuntimeMatrixCLIServerHasNoSyncSurface(t *testing.T) {
 // real 200 JSON payload, never the unavailable response.
 func TestRuntimeMatrixWailsKeepsSyncSurface(t *testing.T) {
 	runtimeMatrixCleanup(t)
-	cloudSyncCapable = true
+	appstate.CloudSyncCapable = true
 
 	mux := buildAPIMux()
 

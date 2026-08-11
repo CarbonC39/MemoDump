@@ -1,4 +1,4 @@
-package main
+package syncsvc
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"memodump/internal/appstate"
 	"memodump/internal/cloudsync"
 	"memodump/internal/syncindex"
 	"memodump/internal/syncprovider/s3"
@@ -193,8 +194,8 @@ func shortID(id string) string {
 // location, matching the other syncstate helpers. All stores must receive the
 // resolved path so the lock, index, snapshot, and recovery agree on one root.
 func syncStateRoot() (string, error) {
-	if syncRoot != "" {
-		return syncRoot, nil
+	if appstate.SyncRoot != "" {
+		return appstate.SyncRoot, nil
 	}
 	return syncstate.DefaultStateRoot()
 }
@@ -204,7 +205,7 @@ func syncStateRoot() (string, error) {
 // Callers must distinguish ErrNotEnabled (never enabled → benign) from corrupt
 // and I/O errors (which must be reported, never treated as "no sync").
 func syncVaultID() (string, error) {
-	store, err := syncindex.LoadNoteStore(dataDir)
+	store, err := syncindex.LoadNoteStore(appstate.DataDir)
 	if err != nil {
 		return "", err
 	}
@@ -222,7 +223,7 @@ func syncIdentity() (vaultID, replicaID, stateRoot string, err error) {
 	if err != nil {
 		return "", "", "", err
 	}
-	_, replica, err := syncstate.Resolve(stateRoot, dataDir, vaultID)
+	_, replica, err := syncstate.Resolve(stateRoot, appstate.DataDir, vaultID)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -455,7 +456,7 @@ func buildSyncService(ctx context.Context, repoID, profile string, remote clouds
 		return nil, err
 	}
 	return syncservice.New(syncservice.Config{
-		RepoRoot: dataDir, StateRoot: stateRoot,
+		RepoRoot: appstate.DataDir, StateRoot: stateRoot,
 		VaultID: vaultID, ReplicaID: replicaID,
 		RepoID: repoID, Profile: profile,
 		Remote: remote, Lock: lock,
