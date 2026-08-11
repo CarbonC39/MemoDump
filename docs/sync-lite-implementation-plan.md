@@ -1,6 +1,6 @@
 # MemoDump Versioned-Note Sync — Implementation Plan
 
-Status: R0–R5 implemented and reviewed; R6 planned
+Status: R0–R5 and R6.0–R6.6 implemented and reviewed; R6.7 (documentation and release evidence) in progress
 Date: 2026-08-10
 Architecture contract: [`sync-spec-lite.md`](sync-spec-lite.md)
 

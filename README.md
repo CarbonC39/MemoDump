@@ -118,7 +118,6 @@ Open `http://localhost:8080` in your browser (or the custom port).
 | `--pass` | Login password | — |
 | `--port` | HTTP port | `8080` |
 | `--css` | Custom CSS file injected into the UI | — |
-| `--sync-root` | Cloud-sync device-state root (identity, replicas, snapshot) | OS application data dir |
 
 ### Configuration sources
 
@@ -127,8 +126,8 @@ Settings can be supplied three ways, in priority order:
 | Priority | Source | Notes |
 |----------|--------|-------|
 | 1 (highest) | CLI flags | `--user alice --pass secret` |
-| 2 | Environment variables | `MEMODUMP_DATA`, `MEMODUMP_USER`, `MEMODUMP_PASS`, `MEMODUMP_PORT`, `MEMODUMP_CSS`, `MEMODUMP_SYNC_ROOT` |
-| 3 (lowest) | `.env` file in working directory | `DATA=`, `USER=`, `PASS=`, `PORT=`, `CSS=`, `SYNC_ROOT=` |
+| 2 | Environment variables | `MEMODUMP_DATA`, `MEMODUMP_USER`, `MEMODUMP_PASS`, `MEMODUMP_PORT`, `MEMODUMP_CSS` |
+| 3 (lowest) | `.env` file in working directory | `DATA=`, `USER=`, `PASS=`, `PORT=`, `CSS=` |
 
 **.env file example**
 
@@ -138,23 +137,11 @@ USER=alice
 PASS=secret
 PORT=9090
 CSS=./custom.css
-SYNC_ROOT=./sync-state
 ```
 
-### Cloud-sync state root (`--sync-root`)
-
-Cloud sync is experimental and off by default; nothing is created until a vault
-first enables it. When it is enabled, one installation keeps its sync device
-state — Device ID, the path→Replica registry, and each replica's connection
-record, disposable snapshot, and recovery copies — under a **state root**:
-
-- **Default**: the OS application-data directory (`os.UserConfigDir()/memodump/sync`).
-- **Override**: `--sync-root <dir>`, `MEMODUMP_SYNC_ROOT`, or `SYNC_ROOT=`.
-
-This root lives **outside the vault**: it is never synced, never uploaded, and
-must be persisted alongside the data directory. In a container, mount a volume
-for it (the image sets `MEMODUMP_SYNC_ROOT=/var/lib/memodump/sync`) so replica
-identity and device state survive container recreation.
+Cloud sync has no CLI surface: the CLI Web server does not sync (see
+[Cloud sync](#cloud-sync-experimental)); the Wails desktop build reads its sync
+state from the OS application-data directory.
 
 Lines starting with `#` and blank lines are ignored. Values are not quote-stripped.
 
@@ -166,8 +153,23 @@ settings panel shows a plaintext/no-E2EE warning. It is eventual, not
 real-time, synchronization: a change on device A is uploaded on A's next run
 and downloaded on B's next run, so normal latency is about two intervals.
 
-**Provider configuration.** Set these environment variables on each installation
-(the CLI flags mirror them only for the state root; the provider uses env vars):
+**Who syncs.** Cloud sync runs where the vault lives:
+
+| Runtime | Vault | Sync owner | Automatic lifetime |
+|---------|-------|-----------|--------------------|
+| Wails desktop | Filesystem | Reviewed Go engine (R0–R5) | While the app is open |
+| Pure frontend / PWA (`VITE_LOCAL=1`) | IndexedDB | Browser engine (R6) | While the page/PWA is open |
+| CLI Web server | Server filesystem | None | — |
+
+The CLI Web server's browser clients do **not** sync: they all share the one
+server vault, so there is nothing to converge. The two sync engines are
+wire-compatible — the same versioned note records under `repo.json` +
+`notes/<sync-id>.json` and the same fixtures — so a Wails replica and a PWA
+replica can synchronize through the same bucket.
+
+**Provider configuration (Wails desktop).** Set these environment variables on
+each installation (the CLI flags mirror them only for the state root; the
+provider uses env vars):
 
 | Variable | Meaning |
 |----------|---------|
@@ -182,15 +184,30 @@ All note content is synced **unencrypted** (no E2EE). Use a private bucket and
 restrict its credentials. Prefer HTTPS; plain HTTP is refused except for
 loopback development.
 
+**Browser builds (Pure frontend / PWA).** The PWA keeps its own S3 configuration
+(endpoint, region, bucket, prefix, access/secret key, path style) in browser
+localStorage — the settings panel shows a plaintext-credential warning. The
+bucket must allow the signed traffic from the app origin: CORS must permit
+`PUT/GET/HEAD/DELETE` and the `Authorization`, `Content-Type`, `x-amz-*`,
+`If-Match`, and `If-None-Match` request headers, and expose the `ETag` and
+`Retry-After` response headers (the panel shows the exact template). Sync runs
+only while the page or PWA is open — closing it stops sync, and no background
+work happens afterwards. The PWA vault, sync identity, snapshot, and recovery
+copies live in IndexedDB: clearing site data, or using a private browsing
+window, discards or isolates them, so that PWA starts as a fresh replica the
+next time it is enabled against the same repository (local unsynced changes and
+recovery copies are lost).
+
 **Behavior.** A connected replica (you clicked **Enable** once) runs automatically
-while MemoDump is open: once after a **10-second startup delay**, then every
+while its runtime is open: once after a **10-second startup delay**, then every
 **five minutes**, plus immediately after a successful Enable. `Run now` in the
-settings panel still forces an immediate run. No sync runs while the process is
-closed (a browser tab alone does not keep the CLI server alive — the server
-process must be running). A transient provider failure retries with in-memory
-backoff (`1m, 2m, 5m, 10m, 30m`, reset by success; restart forgets it). An
+settings panel still forces an immediate run. The schedule is identical for the
+Wails desktop (while the app is open) and the PWA (while the page is open), and
+no sync runs after a runtime closes. A transient provider failure retries with
+in-memory backoff (`1m, 2m, 5m, 10m, 30m`, honoring a larger provider
+`Retry-After`, reset by success; restart forgets it). An
 auth/permission/quota/mismatch failure **pauses automatic sync** for the rest of
-the process — the status shows the paused reason — while `Run now` still works;
+the runtime — the status shows the paused reason — while `Run now` still works;
 a successful manual run or Enable clears the pause.
 
 **Cloud sync is not a backup.** Deletes propagate to every device. Provider-side
@@ -198,11 +215,12 @@ versioning/history is external to MemoDump. The durable **recovery copies** the
 app writes before a pulled deletion are local safety aids: inspect and restore
 them from the settings panel.
 
-**State root contents.** The `--sync-root` state directory holds, per replica:
-Device identity and the path→Replica registry, the connection record (provider
-pin + repository ID), one disposable snapshot, and the recovery copies. It
-contains **no WAL, cursor, or durable scheduler queue**, stays **outside the
-vault**, and must persist across container/app recreation (mount a volume).
+**Wails state directory.** The Wails desktop keeps its sync device state — the
+Device ID and path→Replica registry, the connection record (provider pin +
+repository ID), one disposable snapshot, and the recovery copies — in the OS
+application-data directory, outside the vault. It contains **no WAL, cursor, or
+durable scheduler queue**. It is never synced or uploaded; do not delete it
+while a vault is connected or the replica will re-onboard conservatively.
 
 **Do not combine with another filesystem sync tool.** Do not place the same
 vault under Dropbox/iCloud/OneDrive, git automation, or another file-sync tool
@@ -274,7 +292,7 @@ docker run -d -p 9090:9090 -v ./notes:/data \
   ghcr.io/carbonc39/memodump:latest
 ```
 
-The data volume mounts to `/data` (set via `MEMODUMP_DATA=/data` inside the image). Available tags: `latest`, `vX.Y.Z`, `vX.Y`. All [CLI environment variables](#configuration-sources) work the same way inside the container.
+The data volume mounts to `/data` (set via `MEMODUMP_DATA=/data` inside the image). Available tags: `latest`, `vX.Y.Z`, `vX.Y`. All [CLI environment variables](#configuration-sources) work the same way inside the container. Cloud sync does not run in the container: the image is the headless CLI server, whose browser clients share one server vault (see [Cloud sync](#cloud-sync-experimental)).
 
 Build the image locally with `docker build -t memodump .` (see `Dockerfile`).
 
@@ -318,6 +336,24 @@ wails dev
 Output is placed in `build/bin/`.
 
 > **Note:** `wails dev` opens a terminal window for its hot-reload proxy — this is expected. Production builds (`wails build`) use `-H windowsgui` on Windows and produce a GUI-only binary with no console.
+
+### Pure frontend / PWA
+
+A browser-only build with no Go server: notes live in IndexedDB and cloud sync
+runs in the browser (see [Cloud sync](#cloud-sync-experimental)). Build it with
+`VITE_LOCAL=1` and serve the static `dist` directory, or run the local dev
+server with `npm run dev:local` (Vite serves it directly and proxies `/api` to
+a local server for non-sync features):
+
+```sh
+cd frontend && VITE_LOCAL=1 npm run build   # production build
+cd frontend && npm run dev:local            # hot-reload dev server
+```
+
+The browser build must run in a **secure context**: serve it over HTTPS (or
+`http://localhost` during development). Web Locks, `crypto.subtle`, and secure
+IndexedDB rely on it, and a second device must not be pointed at a plain LAN
+HTTP address.
 
 ### Build tags reference
 

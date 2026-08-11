@@ -175,12 +175,13 @@ real) if available.
 14. Confirm no `.tmp` files or `uploads` artifacts remain in the vault
     directory after uploads.
 
-## Cloud sync checklist (R5)
+## Cloud sync checklist (R5, Wails Go engine)
 
-Run against a real or fake S3-compatible provider (MinIO) with two temporary
-data directories, `--sync-root` pointing at a second temporary directory, and
-two browser profiles. Record the application build, provider, date, and result
-for each step on Windows, macOS, and Linux.
+Run against a real or fake S3-compatible provider (MinIO) with two Wails
+installations — two machines or two OS accounts, since the Wails sync state
+lives in the OS application-data directory (per user, outside the vault).
+Record the application build, provider, date, and result for each step on
+Windows, macOS, and Linux.
 
 1. **Startup and periodic convergence.** On replica A, create a note BEFORE
    enabling sync, then Enable: Enable triggers an immediate run, so the note
@@ -190,8 +191,8 @@ for each step on Windows, macOS, and Linux.
    panel shows the next scheduled run.
 2. **Run-now / automatic single-flight.** Trigger `Run now` while an automatic
    run is in progress and confirm they serialize (no overlapping cycles, no
-   duplicate conflict notes). Shut the process down mid-cycle and confirm no
-   background sync work remains and the process exits cleanly.
+   duplicate conflict notes). Shut the app down mid-cycle and confirm no
+   background sync work remains and the app exits cleanly.
 3. **Concurrent edit and both edit/delete conflicts.** Edit the same note on A
    and B; edit on A while deleting on B; delete on A while editing on B. Confirm
    all edited Markdown survives as exactly one conflict note each (never
@@ -204,16 +205,76 @@ for each step on Windows, macOS, and Linux.
    Repeat with an unsaved edit in B's editor: the buffer is not replaced, a
    non-blocking "synced version changed" notice appears, and the existing
    revision CAS prevents overwrite.
-6. **Unicode/case-portable paths and state-root persistence.** Create notes with
+6. **Unicode/case-portable paths and state persistence.** Create notes with
    Unicode names and case-differing names on case-insensitive platforms; confirm
-   both converge. Restart the process (and the container) and confirm identity,
-   the connection pin, and recovery copies survive via the persisted state root.
+   both converge. Restart the app and confirm identity, the connection pin, and
+   recovery copies survive via the persisted OS application-data state.
 7. **Failure behavior.** Revoke the provider credentials (auth failure) and
    confirm the status shows the redacted reason and automatic sync pauses;
    restore them and confirm a manual `Run now` succeeds and clears the pause.
    Disconnect the network mid-run and confirm a transient error is shown and a
    later automatic run retries. Confirm **Disable** stops future attempts, and
    **Reset & reconnect** switches to a second repository deliberately.
+
+## Cloud sync checklist (R6 browser engine)
+
+Run against the **Pure frontend / PWA build** (`cd frontend && npm run
+build:local`, serving `dist` over HTTPS) and a real S3-compatible provider
+(MinIO or a private bucket) with an **isolated prefix**. Keep the browser
+developer console visible. Record the build, provider, browser, date, and
+result for each step.
+
+> The browser build must run in a **secure context**: use HTTPS, or
+> `http://localhost` during development. Web Locks and `crypto.subtle` are
+> unavailable on a plain LAN HTTP address, so a second device/profile must use
+> an HTTPS origin — do not point it at `http://<lan-ip>:port`.
+
+1. **Opt-in real S3 run.** Configure the note-sync form (endpoint, region,
+   bucket, prefix, access/secret key, path style), save, and **Test
+   connection**: it must succeed, and the probe object must be cleaned up in
+   the bucket afterwards. Then **Enable**: the first cycle runs immediately and
+   the status shows the next scheduled run.
+2. **CORS template.** Configure the bucket's CORS with the template from the
+   settings panel (methods + `Authorization`/`Content-Type`/`x-amz-*`/
+   `If-Match`/`If-None-Match` headers, exposing `ETag` and `Retry-After`).
+   Confirm signed reads/writes and the capability probe pass from the app
+   origin and fail (with a clear error) when a header or the ETag exposure is
+   removed.
+3. **PWA↔PWA convergence.** On replica A, create a note, enable sync, and
+   confirm it uploads. On replica B (a second browser profile), enable sync
+   and confirm the note downloads. Edit on A, then confirm B picks the change
+   up on the next automatic interval (page kept open). Repeat with the page
+   hidden on B and confirm nothing runs while hidden and the change arrives
+   when B becomes visible again.
+4. **Wails↔PWA interoperability.** Run the Wails desktop build configured
+   against the same bucket/prefix and a PWA replica: create a note on each side
+   and confirm both converge through the same repository with no conflict
+   notes and byte-compatible records.
+5. **Dirty-editor protection.** Edit a note on A while B has the same note open
+   with an **unsaved change**: B's buffer is never replaced or closed, a
+   non-blocking "synced version changed" notice appears, and saving later
+   either reconciles or surfaces a visible conflict (never a silent overwrite).
+   Repeat with B offline (queued outbox) and with B in a conflict state.
+6. **Conflict / deletion / recovery.** Edit the same note on A and B (exactly
+   one conflict note, no duplicates); edit on A while deleting on B; delete on
+   A while editing on B. Delete a note on A and confirm B writes a durable
+   recovery copy and Restore brings it back at its original path.
+7. **Offline / transient recovery.** Disconnect the network on B, make local
+   edits, reconnect, and confirm the queued edits upload on the next run. Force
+   a transient provider error and confirm the in-memory backoff (`1m, 2m, 5m,
+   10m, 30m`) shows a later scheduled run and honors a larger provider
+   `Retry-After`.
+8. **Failure pause / Reset / repository mismatch.** Revoke the credentials on B:
+   automatic sync pauses with the redacted reason; restore them and a manual
+   `Run now` clears the pause. Confirm **Reset & reconnect** clears the pin and
+   snapshot but keeps notes and recovery copies, and that enabling against a
+   different repository (or a lost `repo.json`) is refused until Reset.
+9. **Clearing site data.** On a disposable replica, clear the site's IndexedDB
+   (devtools → Application → Storage) and confirm the PWA re-enables as a fresh
+   replica against the same repository and re-downloads the remote notes.
+10. **Page-lifetime guarantee.** Close the PWA tab mid-cycle and confirm no
+    console errors and no background work; reopening resumes with the ordinary
+    startup run after 10 seconds.
 
 ## Completion criteria
 
