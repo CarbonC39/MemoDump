@@ -1,6 +1,7 @@
 <template>
   <span class="info-tooltip">
     <button
+      ref="triggerEl"
       type="button"
       class="info-tooltip-trigger"
       :aria-label="label || text"
@@ -15,9 +16,11 @@
     </button>
     <transition name="info-tooltip">
       <div
+        ref="popoverEl"
         v-show="open"
         class="info-tooltip-pop"
         :class="{ 'info-tooltip-pop-right': align === 'right', 'info-tooltip-pop-top': placement === 'top' }"
+        :style="popoverStyle"
         role="tooltip"
         @mouseenter="openNow"
         @mouseleave="scheduleClose"
@@ -29,9 +32,9 @@
 </template>
 
 <script setup>
-import { ref, watch, onBeforeUnmount } from 'vue'
+import { nextTick, ref, watch, onBeforeUnmount } from 'vue'
 
-defineProps({
+const props = defineProps({
   text: { type: String, default: '' },
   label: { type: String, default: '' },
   align: { type: String, default: 'left' }, // 'left' | 'right' — popover edge alignment
@@ -40,7 +43,37 @@ defineProps({
 })
 
 const open = ref(false)
+const triggerEl = ref(null)
+const popoverEl = ref(null)
+const popoverStyle = ref({})
 let leaveTimer = null
+
+function positionPopover() {
+  if (!open.value || !triggerEl.value || !popoverEl.value) return
+
+  const margin = 12
+  const gap = 6
+  const maxWidth = Math.max(0, Math.min(340, window.innerWidth - margin * 2))
+  const trigger = triggerEl.value.getBoundingClientRect()
+  const width = Math.min(popoverEl.value.offsetWidth, maxWidth)
+  const height = popoverEl.value.offsetHeight
+  const preferredLeft = props.align === 'right' ? trigger.right - width : trigger.left
+  const maxLeft = Math.max(margin, window.innerWidth - margin - width)
+  const left = Math.min(Math.max(preferredLeft, margin), maxLeft)
+  const preferredTop = props.placement === 'top'
+    ? trigger.top - gap - height
+    : trigger.bottom + gap
+  const maxTop = Math.max(margin, window.innerHeight - margin - height)
+  const top = Math.min(Math.max(preferredTop, margin), maxTop)
+
+  popoverStyle.value = {
+    left: `${left}px`,
+    right: 'auto',
+    top: `${top}px`,
+    bottom: 'auto',
+    maxWidth: `${maxWidth}px`,
+  }
+}
 
 function openNow() {
   if (leaveTimer) clearTimeout(leaveTimer)
@@ -68,19 +101,28 @@ function onDocKey(e) {
   if (e.key === 'Escape') open.value = false
 }
 
-watch(open, (v) => {
+watch(open, async (v) => {
   if (v) {
     document.addEventListener('click', onDocClick)
     document.addEventListener('keydown', onDocKey)
+    window.addEventListener('resize', positionPopover)
+    window.addEventListener('scroll', positionPopover, true)
+    popoverStyle.value = { maxWidth: `${Math.max(0, Math.min(340, window.innerWidth - 24))}px` }
+    await nextTick()
+    positionPopover()
   } else {
     document.removeEventListener('click', onDocClick)
     document.removeEventListener('keydown', onDocKey)
+    window.removeEventListener('resize', positionPopover)
+    window.removeEventListener('scroll', positionPopover, true)
   }
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocClick)
   document.removeEventListener('keydown', onDocKey)
+  window.removeEventListener('resize', positionPopover)
+  window.removeEventListener('scroll', positionPopover, true)
   if (leaveTimer) clearTimeout(leaveTimer)
 })
 </script>
@@ -116,12 +158,13 @@ onBeforeUnmount(() => {
 }
 
 .info-tooltip-pop {
-  position: absolute;
-  top: calc(100% + 6px);
+  position: fixed;
+  top: 0;
   left: 0;
   z-index: 50;
   width: max-content;
   max-width: 340px;
+  max-height: calc(100vh - 24px);
   padding: 8px 10px;
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -133,6 +176,8 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   text-align: left;
   white-space: normal;
+  overflow-wrap: anywhere;
+  overflow-y: auto;
 }
 .info-tooltip-pop-right {
   left: auto;

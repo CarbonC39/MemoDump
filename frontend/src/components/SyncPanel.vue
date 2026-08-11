@@ -416,6 +416,8 @@ async function onRestore(index) {
 }
 .sync-status {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
   align-items: flex-start;
   gap: 6px;
   margin: 8px 0 14px;
@@ -425,6 +427,10 @@ async function onRestore(index) {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;
+}
+.sync-status > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .sync-status-icon { flex-shrink: 0; font-size: 16px; }
 .sync-status-ok { background: rgba(34, 197, 94, 0.1); }
@@ -442,6 +448,7 @@ async function onRestore(index) {
   font-size: 12px;
   line-height: 1.45;
   text-align: right;
+  overflow-wrap: anywhere;
 }
 .sync-state-copy strong {
   color: var(--text-primary);
@@ -594,11 +601,16 @@ async function onRestore(index) {
 }
 .sync-recovery-list li {
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   color: var(--text-secondary);
   font-size: 12px;
+}
+.sync-recovery-list li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 560px) {
