@@ -1,6 +1,7 @@
 // Lightweight automatic-sync status poller (R5.4). The Wails backend can change
 // local Markdown without a frontend request, so a connected Wails runtime polls
-// the redacted /api/sync/status every 30 seconds while the document is visible.
+// the redacted /api/sync/status every 30 seconds while idle and briefly every
+// second after an in-progress attempt is observed.
 // The Pure frontend/PWA build polls the same redacted shape, served in-page by
 // the R6.5 browser service — never an HTTP call to MemoDump itself. It never
 // calls /api/sync/run, never fetches recovery content on a poll (the status
@@ -9,10 +10,11 @@
 // attempt completes, the visible list is refreshed and the open note is re-read:
 // a clean buffer adopts the new content, a deleted note closes, and a dirty
 // buffer is never replaced — only a notice is shown.
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { applyLightweightStatus, getSyncSettings } from './useSyncSettings'
 
 const DEFAULT_INTERVAL_MS = 30000
+const ACTIVE_INTERVAL_MS = 1000
 const AUTO_TRIGGERS = ['startup', 'periodic', 'retry', 'enable']
 
 export function useSyncPolling({
@@ -20,9 +22,12 @@ export function useSyncPolling({
   editor,
   available = false,
   intervalMs = DEFAULT_INTERVAL_MS,
+  activeIntervalMs = ACTIVE_INTERVAL_MS,
   isVisible = () => !document.hidden,
   setIntervalFn = setInterval,
   clearIntervalFn = clearInterval,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
   addVisibilityListener = (fn) => document.addEventListener('visibilitychange', fn),
   removeVisibilityListener = (fn) => document.removeEventListener('visibilitychange', fn),
   onAutoSync = () => {},
@@ -33,6 +38,8 @@ export function useSyncPolling({
   const { editingNote, isDirty, isSaving, loadDocument, clearDocument, isOffline, isConflict } = editor
   const lastCompleted = ref(null)
   let timer = null
+  let activeTimer = null
+  let stopRunningWatch = null
   let started = false
   let running = false
 
@@ -48,12 +55,32 @@ export function useSyncPolling({
     }
   }
 
+  // The ordinary 30-second poll is deliberately cheap while idle. Once any
+  // status reader observes an in-progress attempt, temporarily follow it at a
+  // short interval so the Settings UI does not display "Syncing" for up to a
+  // full ordinary interval after the backend has already finished.
+  function scheduleActivePoll() {
+    if (!started || !isVisible() || activeTimer !== null) return
+    activeTimer = setTimeoutFn(async () => {
+      activeTimer = null
+      await poll()
+    }, activeIntervalMs)
+  }
+
+  function stopActivePoll() {
+    if (activeTimer === null) return
+    clearTimeoutFn(activeTimer)
+    activeTimer = null
+  }
+
   function onVisibilityChange() {
     if (isVisible()) {
       startTimer()
+      if (getSyncSettings().syncRunning) scheduleActivePoll()
       poll() // refresh once when visibility returns
     } else {
       stopTimer()
+      stopActivePoll()
     }
   }
 
@@ -64,6 +91,14 @@ export function useSyncPolling({
     if (!available || started) return
     started = true
     addVisibilityListener(onVisibilityChange)
+    stopRunningWatch = watch(
+      () => getSyncSettings().syncRunning,
+      (syncRunning) => {
+        if (syncRunning) scheduleActivePoll()
+        else stopActivePoll()
+      },
+      { immediate: true },
+    )
     if (isVisible()) {
       startTimer()
     }
@@ -74,11 +109,23 @@ export function useSyncPolling({
     if (!started) return
     started = false
     stopTimer()
+    stopActivePoll()
+    if (stopRunningWatch) {
+      stopRunningWatch()
+      stopRunningWatch = null
+    }
     removeVisibilityListener(onVisibilityChange)
   }
 
   async function poll() {
-    if (!available || running) return
+    if (!available) return
+    if (running) {
+      // A fast tick can coincide with the ordinary interval. Preserve the
+      // follow-up instead of falling back to a 30-second wait if that in-flight
+      // request fails while the last visible state is still "running".
+      if (getSyncSettings().syncRunning) scheduleActivePoll()
+      return
+    }
     running = true
     try {
       const resp = await api.syncStatus()
@@ -91,6 +138,8 @@ export function useSyncPolling({
       // Keep the settings panel fresh (running/next-run/paused) without
       // downloading recovery content on every poll.
       applyLightweightStatus(d)
+      if (d.syncRunning) scheduleActivePoll()
+      else stopActivePoll()
       const completed = d.lastCompleted
       const autoTrigger = AUTO_TRIGGERS.includes(d.lastTrigger)
       if (completed && completed !== lastCompleted.value) {

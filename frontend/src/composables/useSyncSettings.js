@@ -99,8 +99,17 @@ async function withBusy(fn) {
 export async function enableSync() {
   return withBusy(async () => {
     const { data } = await apiClient.syncEnable()
-    state.enabled = true
     await refreshSyncSettings()
+    // A successful Enable response is the authoritative transition: the Go
+    // handler has already durably written connected=true, while the browser
+    // implementation has already completed its immediate run. Do not leave
+    // the UI dependent on a following GET (a WebView may still hold an older
+    // status response from before the transition).
+    state.enabled = true
+    state.connected = true
+    state.connection = true
+    state.connectionError = ''
+    state.identityError = ''
     // The browser Enable awaits its immediate run (the Go backend wakes an
     // asynchronous scheduler instead), so a local-build enable refreshes the
     // visible list and the open note through the same safe logic a manual run
@@ -113,17 +122,25 @@ export async function enableSync() {
 
 export async function runSync() {
   return withBusy(async () => {
-    const { data } = await apiClient.syncRun()
-    state.lastRun = data
-    state.lastCompleted = new Date().toISOString()
-    state.lastTrigger = 'manual'
-    // The disk may already have changed even when the cycle reports Synced=false
-    // (notes pulled, then other notes Retry/Blocked). Refresh the list and the
-    // open note whenever a result returns; Synced only gates the toast/pause.
-    if (data && onSyncChanged) {
-      onSyncChanged()
+    state.syncRunning = true
+    try {
+      const { data } = await apiClient.syncRun()
+      state.lastRun = data
+      state.lastCompleted = new Date().toISOString()
+      state.lastTrigger = 'manual'
+      // The disk may already have changed even when the cycle reports Synced=false
+      // (notes pulled, then other notes Retry/Blocked). Refresh the list and the
+      // open note whenever a result returns; Synced only gates the toast/pause.
+      if (data && onSyncChanged) {
+        onSyncChanged()
+      }
+      return data
+    } finally {
+      // Both the HTTP and in-page implementations resolve only after the
+      // manual attempt has left its run boundary, so this transition is
+      // authoritative and need not wait for the next status poll.
+      state.syncRunning = false
     }
-    return data
   })
 }
 
@@ -141,6 +158,9 @@ export async function disableSync() {
     const { data } = await apiClient.syncDisable()
     state.connected = false
     state.enabled = false
+    // Disable preserves the durable connection profile so the same provider
+    // can be reconnected without resetting identity.
+    state.connection = true
     return data
   })
 }

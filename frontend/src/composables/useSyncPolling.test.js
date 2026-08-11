@@ -49,6 +49,7 @@ describe('useSyncPolling', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     getSyncSettings().recoveryCount = 0
+    getSyncSettings().syncRunning = false
   })
 
   it('polls lightweight status without ever downloading recovery content', async () => {
@@ -258,6 +259,45 @@ describe('useSyncPolling', () => {
     expect(s.autoPaused).toBe(true)
     expect(s.pauseReason).toBe('permission')
     expect(s.lastTrigger).toBe('periodic')
+    p.stop()
+  })
+
+  it('temporarily polls every second until a running sync finishes', async () => {
+    const api = {
+      syncStatus: vi.fn()
+        .mockResolvedValueOnce(baseStatus({ syncRunning: true, lastCompleted: null }))
+        .mockResolvedValueOnce(baseStatus({ syncRunning: false, lastCompleted: '2026-08-09T00:10:00Z' })),
+      getNote: vi.fn().mockResolvedValue({ data: { revision: 'r1' } }),
+    }
+    const { p } = makePolling({ api, editor: makeEditor() })
+    p.start()
+
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(getSyncSettings().syncRunning).toBe(true)
+    expect(api.syncStatus).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(999)
+    expect(api.syncStatus).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+
+    expect(api.syncStatus).toHaveBeenCalledTimes(2)
+    expect(getSyncSettings().syncRunning).toBe(false)
+    p.stop()
+  })
+
+  it('starts fast polling when another status reader observes a running sync', async () => {
+    const api = {
+      syncStatus: vi.fn().mockResolvedValue(baseStatus({ syncRunning: false })),
+      getNote: vi.fn().mockResolvedValue({ data: { revision: 'r1' } }),
+    }
+    const { p } = makePolling({ api, editor: makeEditor() })
+    p.start()
+
+    getSyncSettings().syncRunning = true
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(api.syncStatus).toHaveBeenCalledTimes(1)
+    expect(getSyncSettings().syncRunning).toBe(false)
     p.stop()
   })
 

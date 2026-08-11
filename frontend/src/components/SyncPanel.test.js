@@ -124,6 +124,15 @@ describe('SyncPanel runtime visibility (R6.0)', () => {
     expect(apiClient.syncEnable).toHaveBeenCalledTimes(1)
     expect(apiClient.syncConfigTest).not.toHaveBeenCalled()
     expect(apiClient.syncTest).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="sync-run"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="sync-disconnect"]').exists()).toBe(true)
+    expect(wrapper.find('.sync-config').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="sync-disconnect"]').trigger('click')
+    await flushPromises()
+
+    expect(apiClient.syncDisable).toHaveBeenCalledOnce()
+    expect(wrapper.find('.sync-config').exists()).toBe(true)
     wrapper.unmount()
   })
 

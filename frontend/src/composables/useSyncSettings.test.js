@@ -87,6 +87,34 @@ describe('sync settings', () => {
     expect(apiClient.syncTest).toHaveBeenCalled()
   })
 
+  it('clears the running state as soon as a manual attempt returns', async () => {
+    getSyncSettings().syncRunning = true
+
+    await runSync()
+
+    expect(getSyncSettings().syncRunning).toBe(false)
+  })
+
+  it('clears the running state when a manual attempt fails', async () => {
+    apiClient.syncRun.mockRejectedValueOnce(new Error('sync failed'))
+
+    await expect(runSync()).rejects.toThrow('sync failed')
+
+    expect(getSyncSettings().syncRunning).toBe(false)
+  })
+
+  it('adopts a successful enable even when the following status read is stale', async () => {
+    apiClient.syncStatus.mockResolvedValue({
+      data: { enabled: false, connected: false, connection: false },
+    })
+
+    await enableSync()
+
+    expect(getSyncSettings().enabled).toBe(true)
+    expect(getSyncSettings().connected).toBe(true)
+    expect(getSyncSettings().connection).toBe(true)
+  })
+
   it('hydrates the connection record state and surfaces a connection error', async () => {
     apiClient.syncStatus.mockResolvedValue({
       data: { enabled: false, connected: false, connection: true, connectionError: 'corrupt' },
