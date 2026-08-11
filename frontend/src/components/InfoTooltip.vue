@@ -11,10 +11,17 @@
       @focus="openNow"
       @blur="scheduleClose"
     >
-      <span class="material-icons-outlined">help_outline</span>
+      <span class="material-icons-outlined">{{ icon }}</span>
     </button>
     <transition name="info-tooltip">
-      <div v-show="open" class="info-tooltip-pop" :class="{ 'info-tooltip-pop-right': align === 'right' }" role="tooltip" @mouseenter="openNow" @mouseleave="scheduleClose">
+      <div
+        v-show="open"
+        class="info-tooltip-pop"
+        :class="{ 'info-tooltip-pop-right': align === 'right', 'info-tooltip-pop-top': placement === 'top' }"
+        role="tooltip"
+        @mouseenter="openNow"
+        @mouseleave="scheduleClose"
+      >
         <slot>{{ text }}</slot>
       </div>
     </transition>
@@ -28,6 +35,8 @@ defineProps({
   text: { type: String, default: '' },
   label: { type: String, default: '' },
   align: { type: String, default: 'left' }, // 'left' | 'right' — popover edge alignment
+  icon: { type: String, default: 'help_outline' },
+  placement: { type: String, default: 'bottom' }, // 'top' | 'bottom'
 })
 
 const open = ref(false)
@@ -128,6 +137,10 @@ onBeforeUnmount(() => {
 .info-tooltip-pop-right {
   left: auto;
   right: 0;
+}
+.info-tooltip-pop-top {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 
 .info-tooltip-enter-active,

@@ -1,26 +1,45 @@
+import { unified } from 'unified'
+import remarkParse from 'remark-parse'
+import remarkGfm from 'remark-gfm'
+
+const previewParser = unified().use(remarkParse).use(remarkGfm)
+const previewBlockNodes = new Set([
+  'paragraph', 'heading', 'blockquote', 'list', 'listItem', 'table', 'tableRow',
+  'code', 'html', 'thematicBreak',
+])
+const ignoredPreviewNodes = new Set([
+  'code', 'html', 'image', 'imageReference', 'definition', 'thematicBreak',
+])
+
+function collectPreviewText(node, output) {
+  if (node.type === 'text' || node.type === 'inlineCode') {
+    output.push(node.value || '')
+    return
+  }
+  if (node.type === 'break') {
+    output.push('\n')
+    return
+  }
+  if (ignoredPreviewNodes.has(node.type)) {
+    if (previewBlockNodes.has(node.type)) output.push('\n')
+    return
+  }
+
+  for (const child of node.children || []) collectPreviewText(child, output)
+  if (previewBlockNodes.has(node.type)) output.push('\n')
+}
+
 /**
- * Strip markdown symbols for plain text preview
+ * Convert Markdown into the visible plain text used by note previews.
+ * Parsing first means plain angle-bracket text is not confused with HTML.
  */
 export function stripMarkdown(text) {
   if (!text) return ''
-  return text
-    .replace(/^#{1,6}\s+/gm, '')              // headings
-    .replace(/<(https?:\/\/[^>\s]+)>/g, '$1') // autolinks <url> → bare url
-    .replace(/<[^>]*>/g, '')                  // HTML tags
-    .replace(/```[\s\S]*?```/g, '')           // fenced code blocks
-    .replace(/!\[.*?\]\(.*?\)/g, '')          // images
-    .replace(/\[([^\]]+)\]\(.*?\)/g, '$1')    // links — keep link text, drop URL
-    .replace(/^\s*[-*+]\s+\[[ xX]\]\s*/gm, '') // task list items: - [ ] / - [x]
-    // Underscore emphasis: only strip when delimiters are at word boundaries,
-    // so URLs/identifiers like foo_bar or example.com/a_b keep their underscores.
-    .replace(/(^|[^\w])__(\S(?:[^_\n]*?\S)?)__(?=[^\w]|$)/g, '$1$2')
-    .replace(/(^|[^\w])_(\S(?:[^_\n]*?\S)?)_(?=[^\w]|$)/g, '$1$2')
-    .replace(/[*~`]/g, '')                    // bold/italic asterisks, strikethrough, inline code
-    .replace(/^\s*>\s*/gm, '')                // blockquote markers
-    .replace(/^\s*[-+*]\s+/gm, '')            // unordered list bullets
-    .replace(/^\s*\d+\.\s+/gm, '')            // ordered list
-    .replace(/^---+$/gm, '')                  // hr
+  const output = []
+  collectPreviewText(previewParser.parse(text), output)
+  return output.join('')
     .replace(/[ \t\r]+/g, ' ')                // collapse horizontal whitespace
+    .replace(/ *\n */g, '\n')                 // trim around line boundaries
     .replace(/\n+/g, '\n')                    // collapse multiple blank lines
     .trim()
 }

@@ -2,27 +2,31 @@
   <div v-if="visible" class="context-menu-overlay" @click="$emit('close')" @contextmenu.prevent="$emit('close')"></div>
   <div v-if="visible" class="context-menu" :style="{ top: y + 'px', left: x + 'px' }">
     <div class="context-menu-item" @click="$emit('edit')">
-      <span class="material-icons-outlined">edit</span> Edit
+      <span class="material-icons-outlined">edit</span> {{ t('actions.edit') }}
     </div>
     <div class="context-menu-item" @click="$emit('copy')">
-      <span class="material-icons-outlined">content_copy</span> Copy Full Text
+      <span class="material-icons-outlined">content_copy</span> {{ t('actions.copyFullText') }}
     </div>
     <div class="context-menu-item" @click="$emit('duplicate')">
-      <span class="material-icons-outlined">file_copy</span> Duplicate
+      <span class="material-icons-outlined">library_add</span> {{ t('actions.duplicate') }}
     </div>
     <div class="context-menu-item" @click="$emit('download')">
-      <span class="material-icons-outlined">download</span> Download
+      <span class="material-icons-outlined">download</span> {{ t('actions.download') }}
     </div>
     <div class="context-menu-item" @click="$emit('move')">
-      <span class="material-icons-outlined">drive_file_move</span> Move
+      <span class="material-icons-outlined">drive_file_move</span> {{ t('actions.move') }}
     </div>
     <div class="context-menu-item text-danger" @click="$emit('delete')">
-      <span class="material-icons-outlined">delete_outline</span> Delete
+      <span class="material-icons-outlined">delete_outline</span> {{ t('actions.delete') }}
     </div>
   </div>
 </template>
 
 <script setup>
+import { useI18n } from '../i18n'
+
+const { t } = useI18n()
+
 defineProps({
   visible: Boolean,
   x: { type: Number, default: 0 },

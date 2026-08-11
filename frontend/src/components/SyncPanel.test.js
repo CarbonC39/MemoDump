@@ -127,6 +127,20 @@ describe('SyncPanel runtime visibility (R6.0)', () => {
     wrapper.unmount()
   })
 
+  it('shows an explicit disclosure caret for advanced settings', async () => {
+    setCloudSyncAvailable(true)
+    const wrapper = mount(SyncPanel)
+    await flushPromises()
+
+    const details = wrapper.find('.sync-advanced')
+    expect(details.find('.details-caret').text()).toBe('expand_more')
+    expect(details.attributes('open')).toBeUndefined()
+    details.element.open = true
+    await details.trigger('toggle')
+    expect(details.element.open).toBe(true)
+    wrapper.unmount()
+  })
+
   it('renders the browser S3 configuration form in the Pure frontend/PWA build', async () => {
     // R6.5: the local build owns its sync engine, so its panel carries the
     // independent note-sync configuration form plus the browser warnings.

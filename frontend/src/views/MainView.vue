@@ -172,6 +172,8 @@
       :new-folder-active="folderPicker.newFolderActive"
       :new-folder-name="folderPicker.newFolderName"
       :folders="flatFoldersForPicker"
+      :mode="folderPicker.mode"
+      :current-folder="folderPicker.currentFolder"
       @update:selected="folderPicker.selected = $event"
       @update:new-folder-name="folderPicker.newFolderName = $event"
       @close="closeFolderPicker"
@@ -485,7 +487,7 @@ onBeforeUnmount(() => {
 
 // ===== FOLDER PICKER FOR META PANEL =====
 async function pickEditFolder() {
-  const dest = await showFolderPicker(editFolder.value)
+  const dest = await showFolderPicker(editFolder.value, { mode: 'select' })
   if (dest !== null) editFolder.value = dest
 }
 

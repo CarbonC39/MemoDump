@@ -27,6 +27,7 @@ import { Plugin, PluginKey } from '@milkdown/prose/state'
 import { editorViewCtx } from '@milkdown/kit/core'
 import { stageAndUploadImage, resolvePending, revokeObjectUrls } from '../composables/mediaOutbox'
 import { imageInsertStillCurrent } from './imageInsertGuard'
+import { createEditorChangeBridge } from './editorChangeBridge'
 
 const props = defineProps({
   documentVersion: { type: Number, required: true },
@@ -75,9 +76,21 @@ let _created = false
 let _activeDocumentVersion = null
 let _replacingDocument = false
 let _latestMarkdown = props.initialContent
-let _hasUserInput = false
-let _handleUserInput = null
-let _handleEditorControl = null
+let _acceptingBaseline = true
+let _changeBridge = null
+
+const publishDocumentChangesPlugin = $prose(() => {
+  return new Plugin({
+    key: new PluginKey('publish-document-changes'),
+    view: () => ({
+      update(view, previousState) {
+        if (!_created || previousState.doc.eq(view.state.doc)) return
+        const userChange = !_replacingDocument && !_acceptingBaseline
+        _changeBridge?.changed(userChange)
+      },
+    }),
+  })
+})
 
 function imageFileCandidates(files) {
   return Array.from(files || []).filter((file) =>
@@ -87,7 +100,6 @@ function imageFileCandidates(files) {
 
 function insertImageNode(url, pos = null) {
   if (!_created || _destroyed || !crepeInstance) return 0
-  _hasUserInput = true
   let insertedSize = 0
   crepeInstance.editor.action((ctx) => {
     const view = ctx.get(editorViewCtx)
@@ -171,7 +183,7 @@ function doTypewriterScroll() {
 
 function replaceDocument() {
   if (!_created || _destroyed || !crepeInstance) return
-  _hasUserInput = false
+  _changeBridge?.reset()
   _replacingDocument = true
   try {
     crepeInstance.editor.action(replaceAll(props.initialContent))
@@ -189,14 +201,6 @@ watch(() => props.documentVersion, () => {
 onMounted(async () => {
   if (!editorEl.value) return
   _editorElRef = editorEl.value
-  _handleUserInput = () => { _hasUserInput = true }
-  _handleEditorControl = (event) => {
-    if (event.target.closest?.('button, input, select, textarea')) {
-      _hasUserInput = true
-    }
-  }
-  _editorElRef.addEventListener('input', _handleUserInput, true)
-  _editorElRef.addEventListener('pointerdown', _handleEditorControl, true)
   _editorElRef.addEventListener('paste', handleImagePaste)
   _editorElRef.addEventListener('drop', handleImageDrop)
   const startingDocumentVersion = props.documentVersion
@@ -205,7 +209,7 @@ onMounted(async () => {
     root: editorEl.value,
     defaultValue: props.initialContent,
   })
-    .addFeature(cursor)
+    .addFeature(cursor, { virtual: false })
     .addFeature(listItem)
     .addFeature(linkTooltip)
     .addFeature(imageBlock, {
@@ -225,29 +229,28 @@ onMounted(async () => {
     .addFeature(codeMirror, { languages, theme: oneDark })
     .addFeature(table)
   crepeInstance.editor.use(resetEmptiedTaskItemPlugin)
+  crepeInstance.editor.use(publishDocumentChangesPlugin)
+
+  _changeBridge = createEditorChangeBridge({
+    readMarkdown: () => crepeInstance?.getMarkdown() ?? _latestMarkdown,
+    publishUpdate: (markdown) => {
+      if (_destroyed) return
+      _latestMarkdown = markdown
+      emit('update', markdown)
+      requestAnimationFrame(doTypewriterScroll)
+    },
+    publishReady: (markdown) => {
+      if (_destroyed) return
+      _latestMarkdown = markdown
+      emit('document-ready', markdown)
+    },
+  })
 
   // ---- image paste / drop ----
   // Crepe's image components only handle the upload button and link input;
   // pasting or dropping image files is MemoDump's responsibility. For image
   // files we always preventDefault + stopPropagation so MainView's file-import
   // drop handler (.md/.txt, alert on anything else) never swallows them.
-  crepeInstance.on((listener) => {
-    listener.markdownUpdated((_, markdown) => {
-      if (!_destroyed) {
-        _latestMarkdown = markdown
-      }
-      if (!_destroyed && _created && !_replacingDocument && _hasUserInput) {
-        emit('update', markdown)
-        requestAnimationFrame(doTypewriterScroll)
-      } else if (!_destroyed && _created && !_replacingDocument) {
-        // Crepe plugins can normalize an existing document shortly after
-        // creation (the listener itself is debounced). Treat those
-        // programmatic transactions as a new clean baseline, not an edit.
-        emit('document-ready', markdown)
-      }
-    })
-  })
-
   try {
     await crepeInstance.create()
   } catch (e) {
@@ -276,8 +279,10 @@ onMounted(async () => {
   await nextFrame()
   if (_destroyed) return
   if (props.documentVersion === startingDocumentVersion) {
+    _latestMarkdown = crepeInstance.getMarkdown()
     emit('document-ready', _latestMarkdown)
   }
+  _acceptingBaseline = false
   editorReady.value = true
   emit('ready')
 
@@ -291,17 +296,13 @@ onBeforeUnmount(() => {
   if (_editorElRef && _handleKeyScroll) {
     _editorElRef.removeEventListener('keydown', _handleKeyScroll)
   }
-  if (_editorElRef && _handleUserInput) {
-    _editorElRef.removeEventListener('input', _handleUserInput, true)
-  }
-  if (_editorElRef && _handleEditorControl) {
-    _editorElRef.removeEventListener('pointerdown', _handleEditorControl, true)
-  }
   if (_editorElRef) {
     _editorElRef.removeEventListener('paste', handleImagePaste)
     _editorElRef.removeEventListener('drop', handleImageDrop)
   }
   revokeObjectUrls()
+  _changeBridge?.destroy()
+  _changeBridge = null
   if (crepeInstance) {
     crepeInstance.destroy()
     crepeInstance = null
@@ -327,6 +328,9 @@ onBeforeUnmount(() => {
   min-height: 100%;
   outline: none;
   padding-bottom: 45vh;
+}
+.crepe-editor :deep(.ProseMirror:not(.ProseMirror-hideselection)) {
+  caret-color: var(--primary);
 }
 
 /* ===== Fix Milkdown heading display anomaly ===== */

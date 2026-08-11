@@ -8,7 +8,7 @@
     "dataFolder": "数据目录",
     "signOut": "退出登录",
     "savedInBrowser": "已保存在此浏览器中",
-    "savedInBrowserTitle": "你的笔记保存在此浏览器的本地存储中 — 不会上传到服务器。"
+    "savedInBrowserTitle": "笔记保存在当前浏览器中；启用云端同步后，也会同步到你配置的存储。"
   },
   "editor": {
     "save": "保存",
@@ -192,7 +192,11 @@
     "create": "创建",
     "moveHere": "移动",
     "moveToFolder": "移动到文件夹",
+    "selectFolder": "选择文件夹",
+    "selectHere": "选择此文件夹",
+    "destination": "目标位置",
     "newFolder": "新建文件夹",
+    "newFolderIn": "在“{folder}”中新建文件夹",
     "folderName": "文件夹名称：",
     "newName": "新名称：",
     "copyText": "复制文本",
@@ -233,6 +237,7 @@
   "actions": {
     "edit": "编辑",
     "copyFullText": "复制全文",
+    "duplicate": "创建副本",
     "download": "下载",
     "move": "移动",
     "delete": "删除"

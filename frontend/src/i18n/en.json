@@ -8,7 +8,7 @@
     "dataFolder": "Data Folder",
     "signOut": "Sign Out",
     "savedInBrowser": "Saved in this browser",
-    "savedInBrowserTitle": "Your notes are kept in this browser's local storage — nothing is uploaded to a server."
+    "savedInBrowserTitle": "Notes are stored in this browser. If cloud sync is enabled, they are also synchronized to your configured storage."
   },
   "editor": {
     "save": "Save",
@@ -192,7 +192,11 @@
     "create": "Create",
     "moveHere": "Move Here",
     "moveToFolder": "Move to Folder",
+    "selectFolder": "Select Folder",
+    "selectHere": "Select This Folder",
+    "destination": "Destination",
     "newFolder": "New Folder",
+    "newFolderIn": "New folder in “{folder}”",
     "folderName": "Folder name:",
     "newName": "New name:",
     "copyText": "Copy Text",
@@ -233,6 +237,7 @@
   "actions": {
     "edit": "Edit",
     "copyFullText": "Copy Full Text",
+    "duplicate": "Duplicate",
     "download": "Download",
     "move": "Move",
     "delete": "Delete"

@@ -96,11 +96,20 @@ export function useDialogs({ folders }) {
 
   // ===== Folder Picker Modal =====
   // Folder Picker Modal State
-  const folderPicker = reactive({ visible: false, selected: '', newFolderActive: false, newFolderName: '' })
+  const folderPicker = reactive({
+    visible: false,
+    selected: '',
+    currentFolder: '',
+    mode: 'move',
+    newFolderActive: false,
+    newFolderName: '',
+  })
   let folderPickerResolve = null
 
-  function showFolderPicker(defaultFolder = '') {
+  function showFolderPicker(defaultFolder = '', { mode = 'move', currentFolder = defaultFolder } = {}) {
     folderPicker.selected = defaultFolder
+    folderPicker.currentFolder = currentFolder
+    folderPicker.mode = mode
     folderPicker.newFolderActive = false
     folderPicker.newFolderName = ''
     folderPicker.visible = true

@@ -24,6 +24,9 @@
     "axios": "^1.13.6",
     "js-yaml": "^4.1.1",
     "material-icons": "^1.13.14",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5",
     "vue": "^3.5.25",
     "vue-router": "^4.6.4"
   },

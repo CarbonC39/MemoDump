@@ -112,10 +112,15 @@
         >
           <span class="material-icons-outlined">settings</span>
         </button>
-      </div>
-      <div v-if="isLocalBuild" class="local-hint" :title="t('sidebar.savedInBrowserTitle')">
-        <span class="material-icons-outlined">cloud_off</span>
-        <span>{{ t('sidebar.savedInBrowser') }}</span>
+        <InfoTooltip
+          v-if="isLocalBuild"
+          class="local-storage-indicator"
+          icon="storage"
+          align="right"
+          placement="top"
+          :text="t('sidebar.savedInBrowserTitle')"
+          :label="t('sidebar.savedInBrowserTitle')"
+        />
       </div>
     </div>
   </aside>
@@ -125,6 +130,7 @@
 import { ref } from 'vue'
 import { useI18n } from '../i18n'
 import FolderNode from './FolderNode.vue'
+import InfoTooltip from './InfoTooltip.vue'
 
 defineProps({
   mobileOpen: { type: Boolean, default: false },
@@ -336,20 +342,9 @@ function triggerFileInput() {
   color: var(--primary-dark);
   background: var(--primary-bg);
 }
-.local-hint {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.4;
-}
-.local-hint .material-icons-outlined {
-  color: var(--text-muted);
-  font-size: 16px;
-}
+.local-storage-indicator { color: var(--text-secondary); }
+.local-storage-indicator :deep(.info-tooltip-trigger) { width: 36px; height: 36px; }
+.local-storage-indicator :deep(.info-tooltip-trigger .material-icons-outlined) { font-size: 20px; }
 
 @media (max-width: 768px) {
   .sidebar {

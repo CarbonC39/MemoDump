@@ -48,6 +48,19 @@ describe('useNoteEditor', () => {
     expect(editor.isDirty.value).toBe(false)
   })
 
+  it('marks checking or unchecking a checklist item as dirty', () => {
+    const editor = useNoteEditor()
+    editor.loadDocument({ path: 'n.md', name: 'n', tags: [], content: '- [ ] task\n' })
+    editor.onEditorReady('- [ ] task\n')
+    editor.onEditorUpdate('- [x] task\n')
+    expect(editor.isDirty.value).toBe(true)
+
+    editor.loadDocument({ path: 'n.md', name: 'n', tags: [], content: '- [x] task\n' })
+    editor.onEditorReady('- [x] task\n')
+    editor.onEditorUpdate('- [ ] task\n')
+    expect(editor.isDirty.value).toBe(true)
+  })
+
   it('accepts post-mount markdown normalization as a clean baseline', () => {
     const editor = useNoteEditor()
     editor.loadDocument({

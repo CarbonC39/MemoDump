@@ -134,7 +134,8 @@
           <details class="sync-advanced">
             <summary>
               <span class="material-icons-outlined sync-advanced-icon" aria-hidden="true">tune</span>
-              {{ t('settings.syncAdvanced') }}
+              <span>{{ t('settings.syncAdvanced') }}</span>
+              <span class="material-icons-outlined details-caret" aria-hidden="true">expand_more</span>
             </summary>
             <div class="sync-advanced-body">
               <label class="setting-row sync-field">
@@ -155,7 +156,8 @@
           <details v-if="isLocalBuild" class="cors-template">
             <summary>
               <span class="material-icons-outlined cors-template-icon" aria-hidden="true">dns</span>
-              {{ t('settings.syncCorsTemplate') }}
+              <span>{{ t('settings.syncCorsTemplate') }}</span>
+              <span class="material-icons-outlined details-caret" aria-hidden="true">expand_more</span>
             </summary>
             <pre class="cors-template-code">{{ syncCorsTemplate }}</pre>
             <p class="cors-template-warning">{{ t('settings.syncCorsHint') }}</p>
@@ -489,6 +491,14 @@ async function onRestore(index) {
 }
 .sync-advanced summary::-webkit-details-marker { display: none; }
 .sync-advanced-icon { font-size: 16px; }
+.details-caret {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 18px;
+  transition: transform 0.15s ease;
+}
+.sync-advanced[open] .details-caret,
+.cors-template[open] .details-caret { transform: rotate(180deg); }
 .sync-advanced-body { padding-top: 12px; }
 .input-checkbox {
   appearance: none;
