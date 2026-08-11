@@ -113,7 +113,7 @@
     "syncCredentialWarning": "凭据仅保存在本浏览器中，未加密。",
     "syncDeletesPropagate": "删除已同步的便签会从所有已同步设备上删除。",
     "syncCorsTemplate": "便签同步的 bucket CORS",
-    "syncCorsHint": "私有便签存储要求 CORS 允许签名后的 PUT/GET/DELETE 方法以及 Authorization、If-Match、If-None-Match 与 x-amz-* 请求头，并暴露 ETag 响应头。",
+    "syncCorsHint": "私有便签存储要求 CORS 允许签名后的 PUT/GET/DELETE 方法以及 Authorization、If-Match、If-None-Match 与 x-amz-* 请求头，并暴露 ETag 与 Retry-After 响应头。",
     "syncEnable": "启用",
     "syncRun": "立即同步",
     "syncDisable": "停用",

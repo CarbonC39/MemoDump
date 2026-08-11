@@ -22,6 +22,7 @@ import { S3Store, StoreError, normalizeConfig, providerProfile } from './s3store
 import { serializeRepositoryDescriptor, parseRepositoryDescriptor } from './repo.js'
 import { runSyncCycle, cycleUnderLock } from './coordinator.js'
 import { classifyErrorLabel } from './retry.js'
+import { createSyncScheduler, PERIODIC_EVERY_MS } from './scheduler.js'
 import { newUUIDv4 } from './uuid.js'
 import { utf8Bytes } from './hash.js'
 
@@ -37,6 +38,13 @@ let syncRunning = false
 let lastRun = null
 let lastCompleted = null
 let lastTrigger = ''
+// lastAttemptClassification is the internal scheduler outcome of the most
+// recent attempt, derived from the REAL error/cycle BEFORE redaction so the
+// scheduler never reverse-engineers a decision from the redacted LastError.
+let lastAttemptClassification = null
+let scheduler = null
+let schedulerDeps = {}
+let onSchedulerAttempt = null
 
 function loadConfig() {
   try {
@@ -154,7 +162,12 @@ function classifyLabel(e) {
     case 'snapshot-mismatch':
       return 'mismatch'
     case 'repository-loss':
+    case 'invalid-repo':
       return 'repo-loss'
+    case 'invalid-record':
+    case 'record-syncid-mismatch':
+    case 'conflict-error':
+      return 'invalid-response'
     case 'identity-corrupt':
     case 'connection-corrupt':
     case 'index-corrupt':
@@ -173,21 +186,28 @@ function recordRun(result, trigger) {
 // runOnce runs one serialized cycle for the current replica and always records
 // a redacted outcome; the cycle never rejects through here. A second concurrent
 // attempt is refused with a locked result, mirroring the Go replica lock.
-async function runOnce(store, trigger) {
+// signal carries page-closure cancellation into the coordinator and the store.
+async function runOnce(store, trigger, { signal } = {}) {
   if (syncRunning) {
-    const locked = { Synced: false, Scanned: 0, Blocked: 0, Retry: 0, Conflicts: 0, SnapshotCommitted: false, LastError: 'locked' }
+    const locked = redactedFailure('locked')
     recordRun(locked, trigger)
+    lastAttemptClassification = { kind: 'success', result: locked }
     return locked
   }
   syncRunning = true
   try {
-    const res = await runSyncCycle(store, { locks })
+    const res = await runSyncCycle(store, { locks, signal })
     const red = redactCycle(res)
     recordRun(red, trigger)
+    lastAttemptClassification = classifyCycleResult(red, res.retryAfterSeconds || 0)
     return red
   } catch (e) {
-    const red = { Synced: false, Scanned: 0, Blocked: 0, Retry: 0, Conflicts: 0, SnapshotCommitted: false, LastError: classifyLabel(e) }
+    const red = redactedFailure(classifyLabel(e))
     recordRun(red, trigger)
+    // The classification carries the redacted result so the public surface can
+    // return it even when the attempt failed (permission/transport/rate-limit/
+    // corrupt repo): the caller never sees data: undefined.
+    lastAttemptClassification = { ...classifyError(e), result: red }
     return red
   } finally {
     syncRunning = false
@@ -197,24 +217,97 @@ async function runOnce(store, trigger) {
 // runOnceUnderLock runs the cycle body when the caller ALREADY holds the vault
 // Web Lock (enable must pin the connection and run the first cycle under ONE
 // lock so a concurrent Reset/Disable can never interleave with it).
-async function runOnceUnderLock(store, trigger) {
+async function runOnceUnderLock(store, trigger, { signal } = {}) {
   if (syncRunning) {
-    const locked = { Synced: false, Scanned: 0, Blocked: 0, Retry: 0, Conflicts: 0, SnapshotCommitted: false, LastError: 'locked' }
+    const locked = redactedFailure('locked')
     recordRun(locked, trigger)
+    lastAttemptClassification = { kind: 'success', result: locked }
     return locked
   }
   syncRunning = true
   try {
-    const res = await cycleUnderLock(store)
+    const res = await cycleUnderLock(store, { signal })
     const red = redactCycle(res)
     recordRun(red, trigger)
+    lastAttemptClassification = classifyCycleResult(red, res.retryAfterSeconds || 0)
     return red
   } catch (e) {
-    const red = { Synced: false, Scanned: 0, Blocked: 0, Retry: 0, Conflicts: 0, SnapshotCommitted: false, LastError: classifyLabel(e) }
+    const red = redactedFailure(classifyLabel(e))
     recordRun(red, trigger)
+    lastAttemptClassification = { ...classifyError(e), result: red }
     return red
   } finally {
     syncRunning = false
+  }
+}
+
+// redactedFailure builds the stable redacted result for a failed attempt.
+function redactedFailure(label) {
+  return { Synced: false, Scanned: 0, Blocked: 0, Retry: 0, Conflicts: 0, SnapshotCommitted: false, LastError: label }
+}
+
+// classifyCycleResult maps a COMPLETED cycle (no escaped error) onto the
+// scheduler outcome: deferred notes (Retry > 0) retry with the provider's
+// largest Retry-After; a clean or blocked cycle takes the ordinary interval.
+export function classifyCycleResult(red, retryAfterSeconds) {
+  if (red && red.Retry > 0) return { kind: 'retryable', retryAfter: retryAfterSeconds || 0, result: red }
+  return { kind: 'success', result: red }
+}
+
+// classifyError maps a REAL thrown error (a normalized StoreError or a coded
+// coordinator error) onto the scheduler outcome BEFORE any redaction, so
+// retryable-transport backs off, a corrupt repo.json pauses, and a cross-tab
+// lock refusal takes the ordinary interval. Unknown errors pause (defensive):
+// never a hot loop, never a silent ordinary wait for a condition that will not
+// fix itself.
+export function classifyError(e) {
+  if (e && e.name === 'AbortError') return { kind: 'success' }
+  if (e instanceof StoreError) {
+    switch (e.kind) {
+      case 'auth':
+      case 'permission':
+        return { kind: 'permanent', pauseReason: 'permission' }
+      case 'quota':
+        return { kind: 'permanent', pauseReason: 'quota' }
+      case 'invalid-response':
+        return { kind: 'permanent', pauseReason: 'invalid-response' }
+      case 'unsupported-capability':
+        return { kind: 'permanent', pauseReason: 'unsupported' }
+      case 'incomplete-list':
+        return { kind: 'permanent', pauseReason: 'incomplete-list' }
+      case 'rate-limit':
+        return { kind: 'retryable', retryAfter: e.retryAfterSeconds }
+      case 'retryable-transport':
+        return { kind: 'retryable' }
+      default:
+        return { kind: 'success' }
+    }
+  }
+  const code = e && e.code
+  switch (code) {
+    case 'locked':
+      return { kind: 'success' }
+    case 'unsupported-lock':
+      return { kind: 'permanent', pauseReason: 'unsupported' }
+    case 'not-enabled':
+      return { kind: 'disabled' }
+    case 'profile-mismatch':
+    case 'repository-mismatch':
+    case 'snapshot-mismatch':
+      return { kind: 'permanent', pauseReason: 'mismatch' }
+    case 'repository-loss':
+    case 'invalid-repo':
+      return { kind: 'permanent', pauseReason: 'repo-lost' }
+    case 'invalid-record':
+    case 'record-syncid-mismatch':
+    case 'conflict-error':
+      return { kind: 'permanent', pauseReason: 'invalid-response' }
+    case 'identity-corrupt':
+    case 'connection-corrupt':
+    case 'index-corrupt':
+      return { kind: 'permanent', pauseReason: 'corrupt-state' }
+    default:
+      return { kind: 'permanent', pauseReason: 'error' }
   }
 }
 
@@ -266,6 +359,91 @@ async function withVaultLock(fn) {
 // under the init lock, then the operation under the vault lock.
 async function withLifecycleLock(fn) {
   return withInitLock(() => withVaultLock(fn))
+}
+
+// ---- automatic scheduling (R6.6) -----------------------------------------
+
+// schedulerRun runs one AUTOMATIC attempt (startup/periodic/retry fired by the
+// scheduler timer) and returns the classification. A vault that is not
+// connected is 'disabled' (idle); a missing or UNREADABLE configuration is a
+// permanent pause, never a thrown error the scheduler would have to survive.
+async function schedulerRun(trigger, signal) {
+  let conn
+  try {
+    conn = await loadConnection()
+  } catch (_) {
+    const result = redactedFailure('corrupt-state')
+    recordRun(result, trigger)
+    return { kind: 'permanent', pauseReason: 'corrupt-state', result }
+  }
+  if (!conn || !conn.connected) return { kind: 'disabled' }
+  if (!config) {
+    const result = redactedFailure('provider-config')
+    recordRun(result, trigger)
+    return { kind: 'permanent', pauseReason: 'provider-config', result }
+  }
+  let store
+  try {
+    store = makeStore(config)
+  } catch (_) {
+    const result = redactedFailure('provider-config')
+    recordRun(result, trigger)
+    return { kind: 'permanent', pauseReason: 'provider-config', result }
+  }
+  await runOnce(store, trigger, { signal })
+  return lastAttemptClassification
+}
+
+// ensureScheduler builds the page-lifetime scheduler on first use. Its run is
+// schedulerRun; its automatic attempts refresh the visible list and the open
+// note through the registered hook (local direct UI refresh).
+function ensureScheduler() {
+  if (scheduler) return scheduler
+  scheduler = createSyncScheduler({
+    run: schedulerRun,
+    onAttemptDone: () => {
+      if (onSchedulerAttempt) onSchedulerAttempt()
+    },
+    ...schedulerDeps,
+  })
+  scheduler.start()
+  return scheduler
+}
+
+export function startSyncScheduler() {
+  ensureScheduler().start()
+}
+
+export async function stopSyncScheduler() {
+  if (scheduler) {
+    // Detach the reference SYNCHRONOUSLY before awaiting the old instance, so a
+    // fast re-mount that calls startSyncScheduler() during the wait gets a NEW
+    // scheduler and the old stop can never clear it afterwards.
+    const old = scheduler
+    scheduler = null
+    // Clear the UI hook so an aborted in-flight attempt can never touch an
+    // unmounted page after shutdown.
+    onSchedulerAttempt = null
+    await old.stop()
+  }
+}
+
+export function setSchedulerOnAttempt(fn) {
+  onSchedulerAttempt = fn
+}
+
+// resetSyncScheduler leaves the scheduler idle (Disable/Reset).
+function resetSyncScheduler() {
+  if (scheduler) scheduler.reset()
+}
+
+// schedulerStatusSnapshot returns the scheduler's redacted scheduling fields
+// for the status payload, or idle defaults when no scheduler is running.
+function schedulerStatusSnapshot() {
+  if (!scheduler) {
+    return { active: false, paused: false, pauseReason: '', nextRun: null, syncRunning: false }
+  }
+  return scheduler.status()
 }
 
 async function safeLoadConnection() {
@@ -367,6 +545,7 @@ export async function syncStatus() {
       recoveryCount = 0
     }
   }
+  const sched = schedulerStatusSnapshot()
   const data = {
     enabled: connected,
     connected,
@@ -374,12 +553,12 @@ export async function syncStatus() {
     experimental: true,
     noE2EE: true,
     recoveryCount,
-    autoEnabled: false, // the page-lifetime scheduler lands in R6.6
-    autoIntervalSecs: 0,
-    syncRunning,
-    autoPaused: false,
-    pauseReason: '',
-    nextRun: null,
+    autoEnabled: connected && !sched.paused,
+    autoIntervalSecs: PERIODIC_EVERY_MS / 1000,
+    syncRunning: syncRunning || sched.syncRunning,
+    autoPaused: sched.paused,
+    pauseReason: sched.pauseReason,
+    nextRun: sched.nextRun,
   }
   if (connectionError) data.connectionError = connectionError
   if (identityError) data.identityError = identityError
@@ -420,7 +599,12 @@ export async function syncEnable() {
       } catch (e) {
         throw reject(400, e.message || 'sync connection is corrupt; reset sync', e.code || 'connection-corrupt')
       }
-      const store = makeStore(config)
+      let store
+      try {
+        store = makeStore(config)
+      } catch (e) {
+        throw reject(400, e && e.message ? e.message : 'sync configuration is invalid', 'invalid-config')
+      }
       try {
         await store.test()
       } catch (e) {
@@ -435,8 +619,11 @@ export async function syncEnable() {
       const profile = await providerProfile(config)
       await setConnection({ providerProfile: profile, repositoryId: repoId, connected: true })
 
-      // A successful Enable requests one immediate run under the SAME lock.
+      // A successful Enable requests one immediate run under the SAME lock,
+      // then feeds the outcome to the page-lifetime scheduler so it arms the
+      // ordinary interval (a successful Enable wakes the scheduler).
       await runOnceUnderLock(store, 'enable')
+      ensureScheduler().noteAttempt(lastAttemptClassification)
       return { identity, repoId }
     })
   }).then(({ identity, repoId }) => ({
@@ -455,9 +642,12 @@ export async function syncRun() {
   const conn = await safeLoadConnection()
   if (!conn || !conn.connected) throw reject(400, 'sync is not enabled', 'not-enabled')
   if (!config) throw reject(400, 'sync configuration is missing', 'sync-config-required')
-  const store = makeStore(config)
-  const red = await runOnce(store, 'manual')
-  return { data: red }
+  // A manual run goes through the SAME in-process single-flight as automatic
+  // attempts (runNow coalesces onto an in-flight attempt), and its outcome is
+  // fed to the scheduler so a genuinely synced run clears a permanent pause —
+  // a locked/cancelled/blocked run never does.
+  const classification = await ensureScheduler().runNow('manual')
+  return { data: classification && classification.result }
 }
 
 export async function syncDisable() {
@@ -468,6 +658,7 @@ export async function syncDisable() {
   lastRun = null
   lastCompleted = null
   lastTrigger = ''
+  resetSyncScheduler()
   return { data: { enabled: false, disconnected: true } }
 }
 
@@ -482,6 +673,7 @@ export async function syncReset() {
   lastRun = null
   lastCompleted = null
   lastTrigger = ''
+  resetSyncScheduler()
   return { data: { ok: true, reset: true } }
 }
 
@@ -530,6 +722,14 @@ export function _setLocks(value) {
   locks = value
 }
 
+// _setSchedulerDeps injects fake clock/timer/visibility deps for deterministic
+// scheduler tests (fake timers). Any scheduler instance is rebuilt on the next
+// ensureScheduler() call.
+export function _setSchedulerDeps(deps) {
+  schedulerDeps = deps || {}
+  scheduler = null
+}
+
 export function _resetService() {
   config = loadConfig()
   storeFactory = (cfg) => new S3Store(cfg)
@@ -538,4 +738,12 @@ export function _resetService() {
   lastRun = null
   lastCompleted = null
   lastTrigger = ''
+  lastAttemptClassification = null
+  onSchedulerAttempt = null
+  schedulerDeps = {}
+  if (scheduler) {
+    const old = scheduler
+    scheduler = null
+    old.stop()
+  }
 }

@@ -6,7 +6,9 @@ import { _close } from '../storage/localVaultDb'
 import { loadIdentity, loadConnection, loadSyncIndex, writeRecovery } from '../storage/syncDb'
 import {
   getSyncConfig, saveSyncConfig, testSyncConfig,
+  classifyError, classifyCycleResult,
   _setStoreFactory, _setLocks, _resetService, SYNC_CONFIG_KEY,
+  setSchedulerOnAttempt, startSyncScheduler, stopSyncScheduler,
 } from './browserService'
 import { serializeRepositoryDescriptor } from './repo'
 import { noteKey } from './note'
@@ -27,20 +29,31 @@ const TEST_CONFIG = {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 // A serializing Web-Locks stand-in with PER-NAME queues, mirroring real Web
-// Locks: an ifAvailable:true request is refused while THAT name is held (the
-// cycle never queues), and an ifAvailable:false request waits in FIFO order
-// behind the same name (lifecycle operations wait for a running cycle). Locks
-// with different names are independent, so a test cannot accidentally serialize
-// the initialization lock and the vault lock through one global queue.
+// Locks: an ifAvailable:true request is REFUSED immediately while that name is
+// held (the cycle never queues), and an ifAvailable:false request waits in FIFO
+// order behind the same name (lifecycle operations wait for a running cycle).
+// Locks with different names are independent, so a test cannot accidentally
+// serialize the initialization lock and the vault lock through one global queue.
 class FakeLocks {
   constructor() {
     this.queues = new Map()
     this.held = new Set()
   }
   request(name, opts = {}, fn) {
+    if (opts.ifAvailable) {
+      if (this.held.has(name)) return Promise.resolve(fn(null))
+      this.held.add(name)
+      const run = Promise.resolve().then(async () => {
+        try {
+          return await fn({ name })
+        } finally {
+          this.held.delete(name)
+        }
+      })
+      return run
+    }
     const prev = this.queues.get(name) || Promise.resolve()
     const run = prev.then(async () => {
-      if (opts.ifAvailable && this.held.has(name)) return fn(null)
       this.held.add(name)
       try {
         return await fn({ name })
@@ -60,18 +73,23 @@ class MatchingRemote {
     this.versionCounter = 0
     this.repoRepositoryId = crypto.randomUUID()
     this.profileValue = providerProfile(TEST_CONFIG)
+    this.failKind = null
+  }
+  maybeFail(opts) {
+    if (opts?.signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError')
+    if (this.failKind) throw new StoreError(this.failKind, `s3 ${this.failKind}`)
   }
   async profile() {
     return this.profileValue
   }
   async read(key, opts) {
-    if (opts?.signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError')
+    this.maybeFail(opts)
     const o = this.objects.get(key)
     if (!o) throw new StoreError('not-found', 's3 not-found')
     return { data: o.data, version: o.version }
   }
   async list(prefix, opts) {
-    if (opts?.signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError')
+    this.maybeFail(opts)
     return [...this.objects.entries()]
       .filter(([k]) => k.startsWith(prefix))
       .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
@@ -446,6 +464,188 @@ describe('R6.5 browser sync service (public localApi surface)', () => {
     await expect(localApi.syncEnable()).rejects.toMatchObject({
       response: { status: 400, data: { code: 'connection-corrupt' } },
     })
+  })
+
+  it('a successful Enable arms the page-lifetime scheduler for the ordinary interval', async () => {
+    await localApi.createNote({ name: 'hello', content: 'v1\n' })
+    await saveSyncConfig(TEST_CONFIG)
+    await localApi.syncEnable()
+
+    const st = (await localApi.syncStatus()).data
+    expect(st.autoEnabled).toBe(true)
+    expect(st.autoIntervalSecs).toBe(300)
+    expect(st.autoPaused).toBe(false)
+    expect(st.nextRun).toBeTruthy() // ~5 minutes out
+    expect(Date.parse(st.nextRun)).toBeGreaterThan(Date.now())
+  })
+
+  it('Disable and Reset idle the scheduler', async () => {
+    await saveSyncConfig(TEST_CONFIG)
+    await localApi.syncEnable()
+    await localApi.syncDisable()
+    const afterDisable = (await localApi.syncStatus()).data
+    expect(afterDisable.autoEnabled).toBe(false)
+    expect(afterDisable.nextRun).toBeNull()
+
+    await localApi.syncEnable()
+    await localApi.syncReset()
+    const afterReset = (await localApi.syncStatus()).data
+    expect(afterReset.autoEnabled).toBe(false)
+    expect(afterReset.nextRun).toBeNull()
+  })
+
+  it('a corrupt persisted configuration pauses permanently instead of a thrown hot loop', async () => {
+    await localApi.createNote({ name: 'hello', content: 'v1\n' })
+    await saveSyncConfig(TEST_CONFIG)
+    await localApi.syncEnable()
+
+    // Corrupt the persisted configuration and reload it into the module: the
+    // next attempt cannot build a store (the default S3Store factory validates
+    // via normalizeConfig). It must become a permanent provider-config pause,
+    // never an unhandled rejection or a zero-delay loop.
+    localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify({ endpoint: 'https://x.example.com', bucket: '', accessKey: '', secretKey: '' }))
+    _resetService()
+    _setLocks(fakeLocks)
+
+    await localApi.syncRun()
+    const st = (await localApi.syncStatus()).data
+    expect(st.autoPaused).toBe(true)
+    expect(st.pauseReason).toBe('provider-config')
+    expect(st.nextRun).toBeNull()
+  })
+
+  it('a permanent failure pauses automatic sync until a manual run clears it', async () => {
+    await localApi.createNote({ name: 'hello', content: 'v1\n' })
+    await saveSyncConfig(TEST_CONFIG)
+    await localApi.syncEnable()
+
+    remote.failKind = 'permission'
+    await localApi.syncRun()
+    let st = (await localApi.syncStatus()).data
+    expect(st.autoPaused).toBe(true)
+    expect(st.pauseReason).toBe('permission')
+    expect(st.nextRun).toBeNull()
+
+    remote.failKind = null
+    await localApi.syncRun() // a successful manual run clears the pause
+    st = (await localApi.syncStatus()).data
+    expect(st.autoPaused).toBe(false)
+    expect(st.nextRun).toBeTruthy()
+  })
+
+  it('a cross-tab lock refusal is the ordinary interval, never a backoff or pause', async () => {
+    await saveSyncConfig(TEST_CONFIG)
+    await localApi.syncEnable()
+
+    // Another tab holds the vault lock (a cycle in flight).
+    const { vaultId } = await loadIdentity()
+    let release
+    const held = new Promise((resolve) => { release = resolve })
+    const holder = fakeLocks.request(`memodump-sync-${vaultId}`, { ifAvailable: false }, async () => { await held })
+
+    await localApi.syncRun() // refused: 'locked'
+    const st = (await localApi.syncStatus()).data
+    expect(st.lastRun.LastError).toBe('locked')
+    expect(st.autoPaused).toBe(false)
+    expect(st.nextRun).toBeTruthy() // ordinary 5-minute interval, not a retry
+
+    release()
+    await holder
+  })
+
+  it('classifyError reads the REAL error, not the redacted label', async () => {
+    // retryable-transport redacts to 'provider-error' but must BACK OFF, not
+    // wait the ordinary interval.
+    expect(classifyError(new StoreError('retryable-transport', 'x')))
+      .toEqual({ kind: 'retryable' })
+    expect(classifyError(new StoreError('rate-limit', 'x', { retryAfterSeconds: 90 })))
+      .toEqual({ kind: 'retryable', retryAfter: 90 })
+    // A corrupt repo.json (coded invalid-repo) is a permanent pause.
+    expect(classifyError(Object.assign(new Error('bad repo'), { code: 'invalid-repo' })))
+      .toEqual({ kind: 'permanent', pauseReason: 'repo-lost' })
+    // Permission and unknown errors pause; a cross-tab lock refusal is ordinary.
+    expect(classifyError(new StoreError('permission', 'x')))
+      .toEqual({ kind: 'permanent', pauseReason: 'permission' })
+    expect(classifyError(Object.assign(new Error('boom'), { code: 'locked' })))
+      .toEqual({ kind: 'success' })
+    expect(classifyError(new Error('unknown')))
+      .toEqual({ kind: 'permanent', pauseReason: 'error' })
+  })
+
+  it('classifyCycleResult backs off (with Retry-After) when notes were deferred', async () => {
+    expect(classifyCycleResult({ Synced: false, Retry: 2, Blocked: 0, LastError: 'incomplete' }, 90))
+      .toEqual({ kind: 'retryable', retryAfter: 90, result: { Synced: false, Retry: 2, Blocked: 0, LastError: 'incomplete' } })
+    expect(classifyCycleResult({ Synced: true, Retry: 0, Blocked: 0, LastError: '' }))
+      .toEqual({ kind: 'success', result: { Synced: true, Retry: 0, Blocked: 0, LastError: '' } })
+  })
+
+  it('a retryable-transport failure backs off instead of waiting the ordinary interval', async () => {
+    await saveSyncConfig(TEST_CONFIG)
+    await localApi.syncEnable()
+    remote.failKind = 'retryable-transport'
+    await localApi.syncRun()
+
+    const st = (await localApi.syncStatus()).data
+    expect(st.lastRun.LastError).toBe('provider-error') // redacted for the UI
+    expect(st.autoPaused).toBe(false)
+    const delayMs = Date.parse(st.nextRun) - Date.now()
+    expect(delayMs).toBeGreaterThan(30_000) // ~1m backoff
+    expect(delayMs).toBeLessThan(3 * 60_000) // never the 5m ordinary interval
+  })
+
+  it('a corrupt remote repo.json pauses automatic sync as repo-lost', async () => {
+    await saveSyncConfig(TEST_CONFIG)
+    await localApi.syncEnable()
+    remote.put('repo.json', utf8Bytes(new TextEncoder().encode('{"garbage": true}')))
+
+    await localApi.syncRun()
+    const st = (await localApi.syncStatus()).data
+    expect(st.lastRun.LastError).toBe('repo-loss')
+    expect(st.autoPaused).toBe(true)
+    expect(st.pauseReason).toBe('repo-lost')
+    expect(st.nextRun).toBeNull()
+  })
+
+  it('attempts drive the registered UI refresh; stop clears it so shutdown never refreshes', async () => {
+    const refresh = vi.fn()
+    setSchedulerOnAttempt(refresh)
+    await localApi.createNote({ name: 'hello', content: 'v1\n' })
+    await saveSyncConfig(TEST_CONFIG)
+    await localApi.syncEnable()
+
+    await localApi.syncRun() // goes through runNow -> fire -> onAttemptDone
+    expect(refresh).toHaveBeenCalled()
+
+    await stopSyncScheduler() // unmount clears the hook and stops the scheduler
+    refresh.mockClear()
+    await localApi.syncRun() // a fresh scheduler: the callback is gone
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  it('a failed Run now returns the full redacted result, never data: undefined', async () => {
+    await localApi.createNote({ name: 'hello', content: 'v1\n' })
+    await saveSyncConfig(TEST_CONFIG)
+    await localApi.syncEnable()
+
+    remote.failKind = 'permission'
+    const res = await localApi.syncRun()
+    expect(res.data).toMatchObject({ Synced: false, LastError: 'permission' })
+    expect(res.data).not.toBeUndefined()
+  })
+
+  it('stop detaches synchronously, so a re-mounted page gets a fresh working scheduler', async () => {
+    const refresh = vi.fn()
+    setSchedulerOnAttempt(refresh)
+    await saveSyncConfig(TEST_CONFIG)
+    await localApi.syncEnable()
+
+    await stopSyncScheduler() // scheduler reference is nulled before the old await
+    // A fresh mount starts a NEW instance and a manual run drives the hook.
+    setSchedulerOnAttempt(refresh)
+    startSyncScheduler()
+    await localApi.syncRun()
+    expect(refresh).toHaveBeenCalled()
+    expect((await localApi.syncStatus()).data.autoEnabled).toBe(true)
   })
 
   it('two IndexedDB replicas converge through the same remote repository', async () => {

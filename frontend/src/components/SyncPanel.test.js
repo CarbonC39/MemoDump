@@ -52,6 +52,9 @@ describe('SyncPanel runtime visibility (R6.0)', () => {
     expect(wrapper.find('.settings-section').exists()).toBe(true)
     expect(wrapper.find('.sync-config').exists()).toBe(true)
     expect(wrapper.text()).toContain('Endpoint')
+    // The CORS template must expose Retry-After so the browser can read the
+    // provider's 429 instruction (R6.6 scheduler backoff), not just ETag.
+    expect(wrapper.text()).toContain('"ExposeHeaders": ["ETag", "Retry-After"]')
     wrapper.unmount()
     vi.unstubAllEnvs()
   })

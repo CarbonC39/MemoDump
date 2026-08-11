@@ -55,6 +55,16 @@ function isRetryableStoreError(e) {
   return e instanceof StoreError && (e.kind === 'retryable-transport' || e.kind === 'rate-limit')
 }
 
+// trackRetryAfter records the LARGEST provider Retry-After seen during a cycle
+// (from a rate-limit on a read, a note write, or a confirmation re-read) into
+// the shared cycle context, so the scheduler can back off by the provider's own
+// instruction even when the error is otherwise absorbed as a deferred note.
+function trackRetryAfter(ctx, e) {
+  if (e instanceof StoreError && Number.isFinite(e.retryAfterSeconds) && e.retryAfterSeconds > ctx.max) {
+    ctx.max = e.retryAfterSeconds
+  }
+}
+
 // withReplicaLock serializes one replica's cycles with the exclusive Web Lock
 // scoped to the vault. ifAvailable:true means a second Run now is REFUSED
 // (locked), never queued. A browser without Web Locks cannot run sync.
@@ -88,7 +98,7 @@ async function cycleBody(store, { signal, commitSnapshotFn } = {}) {
   const identity = await loadIdentity()
   if (!identity) throw runError('not-enabled', 'sync is not enabled')
   const state = await observeAndDecide(store, { signal })
-  const { deferred } = await executeDecisions(store, state.decisions, state.baselines, { index: state.index, signal })
+  const { deferred, retryAfterSeconds } = await executeDecisions(store, state.decisions, state.baselines, { index: state.index, signal })
   await (commitSnapshotFn || commitSnapshot)(state)
   const blocked = state.decisions.filter((d) => d.kind === 'block').length
   const retry = state.decisions.filter((d) => d.kind === 'retry').length + deferred
@@ -99,6 +109,7 @@ async function cycleBody(store, { signal, commitSnapshotFn } = {}) {
     conflicts: state.decisions.filter((d) => PRESERVE_KINDS.has(d.kind)).length,
     snapshotCommitted: true,
     decisions: state.decisions,
+    retryAfterSeconds: Math.max(state.retryAfterSeconds || 0, retryAfterSeconds || 0),
   }
 }
 
@@ -124,7 +135,7 @@ async function validateRepository(store, connection, signal) {
   try {
     repo = parseRepositoryDescriptor(data)
   } catch (e) {
-    throw new Error(`invalid repo.json: ${e.message}`)
+    throw runError('invalid-repo', `invalid repo.json: ${e.message}`)
   }
   if (repo.repositoryId !== connection.repositoryId) {
     throw runError('repository-mismatch', 'repository ID mismatch')
@@ -171,8 +182,9 @@ export async function observeAndDecide(store, { signal } = {}) {
   }
 
   const unionIds = unionOf(index, baselines, keys)
+  const retryCtx = { max: 0 }
   const localObs = await buildLocalObservations(notes, index, unionIds)
-  const remoteObs = await buildRemoteObservations(store, keys, unionIds, signal)
+  const remoteObs = await buildRemoteObservations(store, keys, unionIds, signal, retryCtx)
   const blockedPaths = pathConflicts(localObs, remoteObs)
 
   const decisions = []
@@ -184,7 +196,7 @@ export async function observeAndDecide(store, { signal } = {}) {
       pathConflict: blockedPaths.has(id),
     }))
   }
-  return { identity, connection, repo, index, baselines, unionIds, decisions }
+  return { identity, connection, repo, index, baselines, unionIds, decisions, retryAfterSeconds: retryCtx.max }
 }
 
 // unionOf returns the sorted set of Sync IDs in this cycle: everything in the
@@ -251,9 +263,10 @@ async function buildLocalObservations(notes, index, unionIds) {
 
 // buildRemoteObservations reads and parses every listed note record. A key
 // absent from the listing is missing — never a tombstone. A retryable read
-// error becomes a retryable invalid observation for that note only; every other
-// failure stops the cycle before any execution.
-async function buildRemoteObservations(store, keys, unionIds, signal) {
+// error becomes a retryable invalid observation for that note only (its
+// Retry-After is tracked for the scheduler); every other failure stops the
+// cycle before any execution.
+async function buildRemoteObservations(store, keys, unionIds, signal, retryCtx) {
   const obs = {}
   for (const id of unionIds) {
     const key = noteKey(id)
@@ -266,6 +279,7 @@ async function buildRemoteObservations(store, keys, unionIds, signal) {
       ;({ data, version } = await store.read(key, { signal }))
     } catch (e) {
       if (isRetryableStoreError(e)) {
+        trackRetryAfter(retryCtx, e)
         obs[id] = { syncId: id, state: RemoteState.INVALID, retryable: true }
         continue
       }
@@ -275,9 +289,9 @@ async function buildRemoteObservations(store, keys, unionIds, signal) {
     try {
       rec = parseNoteRecord(data)
     } catch (e) {
-      throw new Error(`invalid remote record ${key}: ${e.message}`)
+      throw runError('invalid-record', `invalid remote record ${key}: ${e.message}`)
     }
-    if (rec.syncId !== id) throw new Error(`remote record ${key} declares syncId "${rec.syncId}"`)
+    if (rec.syncId !== id) throw runError('record-syncid-mismatch', `remote record ${key} declares syncId "${rec.syncId}"`)
     const contentHash = await computeContentHash(rec)
     obs[id] = {
       syncId: id,
@@ -322,14 +336,14 @@ function pathConflicts(localObs, remoteObs) {
 // crash seam: a non-nil function is awaited at named execution boundaries and
 // its error aborts the cycle exactly as a crash would.
 export async function executeDecisions(store, decisions, baselines, { index, signal, fault } = {}) {
-  const ctx = { index, fault }
+  const ctx = { index, fault, retry: { max: 0 } }
   let deferred = 0
   for (const d of decisions) {
     if (signal && signal.aborted) throw abortError()
     if (d.kind === 'block' || d.kind === 'retry') continue
     deferred += await executeOne(store, d, baselines, ctx, signal)
   }
-  return { deferred, baselines }
+  return { deferred, baselines, retryAfterSeconds: ctx.retry.max }
 }
 
 async function checkFault(fault, point) {
@@ -345,11 +359,11 @@ async function executeOne(store, d, baselines, ctx, signal) {
       baselines[d.syncId] = { contentHash: d.contentHash, deleted: d.deleted, remoteVersion: d.version }
       return 0
     case 'push_live':
-      return (await pushLive(store, d, baselines, signal)) ? 0 : 1
+      return (await pushLive(store, d, baselines, ctx, signal)) ? 0 : 1
     case 'pull_live':
       return (await pullLive(d, baselines, ctx)) ? 0 : 1
     case 'push_tombstone':
-      return (await pushTombstone(store, d, baselines, signal)) ? 0 : 1
+      return (await pushTombstone(store, d, baselines, ctx, signal)) ? 0 : 1
     case 'apply_tombstone':
       return (await applyTombstone(d, baselines, ctx)) ? 0 : 1
     case 'preserve_local_then_pull':
@@ -366,7 +380,7 @@ async function executeOne(store, d, baselines, ctx, signal) {
 // re-read so the outcome is never guessed: an identical landed write is
 // established at the actual version; anything else defers. A fatal store error
 // stops the cycle.
-async function pushLive(store, d, baselines, signal) {
+async function pushLive(store, d, baselines, ctx, signal) {
   const data = utf8Bytes(serializeNoteRecord({
     schemaVersion: NOTE_SCHEMA_VERSION, syncId: d.syncId, path: d.path, markdown: d.markdown, deleted: false,
   }))
@@ -378,7 +392,8 @@ async function pushLive(store, d, baselines, signal) {
       : await store.replace(key, data, d.version, { signal })
   } catch (e) {
     if (e instanceof StoreError && (e.kind === 'precondition-failed' || isRetryableStoreError(e))) {
-      return confirmLiveWrite(store, key, d, baselines, signal)
+      trackRetryAfter(ctx.retry, e)
+      return confirmLiveWrite(store, key, d, baselines, ctx, signal)
     }
     throw e
   }
@@ -386,8 +401,8 @@ async function pushLive(store, d, baselines, signal) {
   return true
 }
 
-async function confirmLiveWrite(store, key, d, baselines, signal) {
-  const landed = await confirmWrite(store, key, signal, (rec) => !rec.deleted && rec.path === d.path && rec.markdown === d.markdown)
+async function confirmLiveWrite(store, key, d, baselines, ctx, signal) {
+  const landed = await confirmWrite(store, key, signal, (rec) => !rec.deleted && rec.path === d.path && rec.markdown === d.markdown, ctx)
   if (landed == null) return false
   baselines[d.syncId] = { contentHash: d.contentHash, deleted: false, remoteVersion: landed }
   return true
@@ -395,7 +410,7 @@ async function confirmLiveWrite(store, key, d, baselines, signal) {
 
 // pushTombstone replaces a remote live note with a tombstone at the current
 // version CAS, re-reading to learn the true outcome.
-async function pushTombstone(store, d, baselines, signal) {
+async function pushTombstone(store, d, baselines, ctx, signal) {
   const data = utf8Bytes(serializeNoteRecord({
     schemaVersion: NOTE_SCHEMA_VERSION, syncId: d.syncId, path: d.path, deleted: true,
   }))
@@ -405,7 +420,8 @@ async function pushTombstone(store, d, baselines, signal) {
     version = await store.replace(key, data, d.version, { signal })
   } catch (e) {
     if (e instanceof StoreError && (e.kind === 'precondition-failed' || isRetryableStoreError(e))) {
-      const landed = await confirmWrite(store, key, signal, (rec) => rec.deleted && rec.path === d.path)
+      trackRetryAfter(ctx.retry, e)
+      const landed = await confirmWrite(store, key, signal, (rec) => rec.deleted && rec.path === d.path, ctx)
       if (landed == null) return false
       version = landed
     } else {
@@ -421,13 +437,16 @@ async function pushTombstone(store, d, baselines, signal) {
 // the actual version (returned); a missing key, a retryable transport error, or
 // a non-matching landed state defers (null); a fatal error, malformed record, or
 // syncId mismatch stops the cycle.
-async function confirmWrite(store, key, signal, want) {
+async function confirmWrite(store, key, signal, want, ctx) {
   let data, version
   try {
     ;({ data, version } = await store.read(key, { signal }))
   } catch (e) {
     if (e instanceof StoreError && e.kind === 'not-found') return null
-    if (e instanceof StoreError && isRetryableStoreError(e)) return null
+    if (e instanceof StoreError && isRetryableStoreError(e)) {
+      trackRetryAfter(ctx.retry, e)
+      return null
+    }
     throw e
   }
   let rec
@@ -437,7 +456,7 @@ async function confirmWrite(store, key, signal, want) {
     throw e
   }
   const id = parseNoteKey(key)
-  if (rec.syncId !== id) throw new Error(`remote record ${key} declares syncId "${rec.syncId}"`)
+  if (rec.syncId !== id) throw runError('record-syncid-mismatch', `remote record ${key} declares syncId "${rec.syncId}"`)
   return want(rec) ? version : null
 }
 
@@ -496,7 +515,7 @@ async function applyTombstone(d, baselines, ctx) {
 async function executeConflict(store, d, baselines, ctx, signal) {
   const conf = d.conflict
   if (!conf || !conf.conflictSyncId || !conf.conflictPath) {
-    throw new Error(`note ${d.syncId}: missing conflict plan`)
+    throw runError('conflict-error', `note ${d.syncId}: missing conflict plan`)
   }
 
   // 1. Reserve the conflict identity/path (replay-safe).
@@ -515,6 +534,7 @@ async function executeConflict(store, d, baselines, ctx, signal) {
     conflictVersion = await store.create(key, data, { signal })
   } catch (e) {
     if (e instanceof StoreError && (e.kind === 'precondition-failed' || isRetryableStoreError(e))) {
+      trackRetryAfter(ctx.retry, e)
       // An uncertain response is never guessed: re-read to learn whether the
       // write landed. An identical conflict record is an idempotent success at
       // the actual version; an unavailable or unlanded state defers; a record
@@ -523,7 +543,10 @@ async function executeConflict(store, d, baselines, ctx, signal) {
       try {
         ;({ data: existing, version } = await store.read(key, { signal }))
       } catch (e2) {
-        if (e2 instanceof StoreError && (e2.kind === 'not-found' || isRetryableStoreError(e2))) return 1
+        if (e2 instanceof StoreError && (e2.kind === 'not-found' || isRetryableStoreError(e2))) {
+          trackRetryAfter(ctx.retry, e2)
+          return 1
+        }
         throw e2
       }
       let parsed
@@ -534,7 +557,7 @@ async function executeConflict(store, d, baselines, ctx, signal) {
       }
       if (parsed.syncId !== conf.conflictSyncId || parsed.path !== conf.conflictPath ||
           parsed.markdown !== conf.conflictMarkdown || parsed.deleted) {
-        throw new Error(`remote conflict collision at ${key}`)
+        throw runError('conflict-error', `remote conflict collision at ${key}`)
       }
       conflictVersion = version
     } else {
@@ -550,7 +573,7 @@ async function executeConflict(store, d, baselines, ctx, signal) {
   } else if (d.kind === 'preserve_local_then_delete') {
     if (!(await applyTombstone(d, baselines, ctx))) deferred++
   } else if (d.kind === 'preserve_remote_then_tombstone') {
-    if (!(await pushTombstone(store, d, baselines, signal))) deferred++
+    if (!(await pushTombstone(store, d, baselines, ctx, signal))) deferred++
   }
   await checkFault(ctx.fault, 'conflict:original')
 

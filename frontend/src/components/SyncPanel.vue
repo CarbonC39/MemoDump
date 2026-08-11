@@ -206,7 +206,7 @@ const syncCorsTemplate = `[
     "AllowedOrigins": ["<app origin>"],
     "AllowedMethods": ["PUT", "GET", "HEAD", "DELETE"],
     "AllowedHeaders": ["Authorization", "Content-Type", "x-amz-*", "If-Match", "If-None-Match"],
-    "ExposeHeaders": ["ETag"],
+    "ExposeHeaders": ["ETag", "Retry-After"],
     "MaxAgeSeconds": 3000
   }
 ]`

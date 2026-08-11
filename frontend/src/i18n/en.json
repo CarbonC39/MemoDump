@@ -113,7 +113,7 @@
     "syncCredentialWarning": "Credentials are stored in this browser, not encrypted.",
     "syncDeletesPropagate": "Deleting a synced note deletes it from every synced device.",
     "syncCorsTemplate": "Bucket CORS for note sync",
-    "syncCorsHint": "Private note storage requires CORS to allow the signed PUT/GET/DELETE methods and the Authorization, If-Match, If-None-Match, and x-amz-* headers, and to expose the ETag response header.",
+    "syncCorsHint": "Private note storage requires CORS to allow the signed PUT/GET/DELETE methods and the Authorization, If-Match, If-None-Match, and x-amz-* headers, and to expose the ETag and Retry-After response headers.",
     "syncEnable": "Enable",
     "syncRun": "Run now",
     "syncDisable": "Disable",

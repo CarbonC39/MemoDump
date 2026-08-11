@@ -243,6 +243,7 @@ import { useWorkspaceNavigation } from '../composables/useWorkspaceNavigation.js
 import { useSyncPolling } from '../composables/useSyncPolling.js'
 import { refreshSyncSettings, setOnSyncChanged } from '../composables/useSyncSettings.js'
 import { cloudSyncAvailable } from '../composables/runtime.js'
+import { startSyncScheduler, stopSyncScheduler, setSchedulerOnAttempt } from '../sync/browserService.js'
 import { preloadMilkdownEditor } from '../components/milkdownLoader.js'
 
 const router = useRouter()
@@ -464,11 +465,22 @@ onMounted(async () => {
     onReady: () => { isInitializing.value = false },
   })
   syncPolling.start()
+  // R6.6: the Pure frontend/PWA build owns a page-lifetime sync scheduler.
+  // Automatic attempts refresh the visible list and the open note directly
+  // (a dirty/saving/offline/conflicting buffer is never replaced or closed).
+  if (isLocalBuild) {
+    setSchedulerOnAttempt(() => {
+      loadAll()
+      syncPolling.refreshOpenNote()
+    })
+    startSyncScheduler()
+  }
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
   syncPolling.stop()
+  if (isLocalBuild) stopSyncScheduler()
 })
 
 // ===== FOLDER PICKER FOR META PANEL =====

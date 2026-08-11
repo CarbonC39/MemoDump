@@ -638,4 +638,36 @@ describe('uncertain writes and restart', () => {
     expect(rejected).toHaveLength(1)
     expect(rejected[0].reason.code).toBe('locked')
   })
+
+  it('a rate-limited note write defers the note AND propagates the provider Retry-After', async () => {
+    const remote = new FakeRemote()
+    await setReplica(freshReplica())
+    await enableReplica(remote)
+    await localApi.createNote({ name: 'a', content: 'x\n' })
+
+    // Every NOTE read/write is rate-limited but repo.json stays reachable; the
+    // error is absorbed as a deferred note, so the cycle completes with
+    // Retry > 0 instead of escaping.
+    class RateLimitedRemote extends FakeRemote {
+      async read(key, opts) {
+        if (key.startsWith('notes/')) throw new StoreError('rate-limit', 's3 rate-limit', { retryAfterSeconds: 90 })
+        return super.read(key, opts)
+      }
+      async create(key, data) {
+        throw new StoreError('rate-limit', 's3 rate-limit', { retryAfterSeconds: 90 })
+      }
+      async replace(key, data, expectedVersion) {
+        throw new StoreError('rate-limit', 's3 rate-limit', { retryAfterSeconds: 90 })
+      }
+    }
+    const rateLimited = new RateLimitedRemote()
+    rateLimited.repoRepositoryId = remote.repoRepositoryId
+    rateLimited.seedRepo()
+
+    const res = await runCycle(rateLimited)
+    expect(res.retry).toBeGreaterThan(0)
+    // The scheduler needs the provider's own Retry-After even though the error
+    // never escaped the coordinator as a rejection.
+    expect(res.retryAfterSeconds).toBe(90)
+  })
 })
