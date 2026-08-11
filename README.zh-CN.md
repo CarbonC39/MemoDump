@@ -259,6 +259,15 @@ wails dev
 
 > **注意：** `wails dev` 会打开一个用于热重载代理的终端窗口，这是正常现象。生产构建（`wails build`）在 Windows 上使用 `-H windowsgui`，生成无控制台窗口的纯 GUI 二进制文件。
 
+**Linux 系统依赖。** Wails 链接 GTK 3 与 WebKitGTK。在 Debian 12 / Ubuntu ≤ 23.10 安装 `libgtk-3-dev libwebkit2gtk-4.0-dev`（另加托盘/图标工具所需的 `libayatana-appindicator3-dev` 与 `librsvg2-bin`）。在 Debian 13 / Ubuntu ≥ 24.04，`webkit2gtk-4.0` 已不存在，只有 `webkit2gtk-4.1`——请安装 `libgtk-3-dev libwebkit2gtk-4.1-dev` 并用 `webkit2_41` 标签构建：
+
+```sh
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-bin
+wails build -tags "webkit2_41"
+```
+
+不加该标签时，`wails build` 会在 bindings 生成阶段报 `webkit2gtk-4.0 was not found`。
+
 ### 纯前端 / PWA
 
 无 Go 服务器的纯浏览器构建：笔记存于 IndexedDB，云同步在浏览器内运行（见[云同步](#云同步实验性)）。使用 `VITE_LOCAL=1` 构建并托管静态 `dist` 目录，或运行 `npm run dev:local` 本地开发服务器（Vite 直接托管，并将 `/api` 代理到本地服务器以提供非同步功能）：

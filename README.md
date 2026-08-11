@@ -337,6 +337,21 @@ Output is placed in `build/bin/`.
 
 > **Note:** `wails dev` opens a terminal window for its hot-reload proxy — this is expected. Production builds (`wails build`) use `-H windowsgui` on Windows and produce a GUI-only binary with no console.
 
+**Linux system dependencies.** Wails links against GTK 3 and WebKitGTK. On Debian
+12 / Ubuntu ≤ 23.10 install `libgtk-3-dev libwebkit2gtk-4.0-dev` (plus
+`libayatana-appindicator3-dev` and `librsvg2-bin` for the tray/icon tooling). On
+Debian 13 / Ubuntu ≥ 24.04, `webkit2gtk-4.0` no longer exists — only
+`webkit2gtk-4.1` — so install `libgtk-3-dev libwebkit2gtk-4.1-dev` and build
+with the `webkit2_41` tag:
+
+```sh
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-bin
+wails build -tags "webkit2_41"
+```
+
+Without the tag, `wails build` fails at bindings generation with
+`webkit2gtk-4.0 was not found`.
+
 ### Pure frontend / PWA
 
 A browser-only build with no Go server: notes live in IndexedDB and cloud sync
