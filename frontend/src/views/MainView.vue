@@ -364,7 +364,14 @@ updateUrlHandler = updateUrl
 const syncChangedNotice = ref('')
 const syncPolling = useSyncPolling({
   api: apiClient,
-  editor: noteEditor,
+  editor: {
+    ...noteEditor,
+    // An offline (unsaved outbox) or conflicting buffer is protected too: the
+    // poller must never replace or close a clean-looking editor that still has
+    // queued or conflicting changes. saveStatus incorporates both states.
+    isOffline: computed(() => saveStatus.value === 'offline'),
+    isConflict: computed(() => saveStatus.value === 'conflict'),
+  },
   available: cloudSyncAvailable(),
   onAutoSync: loadAll,
   onNotice: () => {

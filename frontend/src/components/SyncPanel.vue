@@ -24,13 +24,16 @@
       <div v-if="state.connectionError" class="setting-row">
         <span class="setting-row-label error-text">{{ t('settings.syncConnectionError') }}: {{ state.connectionError }}</span>
       </div>
+      <div v-if="state.identityError" class="setting-row">
+        <span class="setting-row-label error-text">{{ t('settings.syncIdentityError') }}: {{ state.identityError }}</span>
+      </div>
       <div v-if="state.noE2EE" class="setting-row">
         <span class="setting-row-label sync-warning">{{ t('settings.syncNoE2EE') }}</span>
       </div>
       <div v-if="state.experimental" class="setting-row">
         <span class="setting-row-label">{{ t('settings.syncExperimental') }}</span>
       </div>
-      <div v-if="state.connected" class="setting-row">
+      <div v-if="state.connected && state.autoEnabled" class="setting-row">
         <span class="setting-row-label">{{ t('settings.syncAutoNote') }}</span>
       </div>
       <div v-if="state.connected && state.syncRunning" class="setting-row">
@@ -41,6 +44,79 @@
       </div>
       <div v-if="state.connected && state.autoPaused" class="setting-row">
         <span class="setting-row-label sync-warning">{{ t('settings.syncPausedLabel') }}<template v-if="state.pauseReason"> — {{ state.pauseReason }}</template></span>
+      </div>
+
+      <!-- Browser-owned sync (Pure frontend/PWA): S3 configuration. The form is
+           independent of image settings; secrets live in this browser. -->
+      <div v-if="isLocalBuild && !state.connected" class="sync-config">
+        <div class="setting-row">
+          <span class="setting-row-label">{{ t('settings.syncConfigTitle') }}</span>
+        </div>
+        <div class="setting-row">
+          <span class="setting-row-label">Endpoint</span>
+          <input type="text" class="input input-select" v-model.trim="cfg.endpoint" placeholder="https://s3.example.com" />
+        </div>
+        <div class="setting-row">
+          <span class="setting-row-label">Region</span>
+          <input type="text" class="input input-select" v-model.trim="cfg.region" placeholder="us-east-1" />
+        </div>
+        <div class="setting-row">
+          <span class="setting-row-label">Bucket</span>
+          <input type="text" class="input input-select" v-model.trim="cfg.bucket" />
+        </div>
+        <div class="setting-row">
+          <span class="setting-row-label">Prefix</span>
+          <input type="text" class="input input-select" v-model.trim="cfg.prefix" />
+        </div>
+        <div class="setting-row">
+          <span class="setting-row-label">Access Key</span>
+          <span class="secret-input">
+            <input :type="showSecrets ? 'text' : 'password'" class="input input-select" v-model.trim="cfg.accessKey" />
+            <button type="button" class="secret-toggle" @click="showSecrets = !showSecrets"
+                    :aria-label="showSecrets ? t('settings.secretHide') : t('settings.secretShow')">
+              <span class="material-icons-outlined">{{ showSecrets ? 'visibility_off' : 'visibility' }}</span>
+            </button>
+          </span>
+        </div>
+        <div class="setting-row">
+          <span class="setting-row-label">Secret Key</span>
+          <span class="secret-input">
+            <input :type="showSecrets ? 'text' : 'password'" class="input input-select" v-model.trim="cfg.secretKey" />
+            <button type="button" class="secret-toggle" @click="showSecrets = !showSecrets"
+                    :aria-label="showSecrets ? t('settings.secretHide') : t('settings.secretShow')">
+              <span class="material-icons-outlined">{{ showSecrets ? 'visibility_off' : 'visibility' }}</span>
+            </button>
+          </span>
+        </div>
+        <div class="setting-row">
+          <span class="setting-row-label">{{ t('settings.syncConfigForcePathStyle') }}</span>
+          <input type="checkbox" class="input-checkbox" v-model="cfg.forcePathStyle" />
+        </div>
+        <div class="setting-row">
+          <span class="setting-row-label sync-warning">{{ t('settings.syncCredentialWarning') }}</span>
+        </div>
+        <div class="setting-row">
+          <span class="setting-row-label">{{ t('settings.syncDeletesPropagate') }}</span>
+        </div>
+        <details class="cors-template">
+          <summary>
+            <span class="material-icons-outlined cors-template-icon" aria-hidden="true">dns</span>
+            {{ t('settings.syncCorsTemplate') }}
+          </summary>
+          <pre class="cors-template-code">{{ syncCorsTemplate }}</pre>
+          <p class="cors-template-warning">{{ t('settings.syncCorsHint') }}</p>
+        </details>
+        <div class="sync-actions">
+          <button type="button" class="btn btn-sm btn-outline" :disabled="configBusy" @click="onTestConfig">
+            {{ configBusy ? t('settings.syncTesting') : t('settings.syncConfigTest') }}
+          </button>
+          <button type="button" class="btn btn-sm btn-primary" :disabled="configBusy" @click="onSaveConfig">
+            {{ t('settings.syncConfigSave') }}
+          </button>
+        </div>
+        <div v-if="configMessage" class="setting-row">
+          <span :class="configError ? 'error-text' : 'ok-text'">{{ configMessage }}</span>
+        </div>
       </div>
 
       <div class="sync-actions">
@@ -57,7 +133,7 @@
           {{ t('settings.syncTest') }}
         </button>
         <button
-          v-if="state.connection || state.connectionError"
+          v-if="state.connection || state.connectionError || state.identityError"
           type="button"
           class="btn btn-sm btn-outline"
           :disabled="state.busy"
@@ -98,9 +174,10 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useI18n } from '../i18n'
-import { cloudSyncAvailable } from '../composables/runtime'
+import { cloudSyncAvailable, isLocalBuild } from '../composables/runtime'
+import { initSyncConfig, getSyncConfigState, saveConfig, testConfig } from '../composables/useSyncConfig'
 import {
   initSyncSettings,
   getSyncSettings,
@@ -117,12 +194,61 @@ const state = getSyncSettings()
 const open = ref(false)
 const syncMessage = ref('')
 const syncError = ref(false)
+const showSecrets = ref(false)
 
-onMounted(() => initSyncSettings())
+// Browser-owned note-sync configuration (local build only).
+const cfg = getSyncConfigState()
+const configBusy = ref(false)
+const configMessage = ref('')
+const configError = ref(false)
+const syncCorsTemplate = `[
+  {
+    "AllowedOrigins": ["<app origin>"],
+    "AllowedMethods": ["PUT", "GET", "HEAD", "DELETE"],
+    "AllowedHeaders": ["Authorization", "Content-Type", "x-amz-*", "If-Match", "If-None-Match"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3000
+  }
+]`
+
+onMounted(() => {
+  initSyncSettings()
+  initSyncConfig()
+})
 
 function formatTime(value) {
   const d = new Date(value)
   return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString()
+}
+
+async function onSaveConfig() {
+  configMessage.value = ''
+  configBusy.value = true
+  try {
+    await saveConfig()
+    configMessage.value = t('settings.syncConfigSaved')
+    configError.value = false
+  } catch (e) {
+    configMessage.value = e?.response?.data?.error || t('settings.syncFailed')
+    configError.value = true
+  } finally {
+    configBusy.value = false
+  }
+}
+
+async function onTestConfig() {
+  configMessage.value = ''
+  configBusy.value = true
+  try {
+    await testConfig()
+    configMessage.value = t('settings.syncConfigTestOk')
+    configError.value = false
+  } catch (e) {
+    configMessage.value = e?.response?.data?.error || t('settings.syncTestFailed')
+    configError.value = true
+  } finally {
+    configBusy.value = false
+  }
 }
 
 async function onEnable() {
@@ -296,4 +422,82 @@ async function onRestore(index) {
   font-size: 12px;
   color: var(--text-secondary);
 }
+.sync-config { margin-top: 14px; }
+.input-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-card);
+}
+.input-checkbox:hover:not(:disabled) { border-color: var(--primary); }
+.input-checkbox:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.input-checkbox:checked::after {
+  content: '';
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg) translateY(-1px);
+}
+.input-checkbox:disabled { opacity: 0.5; cursor: default; }
+.secret-input {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.secret-input .input { padding-right: 30px; }
+.secret-toggle {
+  position: absolute;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: var(--text-muted);
+  background: transparent;
+}
+.secret-toggle:hover:not(:disabled) {
+  color: var(--primary-dark);
+  background: var(--primary-bg);
+}
+.secret-toggle:disabled { cursor: default; opacity: 0.5; }
+.secret-toggle .material-icons-outlined { font-size: 16px; }
+.cors-template {
+  margin: 8px 0 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.cors-template summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.cors-template summary::-webkit-details-marker { display: none; }
+.cors-template-icon { font-size: 16px; }
+.cors-template-code {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--editor-font-monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+.cors-template-warning { margin: 6px 0 0; color: var(--text-muted); }
 </style>

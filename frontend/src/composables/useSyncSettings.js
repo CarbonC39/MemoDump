@@ -4,7 +4,7 @@
 // completed run, conflicts, and recovery state.
 import { reactive } from 'vue'
 import apiClient from '../api'
-import { cloudSyncAvailable } from './runtime'
+import { cloudSyncAvailable, isLocalBuild } from './runtime'
 
 const state = reactive({
   initialized: false,
@@ -12,6 +12,7 @@ const state = reactive({
   connected: false,
   connection: false,
   connectionError: '',
+  identityError: '',
   experimental: false,
   noE2EE: false,
   lastRun: null,
@@ -39,6 +40,7 @@ export function applyLightweightStatus(d) {
   state.connected = !!d.connected
   state.connection = !!d.connection
   state.connectionError = d.connectionError || ''
+  state.identityError = d.identityError || ''
   state.experimental = !!d.experimental
   state.noE2EE = !!d.noE2EE
   state.lastRun = d.lastRun || null
@@ -99,6 +101,12 @@ export async function enableSync() {
     const { data } = await apiClient.syncEnable()
     state.enabled = true
     await refreshSyncSettings()
+    // The browser Enable awaits its immediate run (the Go backend wakes an
+    // asynchronous scheduler instead), so a local-build enable refreshes the
+    // visible list and the open note through the same safe logic a manual run
+    // uses: the list shows freshly pulled notes and a clean buffer adopts the
+    // new revision while a dirty/saving buffer is never replaced.
+    if (isLocalBuild && onSyncChanged) onSyncChanged()
     return data
   })
 }

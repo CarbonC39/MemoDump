@@ -73,21 +73,33 @@ async function withReplicaLock(vaultId, fn, locks) {
 export async function runSyncCycle(store, { locks = globalThis.navigator?.locks, signal, commitSnapshotFn } = {}) {
   const identity = await loadIdentity()
   if (!identity) throw runError('not-enabled', 'sync is not enabled')
-  return withReplicaLock(identity.vaultId, async () => {
-    const state = await observeAndDecide(store, { signal })
-    const { deferred } = await executeDecisions(store, state.decisions, state.baselines, { index: state.index, signal })
-    await (commitSnapshotFn || commitSnapshot)(state)
-    const blocked = state.decisions.filter((d) => d.kind === 'block').length
-    const retry = state.decisions.filter((d) => d.kind === 'retry').length + deferred
-    return {
-      scanned: state.decisions.length,
-      blocked,
-      retry,
-      conflicts: state.decisions.filter((d) => PRESERVE_KINDS.has(d.kind)).length,
-      snapshotCommitted: true,
-      decisions: state.decisions,
-    }
-  }, locks)
+  return withReplicaLock(identity.vaultId, () => cycleBody(store, { signal, commitSnapshotFn }), locks)
+}
+
+// cycleUnderLock runs one cycle body when the caller ALREADY holds the vault Web
+// Lock (the enable lifecycle pins the connection and runs the first cycle under
+// one lock so a concurrent Reset/Disable can never interleave). It performs no
+// lock acquisition itself.
+export async function cycleUnderLock(store, { signal, commitSnapshotFn } = {}) {
+  return cycleBody(store, { signal, commitSnapshotFn })
+}
+
+async function cycleBody(store, { signal, commitSnapshotFn } = {}) {
+  const identity = await loadIdentity()
+  if (!identity) throw runError('not-enabled', 'sync is not enabled')
+  const state = await observeAndDecide(store, { signal })
+  const { deferred } = await executeDecisions(store, state.decisions, state.baselines, { index: state.index, signal })
+  await (commitSnapshotFn || commitSnapshot)(state)
+  const blocked = state.decisions.filter((d) => d.kind === 'block').length
+  const retry = state.decisions.filter((d) => d.kind === 'retry').length + deferred
+  return {
+    scanned: state.decisions.length,
+    blocked,
+    retry,
+    conflicts: state.decisions.filter((d) => PRESERVE_KINDS.has(d.kind)).length,
+    snapshotCommitted: true,
+    decisions: state.decisions,
+  }
 }
 
 // validateRepository re-checks the strict connection pin inside the lock: the

@@ -1,12 +1,14 @@
 // Lightweight automatic-sync status poller (R5.4). The Wails backend can change
 // local Markdown without a frontend request, so a connected Wails runtime polls
 // the redacted /api/sync/status every 30 seconds while the document is visible.
-// It never calls /api/sync/run, never fetches recovery content on a poll (the
-// status carries only the count), and only runs when the runtime reports cloud
-// sync available (R6.0) — never on the CLI Web server or the Pure frontend/PWA
-// build. When an automatic attempt completes, the visible list is refreshed and
-// the open note is re-read: a clean buffer adopts the new content, a deleted
-// note closes, and a dirty buffer is never replaced — only a notice is shown.
+// The Pure frontend/PWA build polls the same redacted shape, served in-page by
+// the R6.5 browser service — never an HTTP call to MemoDump itself. It never
+// calls /api/sync/run, never fetches recovery content on a poll (the status
+// carries only the count), and only runs when the runtime reports cloud sync
+// available (R6.0/R6.5) — never on the CLI Web server. When an automatic
+// attempt completes, the visible list is refreshed and the open note is re-read:
+// a clean buffer adopts the new content, a deleted note closes, and a dirty
+// buffer is never replaced — only a notice is shown.
 import { ref } from 'vue'
 import { applyLightweightStatus, getSyncSettings } from './useSyncSettings'
 
@@ -28,7 +30,7 @@ export function useSyncPolling({
   onNotice = () => {},
   onRecoveryChanged = () => {},
 } = {}) {
-  const { editingNote, isDirty, isSaving, loadDocument, clearDocument } = editor
+  const { editingNote, isDirty, isSaving, loadDocument, clearDocument, isOffline, isConflict } = editor
   const lastCompleted = ref(null)
   let timer = null
   let started = false
@@ -110,11 +112,11 @@ export function useSyncPolling({
   }
 
   // refreshOpenNote re-reads the open note. A clean buffer adopts the fetched
-  // revision/content; a deleted note closes; a dirty/saving/conflicting buffer
-  // is never replaced or closed — only a notice is shown, and the existing
-  // revision CAS prevents overwrite. If the user switches notes while the
-  // request is in flight, the stale response is discarded so note A's content
-  // can never be loaded into note B.
+  // revision/content; a deleted note closes. A dirty, saving, offline (unsaved
+  // outbox) or conflicting buffer is never replaced or closed — only a notice
+  // is shown, and the existing revision CAS prevents overwrite. If the user
+  // switches notes while the request is in flight, the stale response is
+  // discarded so note A's content can never be loaded into note B.
   async function refreshOpenNote() {
     const instance = editingNote.value
     if (!instance || !instance.path) return
@@ -126,7 +128,7 @@ export function useSyncPolling({
     } catch (e) {
       if (e?.response?.status === 404) {
         if (editingNote.value !== instance) return // user switched away
-        if (isDirty.value || isSaving.value) {
+        if (isProtectedBuffer()) {
           onNotice('changed')
         } else {
           clearDocument()
@@ -137,11 +139,21 @@ export function useSyncPolling({
     }
     if (editingNote.value !== instance) return // user switched during the request
     if (!fetched || fetched.revision === instance.revision) return
-    if (isDirty.value || isSaving.value) {
+    if (isProtectedBuffer()) {
       onNotice('changed')
       return
     }
     loadDocument(fetched)
+  }
+
+  // isProtectedBuffer reports whether the open buffer holds unsaved work that a
+  // sync refresh must never replace or close: a dirty or in-flight save, or an
+  // offline outbox / conflict state even when the editor looks clean.
+  function isProtectedBuffer() {
+    if (isDirty.value || isSaving.value) return true
+    if (isOffline && isOffline.value) return true
+    if (isConflict && isConflict.value) return true
+    return false
   }
 
   return { poll, start, stop, refreshOpenNote, lastCompleted }

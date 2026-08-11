@@ -74,20 +74,58 @@ function runTx(stores, fn) {
 
 // ---- identity -----------------------------------------------------------
 
+function isValidIdentity(rec) {
+  return rec &&
+    typeof rec.vaultId === 'string' && isUUIDv4(rec.vaultId) &&
+    typeof rec.replicaId === 'string' && isUUIDv4(rec.replicaId)
+}
+
 // loadIdentity reads the Vault/Replica identity. A missing record means sync
 // has never been enabled. A present-but-invalid record is corruption: sync must
 // stop and the user must Reset — it is never reinterpreted as a fresh vault.
 export async function loadIdentity() {
   const rec = await getRec('syncState', IDENTITY_KEY)
   if (!rec) return null
-  if (typeof rec.vaultId !== 'string' || !isUUIDv4(rec.vaultId) ||
-      typeof rec.replicaId !== 'string' || !isUUIDv4(rec.replicaId)) {
+  if (!isValidIdentity(rec)) {
     throw new SyncStateError('identity-corrupt', 'sync identity is corrupt; reset sync')
   }
   return { vaultId: rec.vaultId, replicaId: rec.replicaId }
 }
 
-// saveIdentity writes the Vault/Replica identity (Enable).
+// loadIdentityRecord returns the raw identity record (valid or corrupt), or
+// null when none exists. The lifecycle layer uses it to derive a stable lock
+// scope even for a corrupt vault, and to decide whether Reset must rebuild.
+export async function loadIdentityRecord() {
+  return (await getRec('syncState', IDENTITY_KEY)) || null
+}
+
+// createIdentityIfAbsent atomically creates the Vault/Replica identity when it
+// is ABSENT, returns an existing VALID identity, and REJECTS a corrupt record.
+// A corrupt identity must stop sync and require an explicit Reset (never be
+// reinterpreted as a fresh vault); only a genuinely missing record is created.
+// The single transaction serializes concurrent Enables: the first writer
+// creates the pair and every other caller adopts the same record, so two tabs
+// can never establish different identities for the same IndexedDB vault.
+export async function createIdentityIfAbsent(vaultId, replicaId) {
+  if (!isUUIDv4(vaultId) || !isUUIDv4(replicaId)) {
+    throw new SyncStateError('invalid-id', 'vault and replica IDs must be UUID v4')
+  }
+  return runTx(['syncState'], async (t, reqP) => {
+    const store = t.objectStore('syncState')
+    const existing = await reqP(store.get(IDENTITY_KEY))
+    if (existing) {
+      if (!isValidIdentity(existing)) {
+        throw new SyncStateError('identity-corrupt', 'sync identity is corrupt; reset sync')
+      }
+      return { created: false, identity: { vaultId: existing.vaultId, replicaId: existing.replicaId } }
+    }
+    store.put({ key: IDENTITY_KEY, vaultId, replicaId })
+    return { created: true, identity: { vaultId, replicaId } }
+  })
+}
+
+// saveIdentity writes the Vault/Replica identity (Enable). It requires an
+// already-valid identity decision; callers should prefer ensureValidIdentity.
 export async function saveIdentity(vaultId, replicaId) {
   if (!isUUIDv4(vaultId) || !isUUIDv4(replicaId)) {
     throw new SyncStateError('invalid-id', 'vault and replica IDs must be UUID v4')
@@ -464,24 +502,28 @@ export async function writeRecovery(syncId, stateHash, path, markdown) {
     const meta = t.objectStore('recovery')
     const content = t.objectStore('recoveryContent')
     const existing = await reqP(content.get(id))
+    const size = new TextEncoder().encode(markdown).byteLength
     if (existing && existing.markdown === markdown) {
       const m = await reqP(meta.get(id))
-      if (!m || m.path !== path || m.syncId !== syncId || m.stateHash !== stateHash) {
-        meta.put({ id, syncId, stateHash, path })
+      if (!m || m.path !== path || m.syncId !== syncId || m.stateHash !== stateHash || m.size !== size) {
+        meta.put({ id, syncId, stateHash, path, size })
       }
       return { ok: true }
     }
-    meta.put({ id, syncId, stateHash, path })
+    meta.put({ id, syncId, stateHash, path, size })
     content.put({ id, markdown })
     return { ok: true }
   })
 }
 
 // listRecovery returns recovery-copy METADATA only (Sync ID, state hash,
-// original path) without loading any Markdown, deterministically ordered.
+// original path, byte size) without loading any Markdown, deterministically
+// ordered. The size is stored at write time so a listing never reads content.
 export async function listRecovery() {
   const meta = await allOf('recovery')
-  const out = meta.map((m) => ({ syncId: m.syncId, stateHash: m.stateHash, path: m.path || '' }))
+  const out = meta.map((m) => ({
+    syncId: m.syncId, stateHash: m.stateHash, path: m.path || '', size: m.size ?? 0,
+  }))
   out.sort((a, b) => (a.syncId === b.syncId ? a.stateHash.localeCompare(b.stateHash) : a.syncId.localeCompare(b.syncId)))
   return out
 }
@@ -543,12 +585,16 @@ export async function restoreRecovery(syncId, stateHash, targetPath) {
 // ---- Reset ---------------------------------------------------------------
 
 // resetSyncState clears the connection pin and the disposable snapshot in one
-// transaction. Notes, assigned Sync IDs, the sync index, recovery copies, and
-// the Vault/Replica identity are all preserved (spec R6.2).
+// transaction. Notes, assigned Sync IDs, the sync index, recovery copies, and a
+// VALID Vault/Replica identity are all preserved (spec R6.2). A CORRUPT identity
+// record is removed so the next Enable can rebuild it — otherwise a corrupt
+// identity could never be recovered, since it blocks every sync operation.
 export async function resetSyncState() {
-  await runTx(['syncState'], async (t) => {
+  await runTx(['syncState'], async (t, reqP) => {
     const store = t.objectStore('syncState')
     store.delete(CONNECTION_KEY)
     store.delete(SNAPSHOT_KEY)
+    const idRec = await reqP(store.get(IDENTITY_KEY))
+    if (idRec && !isValidIdentity(idRec)) store.delete(IDENTITY_KEY)
   })
 }

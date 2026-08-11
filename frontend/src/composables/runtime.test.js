@@ -8,7 +8,7 @@ async function loadRuntime() {
   return import('./runtime')
 }
 
-describe('runtime capability matrix (R6.0)', () => {
+describe('runtime capability matrix (R6.0/R6.5)', () => {
   beforeEach(() => {
     vi.unstubAllEnvs()
     delete globalThis.window
@@ -34,11 +34,12 @@ describe('runtime capability matrix (R6.0)', () => {
     expect(runtime.cloudSyncAvailable()).toBe(false)
   })
 
-  it('Pure frontend/PWA: VITE_LOCAL=1 -> sync unavailable until the R6.5 engine', async () => {
+  it('Pure frontend/PWA: VITE_LOCAL=1 -> sync available via the R6.5 browser engine', async () => {
     vi.stubEnv('VITE_LOCAL', '1')
     const runtime = await loadRuntime()
     expect(runtime.isLocalBuild).toBe(true)
-    expect(runtime.cloudSyncAvailable()).toBe(false)
+    expect(runtime.isWailsApp).toBe(false)
+    expect(runtime.cloudSyncAvailable()).toBe(true)
   })
 
   it('setCloudSyncAvailable overrides the detected capability explicitly', async () => {

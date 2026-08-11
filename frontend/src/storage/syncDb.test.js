@@ -4,7 +4,8 @@ import localApi from '../localApi'
 import { openDB, allOf, getRec, _close } from './localVaultDb'
 import { sha256Hex } from './sha256'
 import {
-  loadIdentity, saveIdentity, loadConnection, setConnected, setConnection,
+  loadIdentity, loadIdentityRecord, saveIdentity, createIdentityIfAbsent,
+  loadConnection, setConnected, setConnection,
   loadSnapshot, replaceSnapshot, loadSyncIndex, removeIndexEntry,
   assignMissingSyncIds, reserveConflictNote, applyNoteMutation,
   writeRecovery, listRecovery, readRecovery, restoreRecovery, resetSyncState,
@@ -104,6 +105,45 @@ describe('Vault/Replica identity', () => {
   it('treats a corrupt identity as corruption that requires Reset, never an empty vault', async () => {
     await put('syncState', { key: 'identity', vaultId: 'not-a-uuid', replicaId: validUUID() })
     await expect(loadIdentity()).rejects.toMatchObject({ code: 'identity-corrupt' })
+  })
+
+  it('createIdentityIfAbsent creates atomically and reuses a valid record', async () => {
+    const vault = validUUID(); const replica = validUUID()
+    const fresh = await createIdentityIfAbsent(vault, replica)
+    expect(fresh).toEqual({ created: true, identity: { vaultId: vault, replicaId: replica } })
+
+    // A concurrent Enable adopts the same record instead of minting a second.
+    const other = validUUID()
+    const second = await createIdentityIfAbsent(other, other)
+    expect(second).toEqual({ created: false, identity: { vaultId: vault, replicaId: replica } })
+    expect(await loadIdentity()).toEqual({ vaultId: vault, replicaId: replica })
+  })
+
+  it('createIdentityIfAbsent rejects a corrupt identity instead of repairing it', async () => {
+    await put('syncState', { key: 'identity', vaultId: 'not-a-uuid', replicaId: validUUID() })
+    // Corruption stops sync and requires Reset; it is never a fresh vault.
+    await expect(createIdentityIfAbsent(validUUID(), validUUID()))
+      .rejects.toMatchObject({ code: 'identity-corrupt' })
+    // The corrupt record survives until an explicit Reset clears it.
+    await expect(loadIdentity()).rejects.toMatchObject({ code: 'identity-corrupt' })
+  })
+
+  it('loadIdentityRecord returns the raw record even when it is corrupt', async () => {
+    expect(await loadIdentityRecord()).toBeNull()
+    await put('syncState', { key: 'identity', vaultId: 'not-a-uuid', replicaId: validUUID() })
+    expect((await loadIdentityRecord()).vaultId).toBe('not-a-uuid')
+  })
+
+  it('Reset clears a corrupt identity so the next Enable can rebuild it', async () => {
+    await put('syncState', { key: 'identity', vaultId: 'not-a-uuid', replicaId: validUUID() })
+    await resetSyncState()
+    expect(await loadIdentity()).toBeNull()
+
+    const vault = validUUID(); const replica = validUUID()
+    await saveIdentity(vault, replica)
+    await resetSyncState()
+    // A VALID identity survives Reset; the connection pin is what is cleared.
+    expect(await loadIdentity()).toEqual({ vaultId: vault, replicaId: replica })
   })
 })
 
@@ -526,8 +566,8 @@ describe('recovery store', () => {
 
     const list = await listRecovery()
     expect(list).toEqual([
-      { syncId, stateHash: hex64(7), path: 'dir/a.md' },
-      { syncId, stateHash: hex64(8), path: 'dir/b.md' },
+      { syncId, stateHash: hex64(7), path: 'dir/a.md', size: new TextEncoder().encode('# recovered\n').byteLength },
+      { syncId, stateHash: hex64(8), path: 'dir/b.md', size: new TextEncoder().encode('second\n').byteLength },
     ])
     for (const m of list) expect(m.markdown).toBeUndefined()
 

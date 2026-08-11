@@ -127,6 +127,56 @@ describe('useSyncPolling', () => {
     p.stop()
   })
 
+  it('protects a clean-looking buffer that is offline (queued outbox)', async () => {
+    const onNotice = vi.fn()
+    const editor = makeEditor()
+    editor.isOffline = { value: true }
+    const api = {
+      syncStatus: vi.fn().mockResolvedValue(baseStatus({ lastCompleted: '2026-08-09T00:10:00Z' })),
+      getNote: vi.fn().mockResolvedValue({ data: { path: 'a.md', revision: 'r2', content: '# new\n' } }),
+    }
+    const { p } = makePolling({ api, editor, onNotice })
+    p.start()
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(editor.editingNote.value.revision).toBe('r1')
+    expect(editor.editContent.value).toBe('# old\n')
+    expect(onNotice).toHaveBeenCalledWith('changed')
+    p.stop()
+  })
+
+  it('never closes a clean-looking offline buffer when sync deletes the note', async () => {
+    const onNotice = vi.fn()
+    const editor = makeEditor()
+    editor.isOffline = { value: true }
+    const api = {
+      syncStatus: vi.fn().mockResolvedValue(baseStatus({ lastCompleted: '2026-08-09T00:10:00Z' })),
+      getNote: vi.fn().mockRejectedValue({ response: { status: 404 } }),
+    }
+    const { p } = makePolling({ api, editor, onNotice })
+    p.start()
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(editor.editingNote.value).not.toBeNull()
+    expect(onNotice).toHaveBeenCalledWith('changed')
+    p.stop()
+  })
+
+  it('protects a clean-looking buffer in a conflict state', async () => {
+    const onNotice = vi.fn()
+    const editor = makeEditor()
+    editor.isConflict = { value: true }
+    const api = {
+      syncStatus: vi.fn().mockResolvedValue(baseStatus({ lastCompleted: '2026-08-09T00:10:00Z' })),
+      getNote: vi.fn().mockResolvedValue({ data: { path: 'a.md', revision: 'r2', content: '# new\n' } }),
+    }
+    const { p } = makePolling({ api, editor, onNotice })
+    p.start()
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(editor.editingNote.value.revision).toBe('r1')
+    expect(editor.editContent.value).toBe('# old\n')
+    expect(onNotice).toHaveBeenCalledWith('changed')
+    p.stop()
+  })
+
   it('pauses polling when hidden and resumes on visibility return', async () => {
     const api = { syncStatus: vi.fn().mockResolvedValue(baseStatus()), getNote: vi.fn().mockResolvedValue({ data: { revision: 'r1' } }) }
     const { p, setVisible, api: a } = makePolling({ api, editor: makeEditor(), visible: true })

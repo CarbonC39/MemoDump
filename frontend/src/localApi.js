@@ -19,6 +19,7 @@
 import { atomicNoteWrite, atomicFolderWrite, getNoteRec, write, allOf } from './storage/localVaultDb'
 import { frontMatterPartWithTags, parseDocument, serializeTags } from './storage/frontmatter'
 import { sha256Hex } from './storage/sha256'
+import * as syncService from './sync/browserService'
 
 const PREVIEW_LIMIT = 1000
 const UPLOAD_LIMIT = 1 << 20 // 1 MB
@@ -505,16 +506,17 @@ const localApi = {
     const rec = await createMarkdownRec({ name: base, folder: folder || '', markdown: text })
     return { data: toFull(rec) }
   },
-  // Cloud sync is a server feature; the pure-frontend build has no provider.
-  syncStatus() {
-    return Promise.resolve({ data: { enabled: false, connected: false, experimental: false, noE2EE: false, recoveryCount: 0 } })
-  },
-  syncEnable() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
-  syncRun() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
-  syncDisable() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
-  syncReset() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
-  syncTest() { return Promise.reject(apiError(400, "Cloud sync requires the server build")) },
-  syncRecovery() { return Promise.resolve({ data: { recovery: [] } }) },
+  // Cloud sync is provided by the in-page R6.5 browser service (the Pure
+  // frontend/PWA build owns its own sync engine); every call resolves to the
+  // IndexedDB state and the S3 adapter, never to /api/sync/* on a server.
+  syncStatus() { return syncService.syncStatus() },
+  syncEnable() { return syncService.syncEnable() },
+  syncRun() { return syncService.syncRun() },
+  syncDisable() { return syncService.syncDisable() },
+  syncReset() { return syncService.syncReset() },
+  syncTest() { return syncService.syncTest() },
+  syncRecovery() { return syncService.syncRecovery() },
+  syncRecoveryRestore(body) { return syncService.syncRecoveryRestore(body) },
 }
 
 // Persist a brand-new note, avoiding clobbering an existing path. The full
