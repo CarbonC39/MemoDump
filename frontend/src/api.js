@@ -148,6 +148,15 @@ const remoteApi = {
     syncTest() {
         return api.post('/sync/test')
     },
+    syncConfigGet() {
+        return api.get('/sync/config')
+    },
+    syncConfigSave(cfg) {
+        return api.put('/sync/config', cfg)
+    },
+    syncConfigTest(cfg) {
+        return api.post('/sync/config/test', cfg)
+    },
     syncRecovery() {
         return api.get('/sync/recovery')
     },

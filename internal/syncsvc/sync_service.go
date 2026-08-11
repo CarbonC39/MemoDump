@@ -59,20 +59,6 @@ func init() {
 	syncProvider = defaultSyncProvider
 }
 
-// syncS3Config reads the S3 sync-provider configuration from the environment.
-// An empty endpoint or bucket means "no real provider configured".
-func syncS3Config() s3.Config {
-	return s3.Config{
-		Endpoint:       os.Getenv("MEMODUMP_SYNC_ENDPOINT"),
-		Region:         os.Getenv("MEMODUMP_SYNC_REGION"),
-		Bucket:         os.Getenv("MEMODUMP_SYNC_BUCKET"),
-		Prefix:         os.Getenv("MEMODUMP_SYNC_PREFIX"),
-		AccessKey:      os.Getenv("MEMODUMP_SYNC_ACCESS_KEY"),
-		SecretKey:      os.Getenv("MEMODUMP_SYNC_SECRET_KEY"),
-		ForcePathStyle: os.Getenv("MEMODUMP_SYNC_FORCE_PATH_STYLE") == "1",
-	}
-}
-
 // defaultSyncProvider selects the remote store. With no S3 config at all, the
 // process-local memory remote is used ONLY when the explicit development switch
 // MEMODUMP_SYNC_MEMORY=1 is set; production runs must configure a real

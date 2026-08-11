@@ -178,7 +178,7 @@
             @click="imageSectionOpen = !imageSectionOpen"
           >
             <span class="image-mode-summary">{{ imageModeSummary }}</span>
-            <span class="material-icons-outlined settings-caret">{{ imageSectionOpen ? 'expand_less' : 'expand_more' }}</span>
+            <span class="material-icons-outlined settings-caret" :class="{ open: imageSectionOpen }">expand_more</span>
           </button>
         </div>
 
@@ -326,10 +326,12 @@
         </div>
       </div>
 
-      <hr class="settings-divider" />
+      <hr v-if="cloudSyncAvailable()" class="settings-divider" />
 
       <!-- Cloud sync (experimental) -->
       <SyncPanel />
+
+      <hr class="settings-divider" />
 
       <!-- Custom CSS -->
       <div class="settings-section">
@@ -374,6 +376,7 @@ import {
 } from '../composables/useImageSettings'
 import InfoTooltip from './InfoTooltip.vue'
 import SyncPanel from './SyncPanel.vue'
+import { cloudSyncAvailable } from '../composables/runtime'
 
 const emit = defineEmits(['close'])
 
@@ -820,7 +823,12 @@ function resetToDefaults() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.settings-caret { color: var(--text-muted); font-size: 18px; }
+.settings-caret {
+  color: var(--text-muted);
+  font-size: 18px;
+  transition: transform 0.15s ease;
+}
+.settings-caret.open { transform: rotate(180deg); }
 .settings-image-body { padding-top: 14px; }
 .image-actions {
   display: flex;
@@ -1014,13 +1022,6 @@ function resetToDefaults() {
 .unit {
   font-size: 13px;
   color: var(--text-secondary);
-}
-
-/* ---- Select ---- */
-.input-select {
-  width: 180px;
-  font-size: 13px;
-  padding: 6px 8px;
 }
 
 /* ---- Custom CSS textarea ---- */

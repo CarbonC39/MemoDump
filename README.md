@@ -167,9 +167,16 @@ wire-compatible — the same versioned note records under `repo.json` +
 `notes/<sync-id>.json` and the same fixtures — so a Wails replica and a PWA
 replica can synchronize through the same bucket.
 
-**Provider configuration (Wails desktop).** Set these environment variables on
-each installation (the CLI flags mirror them only for the state root; the
-provider uses env vars):
+**Provider configuration (Wails desktop).** Configure note sync from
+**Settings → Cloud sync** — the panel persists endpoint, region, bucket,
+prefix, access/secret key, and path style in the OS user-config directory
+(`<user-config>/memodump/sync-config.json`). The secretKey is stored
+server-side and never returned to the UI; leaving it blank when reconnecting keeps the
+current secret. The panel refuses to change the provider while sync is
+connected (Disconnect first, then edit). The panel combines saving and the
+provider capability check into one **Connect** action. As an alternative,
+supply the provider entirely with environment variables — these take
+precedence over the saved file and make the panel read-only:
 
 | Variable | Meaning |
 |----------|---------|
@@ -198,17 +205,17 @@ window, discards or isolates them, so that PWA starts as a fresh replica the
 next time it is enabled against the same repository (local unsynced changes and
 recovery copies are lost).
 
-**Behavior.** A connected replica (you clicked **Enable** once) runs automatically
+**Behavior.** A connected replica (you clicked **Connect** once) runs automatically
 while its runtime is open: once after a **10-second startup delay**, then every
-**five minutes**, plus immediately after a successful Enable. `Run now` in the
+**five minutes**, plus immediately after a successful connection. **Sync now** in the
 settings panel still forces an immediate run. The schedule is identical for the
 Wails desktop (while the app is open) and the PWA (while the page is open), and
 no sync runs after a runtime closes. A transient provider failure retries with
 in-memory backoff (`1m, 2m, 5m, 10m, 30m`, honoring a larger provider
 `Retry-After`, reset by success; restart forgets it). An
 auth/permission/quota/mismatch failure **pauses automatic sync** for the rest of
-the runtime — the status shows the paused reason — while `Run now` still works;
-a successful manual run or Enable clears the pause.
+the runtime — the status shows the paused reason — while **Sync now** still works;
+a successful manual run or reconnect clears the pause.
 
 **Cloud sync is not a backup.** Deletes propagate to every device. Provider-side
 versioning/history is external to MemoDump. The durable **recovery copies** the
@@ -228,12 +235,12 @@ while MemoDump cloud sync is enabled — the two tools would race on the same
 Markdown files.
 
 **Managing the connection.** The settings panel shows connection state, the last
-(redacted) run, the next scheduled run, and recovery copies. **Disable** stops
-automatic runs and keeps your identity, so re-enabling with the same provider
-reconnects cleanly. **Reset & reconnect** (with confirmation) discards this
-replica's snapshot and connection pin so you can deliberately switch providers
-or recreate a lost repository. A normal run never re-creates a lost repository
-on its own.
+successful sync, actionable errors, and recovery copies. **Disconnect** stops
+automatic runs and keeps your identity and provider configuration, so
+**Reconnect** resumes cleanly. **Connect different storage…** (with confirmation)
+discards this replica's snapshot and connection pin so you can deliberately
+switch providers or recreate a lost repository. A normal run never re-creates a
+lost repository on its own.
 
 **Testing a provider.** The opt-in live S3 test uses a random isolated prefix and
 cleans up after itself; it never prints credentials:
@@ -361,9 +368,14 @@ server with `npm run dev:local` (Vite serves it directly and proxies `/api` to
 a local server for non-sync features):
 
 ```sh
-cd frontend && VITE_LOCAL=1 npm run build   # production build
+cd frontend && npm run build:local           # production build (verified local mode)
 cd frontend && npm run dev:local            # hot-reload dev server
 ```
+
+`frontend/vercel.json` makes Vercel use this local build and serves `dist` as
+a Vite SPA. After deployment, `/build-mode.json` must return `{"mode":"local"}`;
+if it does not, the Vercel project's Root Directory is not `frontend` or a
+dashboard build-command override is taking precedence over the repository.
 
 The browser build must run in a **secure context**: serve it over HTTPS (or
 `http://localhost` during development). Web Locks, `crypto.subtle`, and secure

@@ -74,6 +74,7 @@ func (a *App) startup(ctx context.Context) {
 	httpx.SessionFile = filepath.Join(appstate.DataDir, ".sessions.json")
 	if cfgDir, err := os.UserConfigDir(); err == nil {
 		imagesvc.ConfigFile = filepath.Join(cfgDir, "memodump", "image-config.json")
+		syncsvc.ConfigFile = filepath.Join(cfgDir, "memodump", "sync-config.json")
 	}
 	httpx.LoadSessions()
 	httpx.StartSessionCleanup()

@@ -78,6 +78,9 @@ func buildAPIMux() *http.ServeMux {
 		mux.HandleFunc("POST /api/sync/disable", httpx.AuthMiddleware(syncsvc.HandleSyncDisable))
 		mux.HandleFunc("POST /api/sync/reset", httpx.AuthMiddleware(syncsvc.HandleSyncReset))
 		mux.HandleFunc("POST /api/sync/test", httpx.AuthMiddleware(syncsvc.HandleSyncTest))
+		mux.HandleFunc("GET /api/sync/config", httpx.AuthMiddleware(syncsvc.HandleSyncConfigGet))
+		mux.HandleFunc("PUT /api/sync/config", httpx.AuthMiddleware(syncsvc.HandleSyncConfigSave))
+		mux.HandleFunc("POST /api/sync/config/test", httpx.AuthMiddleware(syncsvc.HandleSyncConfigTest))
 		mux.HandleFunc("GET /api/sync/recovery", httpx.AuthMiddleware(syncsvc.HandleSyncRecoveryList))
 		mux.HandleFunc("POST /api/sync/recovery/restore", httpx.AuthMiddleware(syncsvc.HandleSyncRecoveryRestore))
 	} else {

@@ -184,12 +184,12 @@ Record the application build, provider, date, and result for each step on
 Windows, macOS, and Linux.
 
 1. **Startup and periodic convergence.** On replica A, create a note BEFORE
-   enabling sync, then Enable: Enable triggers an immediate run, so the note
-   uploads without further action. (If you create the note AFTER Enable, it may
-   wait until the next five-minute interval.) On replica B (already enabled),
+   connecting sync, then **Connect**: connecting triggers an immediate run, so the note
+   uploads without further action. (If you create the note AFTER connecting, it may
+   wait until the next five-minute interval.) On replica B (already connected),
    the note downloads within the next automatic interval. Confirm the settings
-   panel shows the next scheduled run.
-2. **Run-now / automatic single-flight.** Trigger `Run now` while an automatic
+   panel remains connected and reports the latest successful sync.
+2. **Manual / automatic single-flight.** Trigger **Sync now** while an automatic
    run is in progress and confirm they serialize (no overlapping cycles, no
    duplicate conflict notes). Shut the app down mid-cycle and confirm no
    background sync work remains and the app exits cleanly.
@@ -211,10 +211,10 @@ Windows, macOS, and Linux.
    recovery copies survive via the persisted OS application-data state.
 7. **Failure behavior.** Revoke the provider credentials (auth failure) and
    confirm the status shows the redacted reason and automatic sync pauses;
-   restore them and confirm a manual `Run now` succeeds and clears the pause.
+   restore them and confirm a manual **Sync now** succeeds and clears the pause.
    Disconnect the network mid-run and confirm a transient error is shown and a
-   later automatic run retries. Confirm **Disable** stops future attempts, and
-   **Reset & reconnect** switches to a second repository deliberately.
+   later automatic run retries. Confirm **Disconnect** stops future attempts, and
+   **Connect different storage…** switches to a second repository deliberately.
 
 ## Cloud sync checklist (R6 browser engine)
 
@@ -230,10 +230,9 @@ result for each step.
 > an HTTPS origin — do not point it at `http://<lan-ip>:port`.
 
 1. **Opt-in real S3 run.** Configure the note-sync form (endpoint, region,
-   bucket, prefix, access/secret key, path style), save, and **Test
-   connection**: it must succeed, and the probe object must be cleaned up in
-   the bucket afterwards. Then **Enable**: the first cycle runs immediately and
-   the status shows the next scheduled run.
+   bucket, prefix, access/secret key, path style), then click **Connect**. The
+   combined save/capability check must succeed, its probe object must be cleaned
+   up in the bucket, and the first sync cycle must run immediately.
 2. **CORS template.** Configure the bucket's CORS with the template from the
    settings panel (methods + `Authorization`/`Content-Type`/`x-amz-*`/
    `If-Match`/`If-None-Match` headers, exposing `ETag` and `Retry-After`).
@@ -264,11 +263,11 @@ result for each step.
    a transient provider error and confirm the in-memory backoff (`1m, 2m, 5m,
    10m, 30m`) shows a later scheduled run and honors a larger provider
    `Retry-After`.
-8. **Failure pause / Reset / repository mismatch.** Revoke the credentials on B:
+8. **Failure pause / reconnect / repository mismatch.** Revoke the credentials on B:
    automatic sync pauses with the redacted reason; restore them and a manual
-   `Run now` clears the pause. Confirm **Reset & reconnect** clears the pin and
-   snapshot but keeps notes and recovery copies, and that enabling against a
-   different repository (or a lost `repo.json`) is refused until Reset.
+   **Sync now** clears the pause. Confirm **Connect different storage…** clears
+   the pin and snapshot but keeps notes and recovery copies, and that connecting
+   against a different repository (or a lost `repo.json`) is refused until then.
 9. **Clearing site data.** On a disposable replica, clear the site's IndexedDB
    (devtools → Application → Storage) and confirm the PWA re-enables as a fresh
    replica against the same repository and re-downloads the remote notes.
