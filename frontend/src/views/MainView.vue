@@ -300,7 +300,7 @@ const {
   nextNotesCursor, loadingMoreNotes, sortMode,
   sortedDisplayNotes, flatFoldersForPicker,
   setSort, loadFolderNode, loadMoreNotes,
-  loadAll, refreshRootFolders, loadFolderTreeForPicker,
+  loadAll, refreshAfterSave, refreshRootFolders, loadFolderTreeForPicker,
 } = noteBrowser
 
 const {
@@ -334,7 +334,10 @@ const {
 } = useNotePersistence({
   api: apiClient,
   editor: noteEditor,
-  onSaved: (...args) => updateUrlHandler(...args),
+  onSaved: (savedNote) => {
+    updateUrlHandler(savedNote)
+    void refreshAfterSave(savedNote)
+  },
 })
 
 const { showDraftRestoredBanner, saveStatus, replayAll } = useAutosave({

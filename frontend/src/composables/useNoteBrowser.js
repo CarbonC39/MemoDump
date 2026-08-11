@@ -37,6 +37,11 @@ function findFolderNode(nodes, path) {
   return null
 }
 
+function parentOf(path) {
+  const parts = (path || '').split('/')
+  return parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+}
+
 export function useNoteBrowser({ api, storage = globalThis.localStorage } = {}) {
   if (!api) throw new Error('useNoteBrowser requires an API implementation')
   const allNotes = ref([])
@@ -182,6 +187,33 @@ export function useNoteBrowser({ api, storage = globalThis.localStorage } = {}) 
     }
   }
 
+  // A successful editor save changes the filesystem behind the browser's
+  // in-memory pages. Refresh only the affected parent pages: root feeds All
+  // Notes, while a folder page is needed only when it is currently visible or
+  // already expanded in Storage. This keeps expanded tree state intact.
+  async function refreshAfterSave(note) {
+    const affectedParents = new Set([
+      parentOf(note?.path),
+      parentOf(note?.previousId || note?.path),
+    ])
+
+    await Promise.allSettled([...affectedParents].map(async (parent) => {
+      const folderNode = parent ? findFolderNode(folders.value, parent) : null
+      const shouldRefresh = parent === '' || currentFolder.value === parent || folderNode?.loaded
+      if (!shouldRefresh) return
+
+      const response = await api.listNotesV2(parent, { sort: sortMode.value })
+      const notes = response.data.items.map(presentV2Note)
+
+      if (parent === '') allNotes.value = notes
+      if (currentFolder.value === parent) {
+        displayNotes.value = notes
+        nextNotesCursor.value = response.data.nextCursor
+      }
+      if (folderNode?.loaded) folderNode.notes = notes
+    }))
+  }
+
   async function refreshRootFolders() {
     const response = await api.listFoldersV2('')
     folders.value = response.data.items.map(presentV2Folder)
@@ -209,6 +241,7 @@ export function useNoteBrowser({ api, storage = globalThis.localStorage } = {}) 
     loadMoreNotes,
     loadFolderPage,
     loadAll,
+    refreshAfterSave,
     refreshRootFolders,
     showAllNotes,
   }

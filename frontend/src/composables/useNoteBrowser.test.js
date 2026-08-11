@@ -97,4 +97,44 @@ describe('useNoteBrowser', () => {
     expect(browser.flatFoldersForPicker.value.map(folder => folder.path))
       .toEqual(['work', 'work/deep'])
   })
+
+  it('refreshes All Notes after a root note is saved', async () => {
+    const api = {
+      listNotesV2: vi.fn()
+        .mockResolvedValueOnce(page([]))
+        .mockResolvedValueOnce(page([{ id: 'new.md', name: 'new', modifiedAt: 2 }])),
+      listFoldersV2: vi.fn().mockResolvedValue(page([])),
+    }
+    const browser = useNoteBrowser({ api, storage: null })
+
+    await browser.loadAll()
+    await browser.refreshAfterSave({ path: 'new.md' })
+
+    expect(browser.allNotes.value.map(note => note.path)).toEqual(['new.md'])
+    expect(browser.displayNotes.value.map(note => note.path)).toEqual(['new.md'])
+  })
+
+  it('refreshes an expanded Storage folder after a note is saved there', async () => {
+    const api = {
+      listNotesV2: vi.fn()
+        .mockResolvedValueOnce(page([]))
+        .mockResolvedValueOnce(page([{ id: 'work/old.md', name: 'old' }]))
+        .mockResolvedValueOnce(page([
+          { id: 'work/new.md', name: 'new' },
+          { id: 'work/old.md', name: 'old' },
+        ])),
+      listFoldersV2: vi.fn()
+        .mockResolvedValueOnce(page([{ id: 'work', name: 'work', hasChildren: false }]))
+        .mockResolvedValueOnce(page([])),
+    }
+    const browser = useNoteBrowser({ api, storage: null })
+
+    await browser.loadAll()
+    await browser.loadFolderNode('work')
+    await browser.refreshAfterSave({ path: 'work/new.md' })
+
+    expect(browser.folders.value[0].loaded).toBe(true)
+    expect(browser.folders.value[0].notes.map(note => note.path))
+      .toEqual(['work/new.md', 'work/old.md'])
+  })
 })
