@@ -6,8 +6,13 @@
         :key="note.path"
         v-measure-card="note.path"
         class="waterfall-card"
+        role="button"
+        tabindex="0"
+        :aria-label="note.hasCustomName ? note.name : t('editor.untitled')"
         :draggable="hoveredNotePath !== note.path"
         @dragstart="$emit('dragstart', $event, note)"
+        @click="openFromCard($event, note)"
+        @keydown.enter.prevent="openFromKeyboard($event, note)"
       >
         <div v-if="note.hasCustomName" class="card-header">
           <div class="card-name">{{ note.name }}</div>
@@ -64,7 +69,7 @@ const props = defineProps({
   notes: { type: Array, default: () => [] },
   hoveredNotePath: { type: String, default: null },
 })
-defineEmits(['dragstart', 'contextmenu', 'update:hovered-note-path'])
+const emit = defineEmits(['dragstart', 'contextmenu', 'open-note', 'update:hovered-note-path'])
 
 const { t } = useI18n()
 const layout = inject('layout')
@@ -81,6 +86,17 @@ const {
 } = layout
 
 const columns = computed(() => splitIntoColumns(props.notes))
+
+function openFromCard(event, note) {
+  const selection = window.getSelection?.()
+  if (selection && !selection.isCollapsed && selection.toString()) return
+  emit('open-note', note)
+}
+
+function openFromKeyboard(event, note) {
+  if (event.target !== event.currentTarget) return
+  emit('open-note', note)
+}
 </script>
 
 <style scoped>
@@ -103,7 +119,12 @@ const columns = computed(() => splitIntoColumns(props.notes))
   padding: 16px 18px;
   margin-bottom: 16px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.03);
+  cursor: pointer;
   transition: box-shadow 0.2s ease, background 0.2s ease;
+}
+.waterfall-card:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 .card-header {
   display: flex;

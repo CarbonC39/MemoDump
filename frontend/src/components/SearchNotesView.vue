@@ -28,6 +28,7 @@
       :hovered-note-path="hoveredNotePath"
       @dragstart="(...args) => $emit('dragstart', ...args)"
       @contextmenu="(...args) => $emit('contextmenu', ...args)"
+      @open-note="$emit('open-note', $event)"
       @update:hovered-note-path="$emit('update:hovered-note-path', $event)"
     />
   </div>
@@ -49,6 +50,7 @@ const emit = defineEmits([
   'search',
   'dragstart',
   'contextmenu',
+  'open-note',
   'update:hovered-note-path',
 ])
 
