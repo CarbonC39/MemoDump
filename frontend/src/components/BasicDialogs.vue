@@ -115,7 +115,7 @@ watch(() => props.promptVisible, (visible) => {
   line-height: 1.5;
 }
 .btn-danger {
-  color: #fff;
+  color: var(--on-accent);
   background: var(--danger);
 }
 .btn-danger:hover {

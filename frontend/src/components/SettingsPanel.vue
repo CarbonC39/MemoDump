@@ -1091,7 +1091,7 @@ function resetToDefaults() {
 
 .theme-option-btn.active {
   background: var(--primary);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .theme-option-btn:not(.active):hover {

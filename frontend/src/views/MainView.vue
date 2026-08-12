@@ -562,7 +562,7 @@ provide('dnd', dnd)
   align-items: center;
   gap: 10px;
   background: var(--primary-dark, #3a6bc4);
-  color: #fff;
+  color: var(--on-accent);
   padding: 10px 16px;
   border-radius: 10px;
   font-size: 13px;
@@ -573,7 +573,7 @@ provide('dnd', dnd)
 .draft-banner-close {
   background: none;
   border: none;
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   padding: 0;
   margin-left: 4px;

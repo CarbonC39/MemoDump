@@ -263,7 +263,7 @@ watch(() => props.name, () => nextTick(updateTitleInputWidth), { immediate: true
 }
 .save-btn-clean:hover { background: var(--primary-bg); }
 .save-btn-dirty {
-  color: #fff;
+  color: var(--on-accent);
   background: var(--primary);
   border: 1.5px solid var(--primary);
 }

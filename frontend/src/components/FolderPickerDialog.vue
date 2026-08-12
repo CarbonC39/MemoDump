@@ -278,8 +278,8 @@ watch(() => props.newFolderActive, (active) => {
   font-size: 19px;
 }
 .folder-tone-1 .folder-picker-icon { color: var(--md-link); }
-.folder-tone-2 .folder-picker-icon { color: #3d9994; }
-.root-icon { color: #d68a5b; }
+.folder-tone-2 .folder-picker-icon { color: var(--folder-tone-teal); }
+.root-icon { color: var(--folder-tone-orange); }
 .folder-picker-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .selected-check { flex-shrink: 0; color: var(--primary); font-size: 18px; }
 .folder-picker-empty {
