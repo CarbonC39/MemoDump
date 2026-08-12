@@ -43,7 +43,6 @@ type NoteStatus struct {
 	Decisions         []cloudsync.NoteDecision
 	Blocked           int
 	Retry             int
-	Deferred          int // compound/tombstone outcomes not yet wired (R2.3/R2.4)
 	SnapshotCommitted bool
 }
 

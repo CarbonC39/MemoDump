@@ -80,17 +80,17 @@ func ParseEnvFile(path string) map[string]string {
 			continue
 		}
 
-		idx := strings.IndexByte(line, '=')
-		if idx < 0 {
+		key, val, found := strings.Cut(line, "=")
+		if !found {
 			continue
 		}
 
-		key := strings.TrimSpace(line[:idx])
+		key = strings.TrimSpace(key)
 		if key == "" {
 			continue
 		}
 
-		val := strings.TrimSpace(line[idx+1:])
+		val = strings.TrimSpace(val)
 		if len(val) > 0 {
 			if (val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'') {
 				if unquoted, err := strconv.Unquote(val); err == nil {
