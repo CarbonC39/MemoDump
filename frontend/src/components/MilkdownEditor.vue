@@ -530,7 +530,8 @@ onBeforeUnmount(() => {
   min-width: 80px;
 }
 .crepe-editor :deep(.editor th) {
-  background: var(--bg-sidebar, #f5f6fa);
+  background: var(--primary-bg, #edf2fc);
+  color: var(--md-blue, #5979bf);
   font-weight: 600;
   white-space: nowrap;
 }

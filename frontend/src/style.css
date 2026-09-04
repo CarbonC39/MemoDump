@@ -336,6 +336,7 @@ a {
 
 .milkdown .editor th {
   background: var(--primary-bg);
+  color: var(--md-blue);
   font-weight: 600;
 }
 
