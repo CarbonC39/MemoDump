@@ -28,6 +28,7 @@ import { editorViewCtx } from '@milkdown/kit/core'
 import { stageAndUploadImage, resolvePending, revokeObjectUrls } from '../composables/mediaOutbox'
 import { imageInsertStillCurrent } from './imageInsertGuard'
 import { createEditorChangeBridge } from './editorChangeBridge'
+import { buildTaskItemResetPlugin } from './taskItemReset'
 
 const props = defineProps({
   documentVersion: { type: Number, required: true },
@@ -37,33 +38,7 @@ const props = defineProps({
 
 const { t } = useI18n()
 
-// Milkdown's task-list `checked` attr lives on the list_item node, separate
-// from its text content. If a checked item's text is fully cleared and new
-// text typed in, the node is reused and `checked` survives untouched. Force
-// `checked` back to null the moment an item's content becomes empty, so a
-// freshly emptied line never silently "inherits" a previous done state.
-const resetEmptiedTaskItemPlugin = $prose(() => {
-  return new Plugin({
-    key: new PluginKey('reset-emptied-task-item'),
-    appendTransaction(transactions, _oldState, newState) {
-      if (!transactions.some((tr) => tr.docChanged)) return null
-      let tr = null
-      newState.doc.descendants((node, pos) => {
-        if (
-          node.type.name === 'list_item' &&
-          node.attrs.checked === true &&
-          node.textContent.length === 0
-        ) {
-          tr = (tr || newState.tr).setNodeMarkup(pos, undefined, {
-            ...node.attrs,
-            checked: null,
-          })
-        }
-      })
-      return tr
-    },
-  })
-})
+const resetEmptiedTaskItemPlugin = $prose(() => buildTaskItemResetPlugin())
 
 const emit = defineEmits(['update', 'document-ready', 'error', 'ready'])
 const editorEl = ref(null)

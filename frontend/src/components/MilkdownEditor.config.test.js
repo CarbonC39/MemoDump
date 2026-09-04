@@ -15,4 +15,20 @@ describe('MilkdownEditor document-change wiring', () => {
     expect(source).toContain('.addFeature(cursor, { virtual: false })')
     expect(source).toContain('caret-color: var(--primary)')
   })
+
+  it('delegates task-list checked-state repair to the extracted plugin module', () => {
+    expect(source).toContain("import { buildTaskItemResetPlugin } from './taskItemReset'")
+    expect(source).toContain('buildTaskItemResetPlugin()')
+    // The position-aware logic lives in taskItemReset.js, not inline here.
+    expect(source).not.toContain('wasCheckedBefore')
+  })
+
+  it('never typewriter-scrolls on content updates, only on cursor navigation', () => {
+    // publishUpdate must not scroll — typing relies on native caret-into-view.
+    const publishUpdateBlock = source.slice(source.indexOf('publishUpdate:'), source.indexOf('publishReady:'))
+    expect(publishUpdateBlock).not.toContain('doTypewriterScroll')
+    expect(source).toContain("requestAnimationFrame(doTypewriterScroll)")
+    // The keydown listener is restricted to navigation keys.
+    expect(source).toContain("if (NAV_SCROLL_KEYS.has(e.key)) requestAnimationFrame(doTypewriterScroll)")
+  })
 })
