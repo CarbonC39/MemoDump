@@ -7,6 +7,8 @@
     "settings": "Settings",
     "dataFolder": "Data Folder",
     "signOut": "Sign Out",
+    "collapse": "Collapse sidebar",
+    "expand": "Expand sidebar",
     "savedInBrowser": "Saved in this browser",
     "savedInBrowserTitle": "Notes are stored in this browser. If cloud sync is enabled, they are also synchronized to your configured storage."
   },

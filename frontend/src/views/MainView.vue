@@ -14,6 +14,8 @@
       :server-no-auth="serverNoAuth"
       :settings-active="showSettings"
       :is-local-build="isLocalBuild"
+      :collapsed="sidebarCollapsed"
+      @update:collapsed="toggleSidebarCollapsed"
       @toggle-theme="toggleTheme"
       @new-note="newNote"
       @open-search="openSearchPanel"
@@ -253,7 +255,7 @@ const route = useRoute()
 const { t } = useI18n()
 const { themeIcon, setTheme } = useTheme()
 
-const { isWailsApp, isLocalBuild, wailsDataDir, serverNoAuth, mobileSidebar, openSections, toggleSection, initWails, changeDataDir, doLogout } = useAppInit()
+const { isWailsApp, isLocalBuild, wailsDataDir, serverNoAuth, mobileSidebar, sidebarCollapsed, toggleSidebarCollapsed, openSections, toggleSection, initWails, changeDataDir, doLogout } = useAppInit()
 
 const showSettings = ref(false)
 const mediaRetrying = ref(false)

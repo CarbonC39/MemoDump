@@ -3,12 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import SidebarPanel from './SidebarPanel.vue'
 
-function mountSidebar(isLocalBuild) {
+function mountSidebar(isLocalBuild, props = {}) {
   return mount(SidebarPanel, {
     props: {
       themeIcon: 'dark_mode',
       isLocalBuild,
       serverNoAuth: true,
+      ...props,
     },
   })
 }
@@ -26,5 +27,40 @@ describe('SidebarPanel local-storage indicator', () => {
 
   it('does not show the browser-storage hint in server mode', () => {
     expect(mountSidebar(false).find('.local-storage-indicator').exists()).toBe(false)
+  })
+})
+
+describe('SidebarPanel desktop collapse', () => {
+  it('emits update:collapsed when the collapse toggle is clicked', async () => {
+    const wrapper = mountSidebar(false, { collapsed: false })
+    const toggle = wrapper.find('.sidebar-collapse-toggle')
+
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.attributes('title')).toContain('Collapse')
+    await toggle.trigger('click')
+    expect(wrapper.emitted('update:collapsed')).toEqual([[true]])
+  })
+
+  it('reflects the collapsed prop and switches the toggle affordance', () => {
+    const wrapper = mountSidebar(false, { collapsed: true })
+    expect(wrapper.find('.sidebar').classes()).toContain('collapsed')
+    expect(wrapper.find('.sidebar-collapse-toggle .material-icons-outlined').text()).toBe('keyboard_double_arrow_right')
+    expect(wrapper.find('.sidebar-collapse-toggle').attributes('title')).toContain('Expand')
+  })
+
+  it('expands the rail before opening the folder tree from the collapsed storage item', async () => {
+    const wrapper = mountSidebar(false, { collapsed: true, storageExpanded: false })
+    await wrapper.find('.storage-nav-item').trigger('click')
+
+    expect(wrapper.emitted('update:collapsed')).toEqual([[false]])
+    expect(wrapper.emitted('toggle-storage')).toHaveLength(1)
+  })
+
+  it('keeps an already-open folder section open when expanded from the rail', async () => {
+    const wrapper = mountSidebar(false, { collapsed: true, storageExpanded: true })
+    await wrapper.find('.storage-nav-item').trigger('click')
+
+    expect(wrapper.emitted('update:collapsed')).toEqual([[false]])
+    expect(wrapper.emitted('toggle-storage')).toBeUndefined()
   })
 })

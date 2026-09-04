@@ -1,7 +1,7 @@
 <template>
   <div v-if="mobileOpen" class="sidebar-overlay" @click="$emit('update:mobile-open', false)"></div>
 
-  <aside class="sidebar" :class="{ 'mobile-open': mobileOpen }">
+  <aside class="sidebar" :class="{ 'mobile-open': mobileOpen, collapsed }">
     <div class="sidebar-header">
       <img class="brand-icon" src="/favicon.ico" width="22" height="22" alt="Logo" />
       <span class="brand">{{ t('login.brand') }}</span>
@@ -12,26 +12,35 @@
       >
         <span class="material-icons-outlined">{{ themeIcon }}</span>
       </button>
+      <button
+        class="btn btn-icon btn-ghost sidebar-collapse-toggle"
+        :class="{ collapsed }"
+        :title="collapsed ? t('sidebar.expand') : t('sidebar.collapse')"
+        :aria-label="collapsed ? t('sidebar.expand') : t('sidebar.collapse')"
+        @click="$emit('update:collapsed', !collapsed)"
+      >
+        <span class="material-icons-outlined">{{ collapsed ? 'keyboard_double_arrow_right' : 'keyboard_double_arrow_left' }}</span>
+      </button>
     </div>
 
     <div class="sidebar-scroll">
-      <button class="sidebar-action" @click="$emit('new-note')">
+      <button class="sidebar-action" :title="t('sidebar.newNote')" @click="$emit('new-note')">
         <span class="material-icons-outlined">edit_note</span>
-        {{ t('sidebar.newNote') }}
+        <span class="nav-text">{{ t('sidebar.newNote') }}</span>
       </button>
 
       <div class="sidebar-nav">
-        <div class="nav-item" @click="$emit('open-search')">
+        <div class="nav-item" :title="t('sidebar.search')" @click="$emit('open-search')">
           <span class="material-icons-outlined">search</span>
           <span class="nav-text">{{ t('sidebar.search') }}</span>
         </div>
 
-        <div class="nav-item" :class="{ active: allNotesActive }" @click="$emit('open-all')">
+        <div class="nav-item" :class="{ active: allNotesActive }" :title="t('sidebar.allNotes')" @click="$emit('open-all')">
           <span class="material-icons-outlined">sticky_note_2</span>
           <span class="nav-text">{{ t('sidebar.allNotes') }}</span>
         </div>
 
-        <div class="nav-item storage-nav-item" @click="$emit('toggle-storage')">
+        <div class="nav-item storage-nav-item" :title="t('sidebar.storage')" @click="onStorageClick">
           <span class="material-icons-outlined">folder_open</span>
           <span class="nav-text">{{ t('sidebar.storage') }}</span>
           <div class="storage-header-actions" @click.stop>
@@ -132,8 +141,9 @@ import { useI18n } from '../i18n'
 import FolderNode from './FolderNode.vue'
 import InfoTooltip from './InfoTooltip.vue'
 
-defineProps({
+const props = defineProps({
   mobileOpen: { type: Boolean, default: false },
+  collapsed: { type: Boolean, default: false },
   themeIcon: { type: String, required: true },
   allNotesActive: { type: Boolean, default: false },
   storageExpanded: { type: Boolean, default: false },
@@ -147,8 +157,9 @@ defineProps({
   settingsActive: { type: Boolean, default: false },
   isLocalBuild: { type: Boolean, default: false },
 })
-defineEmits([
+const emit = defineEmits([
   'update:mobile-open',
+  'update:collapsed',
   'toggle-theme',
   'new-note',
   'open-search',
@@ -177,11 +188,24 @@ const fileInputRef = ref(null)
 function triggerFileInput() {
   fileInputRef.value?.click()
 }
+
+// In the icon-only rail the folder tree is hidden, so clicking the Storage
+// item first restores the full sidebar; only then toggle the folder section
+// if it was closed (keeping an already-open section open).
+function onStorageClick() {
+  if (!props.collapsed) {
+    emit('toggle-storage')
+    return
+  }
+  emit('update:collapsed', false)
+  if (!props.storageExpanded) emit('toggle-storage')
+}
 </script>
 
 <style scoped>
 .sidebar-overlay { display: none; }
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -189,7 +213,10 @@ function triggerFileInput() {
   overflow: hidden;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
+  transition: width 0.2s ease;
 }
+.theme-toggle-sidebar { margin-left: auto; }
+.sidebar.collapsed .theme-toggle-sidebar { margin-left: 0; }
 .sidebar-header {
   display: flex;
   align-items: center;
@@ -346,7 +373,45 @@ function triggerFileInput() {
 .local-storage-indicator :deep(.info-tooltip-trigger) { width: 36px; height: 36px; }
 .local-storage-indicator :deep(.info-tooltip-trigger .material-icons-outlined) { font-size: 20px; }
 
+/* ===== Desktop collapsed icon rail ===== */
+@media (min-width: 769px) {
+  .sidebar.collapsed { width: var(--sidebar-width); }
+  .sidebar.collapsed .sidebar-header {
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 0;
+  }
+  .sidebar.collapsed .brand { display: none; }
+  .sidebar.collapsed .brand-icon { margin-right: 0; }
+  .sidebar.collapsed .sidebar-scroll { padding: 8px 0; }
+  .sidebar.collapsed .sidebar-action {
+    justify-content: center;
+    width: calc(100% - 12px);
+    margin: 0 6px 4px;
+    padding: 8px 0;
+  }
+  .sidebar.collapsed .nav-item {
+    justify-content: center;
+    width: calc(100% - 12px);
+    margin: 1px 6px;
+    padding: 6px 0;
+  }
+  .sidebar.collapsed .nav-text,
+  .sidebar.collapsed .storage-header-actions,
+  .sidebar.collapsed .chevron,
+  .sidebar.collapsed .nav-children,
+  .sidebar.collapsed .empty-hint { display: none; }
+  .sidebar.collapsed .sidebar-footer { padding: 8px 4px; }
+  .sidebar.collapsed .footer-icons {
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 0;
+  }
+}
+
 @media (max-width: 768px) {
+  .sidebar-collapse-toggle { display: none; }
   .sidebar {
     position: fixed;
     z-index: 100;

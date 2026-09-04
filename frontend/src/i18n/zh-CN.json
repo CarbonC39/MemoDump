@@ -7,6 +7,8 @@
     "settings": "设置",
     "dataFolder": "数据目录",
     "signOut": "退出登录",
+    "collapse": "收起侧边栏",
+    "expand": "展开侧边栏",
     "savedInBrowser": "已保存在此浏览器中",
     "savedInBrowserTitle": "笔记保存在当前浏览器中；启用云端同步后，也会同步到你配置的存储。"
   },

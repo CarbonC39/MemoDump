@@ -27,6 +27,18 @@ export function useAppInit() {
   // Sidebar state
   const mobileSidebar = ref(false)
   const openSections = reactive({ search: false, all: false, storage: false })
+  const SIDEBAR_COLLAPSED_KEY = 'memodump_sidebar_collapsed'
+  const sidebarCollapsed = ref(false)
+  try {
+    sidebarCollapsed.value = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'
+  } catch (_) {}
+
+  function toggleSidebarCollapsed() {
+    sidebarCollapsed.value = !sidebarCollapsed.value
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed.value ? '1' : '0')
+    } catch (_) {}
+  }
 
   let keepaliveInterval = null
 
@@ -52,5 +64,5 @@ export function useAppInit() {
     if (keepaliveInterval) clearInterval(keepaliveInterval)
   })
 
-  return { isWailsApp, isLocalBuild, wailsDataDir, serverNoAuth, mobileSidebar, openSections, toggleSection, initWails, changeDataDir, doLogout }
+  return { isWailsApp, isLocalBuild, wailsDataDir, serverNoAuth, mobileSidebar, sidebarCollapsed, toggleSidebarCollapsed, openSections, toggleSection, initWails, changeDataDir, doLogout }
 }
