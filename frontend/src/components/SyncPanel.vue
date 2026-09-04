@@ -97,7 +97,15 @@
               />
             </span>
             <span class="secret-input">
-              <input v-model.trim="cfg.accessKey" :type="showSecrets ? 'text' : 'password'" class="input input-select" :disabled="!cfg.editable" />
+              <input
+                v-model.trim="cfg.accessKey"
+                type="text"
+                class="input input-select secret-masked"
+                :class="{ 'secret-visible': showSecrets }"
+                autocomplete="off"
+                spellcheck="false"
+                :disabled="!cfg.editable"
+              />
               <button
                 type="button"
                 class="secret-toggle"
@@ -114,8 +122,11 @@
             <span class="secret-input">
               <input
                 v-model.trim="cfg.secretKey"
-                :type="showSecrets ? 'text' : 'password'"
-                class="input input-select"
+                type="text"
+                class="input input-select secret-masked"
+                :class="{ 'secret-visible': showSecrets }"
+                autocomplete="off"
+                spellcheck="false"
                 :placeholder="cfg.configured ? t('settings.syncSecretUnchanged') : ''"
                 :disabled="!cfg.editable"
               />
@@ -466,6 +477,10 @@ async function onRestore(index) {
   align-items: center;
 }
 .secret-input .input { padding-right: 30px; }
+/* Masked secret fields are type=text (so the browser never offers to save an
+   S3 key as a password); CSS masks the glyphs instead of type=password. */
+.secret-masked { -webkit-text-security: disc; }
+.secret-visible { -webkit-text-security: none; }
 .secret-toggle {
   position: absolute;
   right: 4px;

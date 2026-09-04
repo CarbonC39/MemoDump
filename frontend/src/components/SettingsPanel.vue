@@ -238,8 +238,15 @@
                 <InfoTooltip v-if="isLocalImageBuild" :text="t('settings.imageLocalStorageWarning')" :label="t('settings.imageLocalStorageWarning')" />
               </span>
               <span class="secret-input">
-                <input :type="showSecrets ? 'text' : 'password'" class="input input-select" v-model.trim="imageDraft.accessKey"
-                       :disabled="!isLocalImageBuild && !imageSettings.editable" />
+                <input
+                  type="text"
+                  class="input input-select secret-masked"
+                  :class="{ 'secret-visible': showSecrets }"
+                  autocomplete="off"
+                  spellcheck="false"
+                  v-model.trim="imageDraft.accessKey"
+                  :disabled="!isLocalImageBuild && !imageSettings.editable"
+                />
                 <button type="button" class="secret-toggle" :disabled="!isLocalImageBuild && !imageSettings.editable"
                         @click="showSecrets = !showSecrets"
                         :aria-label="showSecrets ? t('settings.secretHide') : t('settings.secretShow')">
@@ -250,9 +257,16 @@
             <div class="setting-row">
               <span class="setting-row-label">Secret Key</span>
               <span class="secret-input">
-                <input :type="showSecrets ? 'text' : 'password'" class="input input-select" v-model.trim="imageDraft.secretKey"
-                       :placeholder="imageSettings.configured ? t('settings.imageSecretUnchanged') : ''"
-                       :disabled="!isLocalImageBuild && !imageSettings.editable" />
+                <input
+                  type="text"
+                  class="input input-select secret-masked"
+                  :class="{ 'secret-visible': showSecrets }"
+                  autocomplete="off"
+                  spellcheck="false"
+                  v-model.trim="imageDraft.secretKey"
+                  :placeholder="imageSettings.configured ? t('settings.imageSecretUnchanged') : ''"
+                  :disabled="!isLocalImageBuild && !imageSettings.editable"
+                />
                 <button type="button" class="secret-toggle" :disabled="!isLocalImageBuild && !imageSettings.editable"
                         @click="showSecrets = !showSecrets"
                         :aria-label="showSecrets ? t('settings.secretHide') : t('settings.secretShow')">
@@ -967,6 +981,10 @@ function resetToDefaults() {
   align-items: center;
 }
 .secret-input .input { padding-right: 30px; }
+/* Masked secret fields are type=text (so the browser never offers to save an
+   S3 key as a password); CSS masks the glyphs instead of type=password. */
+.secret-masked { -webkit-text-security: disc; }
+.secret-visible { -webkit-text-security: none; }
 .secret-toggle {
   position: absolute;
   right: 4px;
