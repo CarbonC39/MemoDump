@@ -164,6 +164,16 @@ function nextFrame() {
   return new Promise((resolve) => requestAnimationFrame(resolve))
 }
 
+// Typewriter scroll runs ONLY on explicit cursor navigation (arrow/page/home
+// keys). It must never run on content changes: typing already gets native
+// keep-caret-visible scrolling from the browser, and layering a smooth
+// `scrollBy` on top of every keystroke makes the page visibly jump (two
+// overlapping animations: the keydown listener and the update bridge).
+const NAV_SCROLL_KEYS = new Set([
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'Home', 'End', 'PageUp', 'PageDown',
+])
+
 function doTypewriterScroll() {
   if (_destroyed || !_editorElRef) return
   const sel = window.getSelection()
@@ -237,7 +247,6 @@ onMounted(async () => {
       if (_destroyed) return
       _latestMarkdown = markdown
       emit('update', markdown)
-      requestAnimationFrame(doTypewriterScroll)
     },
     publishReady: (markdown) => {
       if (_destroyed) return
@@ -286,8 +295,10 @@ onMounted(async () => {
   editorReady.value = true
   emit('ready')
 
-  // Typewriter scroll on arrow/cursor key navigation
-  _handleKeyScroll = () => requestAnimationFrame(doTypewriterScroll)
+  // Typewriter scroll on arrow/cursor key navigation only — never on typing.
+  _handleKeyScroll = (e) => {
+    if (NAV_SCROLL_KEYS.has(e.key)) requestAnimationFrame(doTypewriterScroll)
+  }
   _editorElRef.addEventListener('keydown', _handleKeyScroll)
 })
 
