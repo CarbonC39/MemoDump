@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -324,6 +325,12 @@ func writeAtomic(target string, data []byte, perm os.FileMode) error {
 
 func timestampBase() string { return time.Now().Format("2006-01-02_150405") }
 
+// isTimestampBase reports whether a note's base name (without ".md") is the
+// auto-generated name MemoDump gives untitled notes (e.g. 2026-09-03_153012).
+var timestampNameRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}_\d{6}`)
+
+func isTimestampBase(base string) bool { return timestampNameRe.MatchString(base) }
+
 // Create writes a new note built from body + tags, de-colliding on an existing
 // path. The caller's name is sanitized first. The existence check and the write
 // happen under the same path lock, so concurrent creates of the same name
@@ -637,14 +644,25 @@ func (r *Repository) Duplicate(rel string) (*Note, error) {
 
 	dir := path.Dir(rel)
 	base := strings.TrimSuffix(path.Base(rel), ".md")
+	untitled := isTimestampBase(base)
 	resultRel := ""
 	// Serialize duplicates of the same source under the source's lock, and pick
-	// the first free "(copy)" name inside that lock, so two concurrent
-	// duplicates never target the same path.
+	// the first free name inside that lock, so two concurrent duplicates never
+	// target the same path.
 	err = r.locks.withLock([]string{rel}, func() error {
 		for n := 1; ; n++ {
-			name := fmt.Sprintf("%s (copy).md", base)
-			if n > 1 {
+			var name string
+			switch {
+			case untitled && n == 1:
+				// Untitled notes are timestamp-named. A duplicate is a brand
+				// new untitled note, so name it with a fresh timestamp instead
+				// of an unhelpful "(copy)" of a generated name.
+				name = timestampBase() + ".md"
+			case untitled:
+				name = fmt.Sprintf("%s-%d.md", timestampBase(), n)
+			case n == 1:
+				name = fmt.Sprintf("%s (copy).md", base)
+			default:
 				name = fmt.Sprintf("%s (copy %d).md", base, n)
 			}
 			candidateRel := name

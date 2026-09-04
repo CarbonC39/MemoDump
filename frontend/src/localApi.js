@@ -274,11 +274,24 @@ const localApi = {
       }
       const dir = dirname(path)
       const base = noteName(path)
-      let filename = `${base} (copy).md`
+      // Untitled notes are timestamp-named; a duplicate is a brand-new
+      // untitled note, named by the moment it was duplicated rather than an
+      // unhelpful "(copy)" of a generated name.
+      const untitled = /^\d{4}-\d{2}-\d{2}_\d{6}/.test(base)
+      let filename
       let i = 2
-      while (await reqP(notes.get(dir ? dir + '/' + filename : filename))) {
-        filename = `${base} (copy ${i}).md`
-        i++
+      if (untitled) {
+        filename = `${timestampName()}.md`
+        while (await reqP(notes.get(dir ? dir + '/' + filename : filename))) {
+          filename = `${timestampName()}-${i}.md`
+          i++
+        }
+      } else {
+        filename = `${base} (copy).md`
+        while (await reqP(notes.get(dir ? dir + '/' + filename : filename))) {
+          filename = `${base} (copy ${i}).md`
+          i++
+        }
       }
       const newPath = dir ? dir + '/' + filename : filename
       const now = Date.now()

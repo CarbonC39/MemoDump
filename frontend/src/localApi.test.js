@@ -210,6 +210,14 @@ describe('duplicateNote', () => {
   it('404s for a missing source', async () => {
     await expect(localApi.duplicateNote('nope.md')).rejects.toMatchObject({ response: { status: 404 } })
   })
+
+  it('names a duplicate of an untitled note with a fresh timestamp, not (copy)', async () => {
+    const src = (await localApi.createNote({ name: '2026-09-03_142530', content: 'body' })).data
+    const dup = (await localApi.duplicateNote(src.path)).data
+    expect(dup.path).toMatch(/^\d{4}-\d{2}-\d{2}_\d{6}(-\d+)?\.md$/)
+    expect(dup.path).not.toContain('(copy)')
+    expect(dup.content).toBe('body')
+  })
 })
 
 describe('folder tree', () => {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -254,6 +255,30 @@ func TestDuplicateCopiesVerbatim(t *testing.T) {
 		t.Fatalf("duplicate path = %q", dup.Path)
 	}
 	if got := readFile(t, r, "n (copy).md"); got != markdown {
+		t.Fatalf("duplicate bytes = %q", got)
+	}
+}
+
+func TestDuplicateUntitledUsesFreshTimestamp(t *testing.T) {
+	r := newTestRepo(t)
+	markdown := "# body\n"
+	if err := os.WriteFile(filepath.Join(r.Root(), "2026-09-03_142530.md"), []byte(markdown), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dup, err := r.Duplicate("2026-09-03_142530.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isTimestampBase(strings.TrimSuffix(dup.Path, ".md")) {
+		t.Fatalf("duplicate of an untitled note should keep a timestamp name, got %q", dup.Path)
+	}
+	if strings.Contains(dup.Path, "(copy)") {
+		t.Fatalf("duplicate of an untitled note must not be named (copy): %q", dup.Path)
+	}
+	if dup.Path == "2026-09-03_142530.md" {
+		t.Fatalf("duplicate must not overwrite the source: %q", dup.Path)
+	}
+	if got := readFile(t, r, dup.Path); got != markdown {
 		t.Fatalf("duplicate bytes = %q", got)
 	}
 }
