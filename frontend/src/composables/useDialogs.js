@@ -1,4 +1,4 @@
-import { ref, reactive, nextTick } from 'vue'
+import { ref, reactive } from 'vue'
 import apiClient from '../api'
 import { useI18n } from '../i18n'
 
@@ -37,7 +37,6 @@ export function useDialogs({ folders }) {
   const promptVisible = ref(false)
   const promptTitle = ref('')
   const promptValue = ref('')
-  const promptInputRef = ref(null)
   let promptResolve = null
 
   function showPrompt(title, defaultValue = '') {
@@ -46,9 +45,6 @@ export function useDialogs({ folders }) {
     promptVisible.value = true
     return new Promise(resolve => {
       promptResolve = resolve
-      nextTick(() => {
-        if (promptInputRef.value) promptInputRef.value.focus()
-      })
     })
   }
 
@@ -71,14 +67,13 @@ export function useDialogs({ folders }) {
   // ===== Copy dialog (iOS PWA fallback) =====
   // Copy dialog — shown as iOS PWA fallback when clipboard API fails
   const copyDialog = reactive({ visible: false, content: '' })
-  const copyDialogTextarea = ref(null)
 
   // Copy from the fallback dialog. This runs inside a fresh click gesture, so the
   // clipboard/execCommand calls work here even when the original (post-await)
   // attempt failed for lack of user activation.
-  async function copyFromDialog() {
+  async function copyFromDialog(textarea) {
     const content = copyDialog.content
-    const ta = copyDialogTextarea.value
+    const ta = textarea
     if (ta) {
       ta.focus({ preventScroll: true })
       ta.setSelectionRange(0, ta.value.length)
@@ -101,12 +96,20 @@ export function useDialogs({ folders }) {
 
   // ===== Folder Picker Modal =====
   // Folder Picker Modal State
-  const folderPicker = reactive({ visible: false, selected: '', newFolderActive: false, newFolderName: '' })
+  const folderPicker = reactive({
+    visible: false,
+    selected: '',
+    currentFolder: '',
+    mode: 'move',
+    newFolderActive: false,
+    newFolderName: '',
+  })
   let folderPickerResolve = null
-  const newFolderInputRef = ref(null)
 
-  function showFolderPicker(defaultFolder = '') {
+  function showFolderPicker(defaultFolder = '', { mode = 'move', currentFolder = defaultFolder } = {}) {
     folderPicker.selected = defaultFolder
+    folderPicker.currentFolder = currentFolder
+    folderPicker.mode = mode
     folderPicker.newFolderActive = false
     folderPicker.newFolderName = ''
     folderPicker.visible = true
@@ -128,7 +131,6 @@ export function useDialogs({ folders }) {
   function startCreateFolderInPicker() {
     folderPicker.newFolderActive = true
     folderPicker.newFolderName = ''
-    nextTick(() => { if (newFolderInputRef.value) newFolderInputRef.value.focus() })
   }
 
   function cancelNewFolderInPicker() {
@@ -161,12 +163,10 @@ export function useDialogs({ folders }) {
     promptVisible,
     promptTitle,
     promptValue,
-    promptInputRef,
     showPrompt,
     submitPrompt,
     cancelPrompt,
     copyDialog,
-    copyDialogTextarea,
     copyFromDialog,
     folderPicker,
     showFolderPicker,
@@ -175,6 +175,5 @@ export function useDialogs({ folders }) {
     startCreateFolderInPicker,
     cancelNewFolderInPicker,
     submitNewFolderInPicker,
-    newFolderInputRef,
   }
 }

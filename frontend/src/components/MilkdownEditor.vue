@@ -1,18 +1,38 @@
 <template>
-  <div ref="editorEl" class="crepe-editor"></div>
+  <div
+    ref="editorEl"
+    class="crepe-editor"
+    :class="{ 'is-ready': editorReady }"
+    :aria-busy="!editorReady"
+  ></div>
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from '../i18n'
-import { Crepe } from '@milkdown/crepe'
-import { $prose } from '@milkdown/utils'
+import { CrepeBuilder } from '@milkdown/crepe/builder'
+import { blockEdit } from '@milkdown/crepe/feature/block-edit'
+import { codeMirror } from '@milkdown/crepe/feature/code-mirror'
+import { cursor } from '@milkdown/crepe/feature/cursor'
+import { imageBlock } from '@milkdown/crepe/feature/image-block'
+import { linkTooltip } from '@milkdown/crepe/feature/link-tooltip'
+import { listItem } from '@milkdown/crepe/feature/list-item'
+import { placeholder } from '@milkdown/crepe/feature/placeholder'
+import { table } from '@milkdown/crepe/feature/table'
+import { toolbar } from '@milkdown/crepe/feature/toolbar'
+import { languages } from '@codemirror/language-data'
+import { oneDark } from '@codemirror/theme-one-dark'
+import { $prose, replaceAll } from '@milkdown/utils'
 import { Plugin, PluginKey } from '@milkdown/prose/state'
-import '@milkdown/crepe/theme/common/style.css'
-import '@milkdown/crepe/theme/frame.css'
+import { editorViewCtx } from '@milkdown/kit/core'
+import { stageAndUploadImage, resolvePending, revokeObjectUrls } from '../composables/mediaOutbox'
+import { imageInsertStillCurrent } from './imageInsertGuard'
+import { createEditorChangeBridge } from './editorChangeBridge'
 
 const props = defineProps({
+  documentVersion: { type: Number, required: true },
   initialContent: { type: String, default: '' },
+  active: { type: Boolean, default: true },
 })
 
 const { t } = useI18n()
@@ -45,12 +65,104 @@ const resetEmptiedTaskItemPlugin = $prose(() => {
   })
 })
 
-const emit = defineEmits(['update'])
+const emit = defineEmits(['update', 'document-ready', 'error', 'ready'])
 const editorEl = ref(null)
+const editorReady = ref(false)
 let crepeInstance = null
 let _destroyed = false
 let _editorElRef = null
 let _handleKeyScroll = null
+let _created = false
+let _activeDocumentVersion = null
+let _replacingDocument = false
+let _latestMarkdown = props.initialContent
+let _acceptingBaseline = true
+let _changeBridge = null
+
+const publishDocumentChangesPlugin = $prose(() => {
+  return new Plugin({
+    key: new PluginKey('publish-document-changes'),
+    view: () => ({
+      update(view, previousState) {
+        if (!_created || previousState.doc.eq(view.state.doc)) return
+        const userChange = !_replacingDocument && !_acceptingBaseline
+        _changeBridge?.changed(userChange)
+      },
+    }),
+  })
+})
+
+function imageFileCandidates(files) {
+  return Array.from(files || []).filter((file) =>
+    file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif)$/i.test(file.name || '')
+  )
+}
+
+function insertImageNode(url, pos = null) {
+  if (!_created || _destroyed || !crepeInstance) return 0
+  let insertedSize = 0
+  crepeInstance.editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    const node = view.state.schema.nodes['image-block']?.create({ src: url, ratio: 1 })
+    if (!node) return
+    let tr = view.state.tr
+    tr = pos != null ? tr.insert(pos, node) : tr.replaceSelectionWith(node)
+    view.dispatch(tr)
+    insertedSize = node.nodeSize
+  })
+  return insertedSize
+}
+
+async function stageForDocument(file, documentVersion) {
+  const url = await stageAndUploadImage(file)
+  if (!url || !imageInsertStillCurrent({
+    documentVersion,
+    currentDocumentVersion: props.documentVersion,
+    activeDocumentVersion: _activeDocumentVersion,
+    destroyed: _destroyed,
+    active: props.active,
+  })) return ''
+  return url
+}
+
+async function insertImageFiles(files, pos = null, documentVersion = props.documentVersion) {
+  let insertPos = pos
+  for (const file of files) {
+    const url = await stageForDocument(file, documentVersion)
+    if (!url) return
+    const insertedSize = insertImageNode(url, insertPos)
+    if (insertPos != null) insertPos += insertedSize
+  }
+}
+
+function handleImagePaste(e) {
+  const files = imageFileCandidates(e.clipboardData?.files)
+  if (!files.length) return
+  e.preventDefault()
+  e.stopPropagation()
+  insertImageFiles(files, null, props.documentVersion).catch(() => {})
+}
+
+function handleImageDrop(e) {
+  const files = imageFileCandidates(e.dataTransfer?.files)
+  if (!files.length) return
+  e.preventDefault()
+  e.stopPropagation()
+  const documentVersion = props.documentVersion
+  let pos = null
+  if (_created && crepeInstance) {
+    crepeInstance.editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const coords = view.posAtCoords({ left: e.clientX, top: e.clientY })
+      if (coords) pos = coords.pos
+    })
+  }
+  insertImageFiles(files, pos, documentVersion).catch(() => {})
+}
+
+function nextFrame() {
+  return new Promise((resolve) => requestAnimationFrame(resolve))
+}
 
 function doTypewriterScroll() {
   if (_destroyed || !_editorElRef) return
@@ -58,47 +170,93 @@ function doTypewriterScroll() {
   if (!sel || !sel.rangeCount) return
   const rect = sel.getRangeAt(0).getBoundingClientRect()
   if (!rect.height) return
-  const containerRect = _editorElRef.getBoundingClientRect()
+  const scrollContainer = _editorElRef.closest('.content-area')
+  if (!scrollContainer) return
+  const containerRect = scrollContainer.getBoundingClientRect()
   const cursorY = rect.top - containerRect.top
   const threshold = containerRect.height * 0.60
   const targetY = containerRect.height * 0.42
   if (cursorY > threshold) {
-    _editorElRef.scrollBy({ top: cursorY - targetY, behavior: 'smooth' })
+    scrollContainer.scrollBy({ top: cursorY - targetY, behavior: 'smooth' })
   }
 }
+
+function replaceDocument() {
+  if (!_created || _destroyed || !crepeInstance) return
+  _changeBridge?.reset()
+  _replacingDocument = true
+  try {
+    crepeInstance.editor.action(replaceAll(props.initialContent))
+    _activeDocumentVersion = props.documentVersion
+  } finally {
+    _replacingDocument = false
+  }
+  emit('document-ready', props.initialContent)
+}
+
+watch(() => props.documentVersion, () => {
+  replaceDocument()
+})
 
 onMounted(async () => {
   if (!editorEl.value) return
   _editorElRef = editorEl.value
+  _editorElRef.addEventListener('paste', handleImagePaste)
+  _editorElRef.addEventListener('drop', handleImageDrop)
+  const startingDocumentVersion = props.documentVersion
 
-  crepeInstance = new Crepe({
+  crepeInstance = new CrepeBuilder({
     root: editorEl.value,
     defaultValue: props.initialContent,
-    features: {
-      'latex': false,
-    },
-    featureConfigs: {
-      'placeholder': {
-        text: t('editorPlaceholder'),
-      }
-    }
   })
-  crepeInstance.editor.use(resetEmptiedTaskItemPlugin)
-
-  crepeInstance.on((listener) => {
-    listener.markdownUpdated((_, markdown) => {
-      if (!_destroyed) {
-        emit('update', markdown)
-        requestAnimationFrame(doTypewriterScroll)
-      }
+    .addFeature(cursor, { virtual: false })
+    .addFeature(listItem)
+    .addFeature(linkTooltip)
+    .addFeature(imageBlock, {
+      onUpload: (file) => stageForDocument(file, props.documentVersion),
+      proxyDomURL: (url) => resolvePending(url),
+      onImageLoadError: (event) => {
+        const img = event.target
+        if (img) {
+          img.classList.add('image-load-failed')
+          img.setAttribute('title', t('media.imageLoadFailed'))
+        }
+      },
     })
+    .addFeature(blockEdit)
+    .addFeature(placeholder, { text: t('editorPlaceholder') })
+    .addFeature(toolbar)
+    .addFeature(codeMirror, { languages, theme: oneDark })
+    .addFeature(table)
+  crepeInstance.editor.use(resetEmptiedTaskItemPlugin)
+  crepeInstance.editor.use(publishDocumentChangesPlugin)
+
+  _changeBridge = createEditorChangeBridge({
+    readMarkdown: () => crepeInstance?.getMarkdown() ?? _latestMarkdown,
+    publishUpdate: (markdown) => {
+      if (_destroyed) return
+      _latestMarkdown = markdown
+      emit('update', markdown)
+      requestAnimationFrame(doTypewriterScroll)
+    },
+    publishReady: (markdown) => {
+      if (_destroyed) return
+      _latestMarkdown = markdown
+      emit('document-ready', markdown)
+    },
   })
 
+  // ---- image paste / drop ----
+  // Crepe's image components only handle the upload button and link input;
+  // pasting or dropping image files is MemoDump's responsibility. For image
+  // files we always preventDefault + stopPropagation so MainView's file-import
+  // drop handler (.md/.txt, alert on anything else) never swallows them.
   try {
     await crepeInstance.create()
   } catch (e) {
     // Editor creation failed (e.g. component was unmounted mid-creation)
     if (crepeInstance) { crepeInstance.destroy(); crepeInstance = null }
+    emit('error', e)
     return
   }
 
@@ -108,6 +266,25 @@ onMounted(async () => {
     crepeInstance = null
     return
   }
+
+  _created = true
+  _activeDocumentVersion = startingDocumentVersion
+  if (props.documentVersion !== _activeDocumentVersion) {
+    replaceDocument()
+  }
+
+  // Crepe constructs the document progressively. Let styles and layout settle
+  // off-screen, then reveal the finished editor in one frame.
+  await nextFrame()
+  await nextFrame()
+  if (_destroyed) return
+  if (props.documentVersion === startingDocumentVersion) {
+    _latestMarkdown = crepeInstance.getMarkdown()
+    emit('document-ready', _latestMarkdown)
+  }
+  _acceptingBaseline = false
+  editorReady.value = true
+  emit('ready')
 
   // Typewriter scroll on arrow/cursor key navigation
   _handleKeyScroll = () => requestAnimationFrame(doTypewriterScroll)
@@ -119,6 +296,13 @@ onBeforeUnmount(() => {
   if (_editorElRef && _handleKeyScroll) {
     _editorElRef.removeEventListener('keydown', _handleKeyScroll)
   }
+  if (_editorElRef) {
+    _editorElRef.removeEventListener('paste', handleImagePaste)
+    _editorElRef.removeEventListener('drop', handleImageDrop)
+  }
+  revokeObjectUrls()
+  _changeBridge?.destroy()
+  _changeBridge = null
   if (crepeInstance) {
     crepeInstance.destroy()
     crepeInstance = null
@@ -129,16 +313,24 @@ onBeforeUnmount(() => {
 <style scoped>
 .crepe-editor {
   flex: 1;
-  overflow-y: auto;
-  min-height: 0;
+  min-width: 0;
+  overflow: visible;
+  min-height: 100%;
+  visibility: hidden;
+}
+.crepe-editor.is-ready {
+  visibility: visible;
 }
 .crepe-editor :deep(.milkdown) {
-  height: 100%;
+  min-height: 100%;
 }
 .crepe-editor :deep(.editor) {
   min-height: 100%;
   outline: none;
   padding-bottom: 45vh;
+}
+.crepe-editor :deep(.ProseMirror:not(.ProseMirror-hideselection)) {
+  caret-color: var(--primary);
 }
 
 /* ===== Fix Milkdown heading display anomaly ===== */

@@ -1,0 +1,467 @@
+package main
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+
+	"memodump/internal/appstate"
+	"memodump/internal/httpx"
+	"memodump/internal/vaultfs"
+)
+
+type noteSummaryV2 struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	ParentID   string   `json:"parentId"`
+	Tags       []string `json:"tags"`
+	ModifiedAt int64    `json:"modifiedAt"`
+	Preview    string   `json:"preview"`
+}
+
+type folderSummaryV2 struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	ParentID    string `json:"parentId"`
+	HasChildren bool   `json:"hasChildren"`
+}
+
+type notePageV2 struct {
+	Items      []noteSummaryV2 `json:"items"`
+	NextCursor *string         `json:"nextCursor"`
+}
+
+// noteDocumentV2 is a full note document: a summary plus content and the local
+// optimistic-concurrency revision. baseRevision on updates/deletes is the CAS
+// precondition; a mismatch returns 409 local_revision_conflict.
+type noteDocumentV2 struct {
+	noteSummaryV2
+	Content    string `json:"content"`
+	Revision   string `json:"revision"`
+	PreviousID string `json:"previousId,omitempty"`
+}
+
+func noteToDocumentV2(n *vaultfs.Note) noteDocumentV2 {
+	return noteDocumentV2{
+		noteSummaryV2: noteToSummaryV2(*n),
+		Content:       n.Content,
+		Revision:      n.Revision,
+	}
+}
+
+type folderPageV2 struct {
+	Items []folderSummaryV2 `json:"items"`
+}
+
+type noteCursorV2 struct {
+	ModifiedAt int64  `json:"modifiedAt"`
+	ID         string `json:"id"`
+}
+
+func writeV2Error(w http.ResponseWriter, status int, code, message string) {
+	httpx.WriteJSON(w, status, map[string]any{
+		"error": map[string]string{"code": code, "message": message},
+	})
+}
+
+func parseV2Limit(r *http.Request) (int, bool) {
+	raw := r.URL.Query().Get("limit")
+	if raw == "" {
+		return 50, true
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 {
+		return 0, false
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	return limit, true
+}
+
+func encodeV2Cursor(note noteSummaryV2) string {
+	data, _ := json.Marshal(noteCursorV2{ModifiedAt: note.ModifiedAt, ID: note.ID})
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+func decodeV2Cursor(raw string) (*noteCursorV2, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, err
+	}
+	var cursor noteCursorV2
+	if err := json.Unmarshal(data, &cursor); err != nil || cursor.ID == "" {
+		if err == nil {
+			err = strconv.ErrSyntax
+		}
+		return nil, err
+	}
+	return &cursor, nil
+}
+
+func noteToSummaryV2(note Note) noteSummaryV2 {
+	parent := filepath.ToSlash(filepath.Dir(note.Path))
+	if parent == "." {
+		parent = ""
+	}
+	tags := note.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	return noteSummaryV2{
+		ID: note.Path, Name: note.Name, ParentID: parent, Tags: tags,
+		ModifiedAt: note.ModTime, Preview: note.Preview,
+	}
+}
+
+func sortNotesV2(notes []noteSummaryV2, order string) {
+	sort.Slice(notes, func(i, j int) bool {
+		if notes[i].ModifiedAt != notes[j].ModifiedAt {
+			if order == "modified-asc" {
+				return notes[i].ModifiedAt < notes[j].ModifiedAt
+			}
+			return notes[i].ModifiedAt > notes[j].ModifiedAt
+		}
+		return notes[i].ID < notes[j].ID
+	})
+}
+
+func pageNotesV2(notes []noteSummaryV2, cursor *noteCursorV2, limit int, order string) notePageV2 {
+	start := 0
+	if cursor != nil {
+		start = len(notes)
+		for i, note := range notes {
+			if (order == "modified-desc" && note.ModifiedAt < cursor.ModifiedAt) ||
+				(order == "modified-asc" && note.ModifiedAt > cursor.ModifiedAt) ||
+				(note.ModifiedAt == cursor.ModifiedAt && note.ID > cursor.ID) {
+				start = i
+				break
+			}
+		}
+	}
+	end := min(start+limit, len(notes))
+	items := append([]noteSummaryV2(nil), notes[start:end]...)
+	if items == nil {
+		items = []noteSummaryV2{}
+	}
+	page := notePageV2{Items: items}
+	if end < len(notes) && len(items) > 0 {
+		next := encodeV2Cursor(items[len(items)-1])
+		page.NextCursor = &next
+	}
+	return page
+}
+
+func v2ListArgs(w http.ResponseWriter, r *http.Request) (int, *noteCursorV2, string, bool) {
+	limit, ok := parseV2Limit(r)
+	if !ok {
+		writeV2Error(w, http.StatusBadRequest, "invalid_limit", "limit must be a positive integer")
+		return 0, nil, "", false
+	}
+	order := r.URL.Query().Get("sort")
+	if order == "" {
+		order = "modified-desc"
+	}
+	if order != "modified-desc" && order != "modified-asc" {
+		writeV2Error(w, http.StatusBadRequest, "invalid_sort", "sort must be modified-desc or modified-asc")
+		return 0, nil, "", false
+	}
+	cursor, err := decodeV2Cursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		writeV2Error(w, http.StatusBadRequest, "invalid_cursor", "cursor is invalid")
+		return 0, nil, "", false
+	}
+	return limit, cursor, order, true
+}
+
+func handleV2ListNotes(w http.ResponseWriter, r *http.Request) {
+	limit, cursor, order, ok := v2ListArgs(w, r)
+	if !ok {
+		return
+	}
+	parent := r.URL.Query().Get("parent")
+	if vaultfs.ContainsReservedSegment(parent) {
+		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is reserved")
+		return
+	}
+	dir, err := vaultfs.SafePath(appstate.DataDir, parent)
+	if err != nil {
+		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is invalid")
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeV2Error(w, http.StatusNotFound, "folder_not_found", "folder was not found")
+			return
+		}
+		writeV2Error(w, http.StatusInternalServerError, "list_failed", "failed to list notes")
+		return
+	}
+	notes := make([]noteSummaryV2, 0)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		note, readErr := appstate.Repo.Get(path.Join(parent, entry.Name()), false)
+		if readErr == nil {
+			notes = append(notes, noteToSummaryV2(*note))
+		}
+	}
+	sortNotesV2(notes, order)
+	httpx.WriteJSON(w, http.StatusOK, pageNotesV2(notes, cursor, limit, order))
+}
+
+func handleV2ListFolders(w http.ResponseWriter, r *http.Request) {
+	parent := r.URL.Query().Get("parent")
+	if vaultfs.ContainsReservedSegment(parent) {
+		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is reserved")
+		return
+	}
+	dir, err := vaultfs.SafePath(appstate.DataDir, parent)
+	if err != nil {
+		writeV2Error(w, http.StatusBadRequest, "invalid_parent", "parent folder is invalid")
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeV2Error(w, http.StatusNotFound, "folder_not_found", "folder was not found")
+			return
+		}
+		writeV2Error(w, http.StatusInternalServerError, "list_failed", "failed to list folders")
+		return
+	}
+	items := make([]folderSummaryV2, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		id := entry.Name()
+		if parent != "" {
+			id = parent + "/" + entry.Name()
+		}
+		hasChildren := false
+		if children, readErr := os.ReadDir(filepath.Join(dir, entry.Name())); readErr == nil {
+			for _, child := range children {
+				if child.IsDir() && !strings.HasPrefix(child.Name(), ".") {
+					hasChildren = true
+					break
+				}
+			}
+		}
+		items = append(items, folderSummaryV2{
+			ID: id, Name: entry.Name(), ParentID: parent, HasChildren: hasChildren,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	httpx.WriteJSON(w, http.StatusOK, folderPageV2{Items: items})
+}
+
+func handleV2Search(w http.ResponseWriter, r *http.Request) {
+	limit, cursor, order, ok := v2ListArgs(w, r)
+	if !ok {
+		return
+	}
+	query := strings.ToLower(r.URL.Query().Get("q"))
+	tagQuery := strings.ToLower(r.URL.Query().Get("tag"))
+	notes := make([]noteSummaryV2, 0)
+	_ = filepath.Walk(appstate.DataDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if vaultfs.IsSyncMetadataDir(info.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(info.Name(), ".md") {
+			return nil
+		}
+		rel, relErr := appstate.Repo.Rel(path)
+		if relErr != nil {
+			return nil
+		}
+		note, readErr := appstate.Repo.Get(rel, true)
+		if readErr != nil {
+			return nil
+		}
+		if query != "" && !strings.Contains(strings.ToLower(note.Content), query) {
+			return nil
+		}
+		if tagQuery != "" {
+			matched := false
+			for _, tag := range note.Tags {
+				if strings.Contains(strings.ToLower(tag), tagQuery) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil
+			}
+		}
+		notes = append(notes, noteToSummaryV2(*note))
+		return nil
+	})
+	sortNotesV2(notes, order)
+	httpx.WriteJSON(w, http.StatusOK, pageNotesV2(notes, cursor, limit, order))
+}
+
+// --- v2 note mutations (Phase 0 revision contract) -------------------------
+
+// mapV2NoteErr converts a vaultfs error into the structured v2 error shape. It
+// returns false when err is nil (no error to report).
+func mapV2NoteErr(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case errors.Is(err, vaultfs.ErrInvalidPath):
+		writeV2Error(w, http.StatusBadRequest, "invalid_note_path", "note path is invalid")
+	case errors.Is(err, vaultfs.ErrNotFound):
+		writeV2Error(w, http.StatusNotFound, "note_not_found", "note was not found")
+	case errors.Is(err, vaultfs.ErrNameConflict):
+		writeV2Error(w, http.StatusConflict, "note_name_conflict", "a note with that name already exists")
+	case errors.Is(err, vaultfs.ErrRevisionConflict):
+		writeV2Error(w, http.StatusConflict, "local_revision_conflict", "the note changed since it was read")
+	case errors.Is(err, vaultfs.ErrFrontMatterNotEditable):
+		writeV2Error(w, http.StatusBadRequest, "front_matter_not_editable", "front matter cannot be edited safely")
+	default:
+		writeV2Error(w, http.StatusInternalServerError, "mutation_failed", "failed to apply change")
+	}
+	return true
+}
+
+// handleV2GetNote returns a note document including its revision.
+func handleV2GetNote(w http.ResponseWriter, r *http.Request) {
+	notePath := r.PathValue("path")
+	note, err := appstate.Repo.Get(notePath, true)
+	if mapV2NoteErr(w, err) {
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, noteToDocumentV2(note))
+}
+
+// handleV2CreateNote creates a note and returns its document.
+func handleV2CreateNote(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+	var req struct {
+		Name    string   `json:"name"`
+		Folder  string   `json:"folder"`
+		Content string   `json:"content"`
+		Tags    []string `json:"tags"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeV2Error(w, http.StatusBadRequest, "invalid_request", "request body is invalid")
+		return
+	}
+	note, err := appstate.Repo.Create(vaultfs.CreateOptions{
+		Name:    req.Name,
+		Folder:  req.Folder,
+		Content: req.Content,
+		Tags:    req.Tags,
+	})
+	if mapV2NoteErr(w, err) {
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, noteToDocumentV2(note))
+}
+
+// handleV2UpdateNote updates a note's content/tags (and optionally renames it).
+// baseRevision is required; a stale base is rejected with 409 without writing.
+func handleV2UpdateNote(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+	notePath := r.PathValue("path")
+	var req struct {
+		Content      *string  `json:"content"`
+		Tags         []string `json:"tags"`
+		Rename       *string  `json:"rename"`
+		Destination  *string  `json:"destination"`
+		BaseRevision string   `json:"baseRevision"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeV2Error(w, http.StatusBadRequest, "invalid_request", "request body is invalid")
+		return
+	}
+	if req.BaseRevision == "" {
+		writeV2Error(w, http.StatusBadRequest, "base_revision_required", "baseRevision is required")
+		return
+	}
+	opts := vaultfs.UpdateOptions{
+		Content:      req.Content,
+		Rename:       req.Rename,
+		Destination:  req.Destination,
+		BaseRevision: req.BaseRevision,
+	}
+	if req.Tags != nil {
+		opts.Tags = &req.Tags
+	}
+	note, err := appstate.Repo.Update(notePath, opts)
+	if mapV2NoteErr(w, err) {
+		return
+	}
+	doc := noteToDocumentV2(note)
+	if doc.ID != notePath {
+		doc.PreviousID = notePath
+	}
+	httpx.WriteJSON(w, http.StatusOK, doc)
+}
+
+// handleV2DeleteNote deletes a note. baseRevision is required; a stale base is
+// rejected with 409 without deleting.
+func handleV2DeleteNote(w http.ResponseWriter, r *http.Request) {
+	notePath := r.PathValue("path")
+	baseRevision := r.URL.Query().Get("baseRevision")
+	if baseRevision == "" {
+		writeV2Error(w, http.StatusBadRequest, "base_revision_required", "baseRevision is required")
+		return
+	}
+	if err := appstate.Repo.Delete(notePath, baseRevision); mapV2NoteErr(w, err) {
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleV2MoveNote moves a note to a folder ("" = root) and returns its
+// document with previousId.
+func handleV2MoveNote(w http.ResponseWriter, r *http.Request) {
+	notePath := r.PathValue("path")
+	var req struct {
+		Destination string `json:"destination"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeV2Error(w, http.StatusBadRequest, "invalid_request", "request body is invalid")
+		return
+	}
+	note, err := appstate.Repo.Move(notePath, req.Destination)
+	if mapV2NoteErr(w, err) {
+		return
+	}
+	doc := noteToDocumentV2(note)
+	if doc.ID != notePath {
+		doc.PreviousID = notePath
+	}
+	httpx.WriteJSON(w, http.StatusOK, doc)
+}
+
+// handleV2DuplicateNote copies a note to a "(copy)" sibling and returns it.
+func handleV2DuplicateNote(w http.ResponseWriter, r *http.Request) {
+	notePath := r.PathValue("path")
+	note, err := appstate.Repo.Duplicate(notePath)
+	if mapV2NoteErr(w, err) {
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, noteToDocumentV2(note))
+}

@@ -18,12 +18,24 @@
 
 <p align="center">
   <a href="https://memodump.carbonc.cc/">官网</a> ·
-  <a href="https://memodump.vercel.app/">在线演示</a>
+  <a href="https://memo.lomia.uk/">在线版</a>
+  <a href="https://ko-fi.com/carbonc">捐款</a> 
 </p>
 
-一个轻量的单文件 Markdown 笔记应用。可以作为自托管的 Web 服务器运行，也可以作为原生桌面应用（基于 [Wails](https://wails.io/)）运行，或者直接用 Docker 容器部署。
+一个简单利落、易于使用、神经多样友好的Markdown笔记应用。可以作为自托管的Web服务器运行，也可以作为原生桌面应用（基于 [Wails](https://wails.io/)）运行，或者直接用Docker容器部署。甚至，它还有一个可以直接使用的[在线版](https://memo.lomia.uk/) ！
 
-> [在线演示](https://memodump.vercel.app/) 运行在无鉴权模式下，数据存储是临时的，仅用于体验编辑器——请不要在上面存放重要内容。
+> [在线版](https://memo.lomia.uk/) 在不启用同步的情况下，数据储存在浏览器内。清理浏览器数据可能导致笔记丢失。
+
+---
+
+## 为什么选择MemoDump？
+
+迷失在排版美化、结构整理中，我们总是变得更少专注于内容。MemoDump只希望您快速启动记录，专注于思路，因此尽量采取减少负担的设计。
+
+- 您无需创建复杂的数据库和嵌套，甚至不需要为笔记命名，内容以外皆为附加信息。
+- MemoDump努力让信息显眼地展示，采用瀑布流展示笔记、如无必要不使用二级菜单，对工作记忆友好。
+
+---
 
 ## 特性
 
@@ -31,12 +43,11 @@
 - **Markdown 编辑器** —— 基于 [Milkdown](https://milkdown.dev/) 的所见即所得编辑器，支持完整 Markdown 语法。
 - **文件夹组织** —— 支持拖拽的层级文件夹结构，以及 `.md` 文件导入。
 - **全文搜索** —— 基于内存的快速全文搜索，支持同时对正文和标签进行 AND 查询。
+- **图片粘贴与上传** —— 粘贴/拖拽图片即插入；默认存到本地图库，也可配置 S3 兼容图床。
 - **瀑布流卡片视图** —— 可视化瀑布流式笔记浏览，与文件夹树并列展示。
-- **自动保存与离线队列** —— 静默自动保存，底层使用 IndexedDB 存储；离线时产生的编辑会在网络恢复后自动回放。
-- **字体预设与排版控制** —— 内置 system、serif、sans 三种字体族预设，支持自定义 CSS 栈，可独立调整应用界面、WYSIWYG 编辑器和纯文本编辑器的字号。
-- **设置面板** —— 全页设置视图，带实时预览卡片、数值输入框和排版控制。
+- **自动保存防丢** —— 断网时静默自动保存，离线时产生的编辑会在网络恢复后自动回放。
+- **自定义字体** —— 内置 system、serif、sans 三种字体族预设，支持自定义 CSS 栈，可独立调整应用界面、WYSIWYG 编辑器和纯文本编辑器的字号。
 - **自定义 CSS** —— 可通过 `--css` 命令行参数注入样式表，也可在设置面板中直接在线编辑自定义 CSS。
-- **灵活的鉴权方式** —— 支持用户名/密码会话鉴权，也可在个人/可信网络环境下使用无鉴权模式。
 - **分层配置** —— 命令行参数 → 环境变量 → `.env` 文件（可任意组合）。
 - **桌面应用** —— 通过 Wails 提供原生窗口，复用同一套代码，无需浏览器。
 - **移动端/PWA 友好** —— 响应式设计，可作为 PWA 安装，支持返回导航。
@@ -53,7 +64,7 @@
 ### 快速开始
 
 ```sh
-# 无鉴权（个人/可信网络环境使用）
+# 无认证（个人/可信网络环境使用）
 memodump --data ./notes
 
 # 带账号密码
@@ -97,9 +108,13 @@ CSS=./custom.css
 
 以 `#` 开头的行和空行会被忽略。值不会做引号去除处理。
 
-### 无鉴权模式
+云同步没有 CLI 表面：CLI Web 服务器不参与同步（见[云同步](#云同步实验性)）；Wails 桌面构建从操作系统应用数据目录读取其同步状态。
 
-如果所有来源都没有配置账号密码，服务器会以**无鉴权模式**启动——所有 API 接口无需会话 Cookie 即可访问。
+
+
+### 无认证模式
+
+如果所有来源都没有配置账号密码，服务器会以**无认证模式**启动——所有 API 接口无需会话 Cookie 即可访问。
 
 ```sh
 memodump --data ./notes
@@ -110,14 +125,14 @@ memodump --data ./notes
 
 ## 桌面应用（Wails）
 
-Wails 构建版本将同一套后端包装进原生窗口——无需浏览器，也不会监听端口。
+Wails 构建版本将同一套后端包装进原生窗口。
 
 - 首次启动时会自动解析数据目录（不会弹窗询问）：
   1. 二进制文件同目录或工作目录下 `.env` 文件中的 `DATA=` 键
   2. 工作目录下的 `./data` 子目录（不存在则自动创建）
 - 选定的路径会保存到操作系统的用户配置目录，后续启动时复用。
 - 可通过侧边栏的**数据文件夹**按钮选择其他目录（需要重启生效）。
-- 始终运行在无鉴权模式下（账号密码在此模式下不适用）。
+- 始终运行在无认证模式下（账号密码在此模式下不适用）。
 
 **配置文件位置**
 
@@ -131,10 +146,10 @@ Wails 构建版本将同一套后端包装进原生窗口——无需浏览器�
 
 ## Docker
 
-每次打 tag 发布时，预构建镜像都会发布到 GitHub Container Registry：`ghcr.io/carbonc39/memodump`。该镜像只包含无界面的 CLI 服务器（Wails 桌面版不适用于容器场景）。
+每次打 tag 发布时，预构建镜像都会发布到 GitHub Container Registry：`ghcr.io/carbonc39/memodump`。该镜像只包含无界面的 CLI 服务器。
 
 ```sh
-# 无鉴权
+# 无认证
 docker run -d -p 8080:8080 -v ./notes:/data ghcr.io/carbonc39/memodump:latest
 
 # 带账号密码和自定义端口
@@ -143,7 +158,7 @@ docker run -d -p 9090:9090 -v ./notes:/data \
   ghcr.io/carbonc39/memodump:latest
 ```
 
-数据卷挂载到镜像内的 `/data`（镜像内已设置 `MEMODUMP_DATA=/data`）。可用标签：`latest`、`vX.Y.Z`、`vX.Y`。所有 [CLI 环境变量](#配置来源) 在容器内同样适用。
+数据卷挂载到镜像内的 `/data`（镜像内已设置 `MEMODUMP_DATA=/data`）。可用标签：`latest`、`vX.Y.Z`、`vX.Y`。所有 [CLI 环境变量](#配置来源) 在容器内同样适用。云同步不在容器内运行：镜像是无界面的 CLI 服务器，其浏览器客户端共享同一个服务器仓库（见[云同步](#云同步实验性)）。
 
 本地构建镜像：`docker build -t memodump .`（参见 `Dockerfile`）。
 
@@ -186,6 +201,30 @@ wails dev
 
 > **注意：** `wails dev` 会打开一个用于热重载代理的终端窗口，这是正常现象。生产构建（`wails build`）在 Windows 上使用 `-H windowsgui`，生成无控制台窗口的纯 GUI 二进制文件。
 
+**Linux 系统依赖。** Wails 链接 GTK 3 与 WebKitGTK。在 Debian 12 / Ubuntu ≤ 23.10 安装 `libgtk-3-dev libwebkit2gtk-4.0-dev`（另加托盘/图标工具所需的 `libayatana-appindicator3-dev` 与 `librsvg2-bin`）。在 Debian 13 / Ubuntu ≥ 24.04，`webkit2gtk-4.0` 已不存在，只有 `webkit2gtk-4.1`——请安装 `libgtk-3-dev libwebkit2gtk-4.1-dev` 并用 `webkit2_41` 标签构建：
+
+```sh
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-bin
+wails build -tags "webkit2_41"
+```
+
+不加该标签时，`wails build` 会在 bindings 生成阶段报 `webkit2gtk-4.0 was not found`。
+
+### 纯前端 / PWA
+
+无 Go 服务器的纯浏览器构建：笔记存于 IndexedDB，云同步在浏览器内运行（见[云同步](#云同步实验性)）。使用 `VITE_LOCAL=1` 构建并托管静态 `dist` 目录，或运行 `npm run dev:local` 本地开发服务器（Vite 直接托管，并将 `/api` 代理到本地服务器以提供非同步功能）：
+
+```sh
+cd frontend && npm run build:local   # 生产构建（自动校验 local 模式）
+cd frontend && npm run dev:local     # 热重载开发服务器
+```
+
+`frontend/vercel.json` 会让 Vercel 使用该 local 构建，并把 `dist` 作为
+Vite SPA 托管。部署后的 `/build-mode.json` 必须返回 `{"mode":"local"}`；
+否则说明 Vercel 项目的 Root Directory 不是 `frontend`，或控制台中的构建命令覆盖了仓库配置。
+
+浏览器构建必须在**安全上下文**中运行：通过 HTTPS 托管（开发时可用 `http://localhost`）。Web Locks、`crypto.subtle` 与安全的 IndexedDB 都依赖它，第二台设备绝不能指向普通的局域网 HTTP 地址。
+
 ### 构建标签参考
 
 | 标签 | 使用场景 | 入口文件 |
@@ -194,6 +233,59 @@ wails dev
 | `production` | `wails build` | `main_wails.go` |
 | `dev` | `wails dev` | `main_wails.go` |
 | `bindings` | Wails JS 绑定生成（内部使用） | `main_wails.go` |
+
+---
+
+## 图片支持
+
+三种形态的图片存储方式：
+
+| 形态 | 默认 | 可配置 |
+|------|------|--------|
+| Web 服务器 | 本地图库（`<dataDir>/.images/`） | S3 兼容（设置面板或环境变量） |
+| Wails 桌面 | 本地图库（`<dataDir>/.images/`） | S3 兼容（设置面板） |
+| 纯前端 / PWA | 关闭（仅图片链接） | S3 兼容（设置面板，浏览器直传） |
+
+- 在编辑器中粘贴或拖拽图片文件即可插入。默认存到本地图库，markdown 里保存相对 URL（`/api/images/<key>`），只在应用自身源内可解析——这是自托管图片的可移植性取舍。
+- **S3 模式要求 bucket 对公网可读**（否则图片会显示 403），纯前端直传还需配置 bucket 的 CORS（允许应用域名、`PUT/POST/GET/HEAD`、`Content-Type` 与 `x-amz-*` 请求头，并暴露 `ETag` 以支持分片上传）。
+- **隐私提示**：S3 模式下图片可通过链接公开访问；内容哈希不是访问控制，相同文件会生成相同的链接。请勿上传需要私密保存的图片。
+- 离线粘贴的图片会先保存在浏览器 IndexedDB 中，联网后自动上传；图片只有在上传且公开可读后才从队列移除（少量孤儿对象可能残留，属预期行为）。
+- **可选的定期清理**（设置 → 图片）：开启后，服务器会定期删除未被任何笔记引用的图片（本地图库与 S3，带 7 天宽限期；S3 模式下删除为远程且不可恢复），Web/Wails 构建还会在 30 天后清除永久失败的上传记录。建议为 MemoDump 使用独立的 bucket/prefix，避免影响其他文件。默认关闭。
+- 安全：图片 key 为 `sha256(内容) + 规范扩展名`（JPEG 统一 `.jpg`），服务端校验内容哈希、文件头（magic bytes）与扩展名一致性；仅接受 png/jpg/gif/webp/avif，**不含 SVG**（同源存储型 XSS 风险）。
+
+Web 服务器也可以通过环境变量配置 S3：`MEMODUMP_IMAGE_S3_ENDPOINT`、`_REGION`、`_BUCKET`、`_PREFIX`、`_PUBLIC_URL`、`_ACCESS_KEY`、`_SECRET_KEY`、`_FORCE_PATH_STYLE`（优先级高于设置面板，此时面板只读）。
+
+---
+
+## 云同步（实验性）
+
+云同步通过 S3 兼容存储桶让多个 MemoDump 安装的 Markdown 笔记保持同步，在线版和Wails桌面版可以在设置中启用此功能。它是**最终一致**而非实时同步：A 设备的改动在 A 的下一次运行上传，在 B 的下一次运行下载，正常延迟约为两个周期。
+
+在**设置 → 云同步**面板中配置便签同步——面板会把端点、区域、存储桶、前缀、访问/密钥与路径风格持久化到操作系统用户配置目录（`<user-config>/memodump/sync-config.json`）。secretKey 保存在服务器侧，绝不回传界面；连接时留空表示保持当前密钥。同步已连接时面板拒绝更改提供方（请先断开连接再修改）。面板把保存配置与提供方能力检查合并为一次**连接**操作。
+
+- PWA 在浏览器 localStorage 中保存自己的 S3 配置。存储桶必须允许来自应用来源的签名流量。同步仅在页面或 PWA 打开期间运行——关闭即停止，之后不会在后台工作。PWA 的仓库、同步身份、快照与恢复副本存放在 IndexedDB 中：清除站点数据或使用无痕窗口会丢弃或隔离它们，本地的未同步修改与恢复副本会丢失。
+- Wails 桌面把同步设备状态——设备 ID 与 路径→副本 注册表、连接记录、一份一次性快照、以及恢复副本——存放在操作系统应用数据目录中，位于**仓库之外**。仓库已连接时请勿删除，否则副本将保守地重新接入。
+
+可以用环境变量配置提供方——它们优先于保存的文件，且会使面板变为只读：
+
+| 变量 | 含义 |
+|------|------|
+| `MEMODUMP_SYNC_ENDPOINT` | S3 兼容端点 URL（例如 `https://s3.region.amazonaws.com`）。仅 `localhost`/回环开发允许明文 HTTP，端点不能携带路径。 |
+| `MEMODUMP_SYNC_BUCKET` | **私有**存储桶。 |
+| `MEMODUMP_SYNC_PREFIX` | 可选对象前缀（例如 `memo/vault-a`）。 |
+| `MEMODUMP_SYNC_REGION` | 区域（默认 `us-east-1`）。 |
+| `MEMODUMP_SYNC_ACCESS_KEY` / `MEMODUMP_SYNC_SECRET_KEY` | 凭据。|
+| `MEMODUMP_SYNC_FORCE_PATH_STYLE` | 路径风格寻址（MinIO、R2、LocalStack）时设为 `1`。 |
+
+已连接的副本（点击过一次**连接**）在其运行时打开期间自动运行：**启动延迟 10 秒**后运行一次，之后每**五分钟**运行一次，并在成功连接后立即额外运行一次。设置面板中的**立即同步**仍然可以强制运行。调度对 Wails 桌面（应用打开期间）与 PWA（页面打开期间）相同；运行时关闭后不再进行任何同步。瞬时提供方故障使用内存退避重试（`1m, 2m, 5m, 10m, 30m`，遵循提供方更大的 `Retry-After`，成功后重置；重启即遗忘）。认证/权限/配额/不匹配失败会让自动同步**暂停**直到运行时结束——状态会显示暂停原因——而**立即同步**仍然可用；成功的手动运行或重新连接会解除暂停。
+
+设置面板显示连接状态、最近一次成功同步、可处理的错误与恢复副本。**断开连接**会停止自动运行并保留身份与提供方配置，因此**重新连接**即可继续。
+
+注意：
+- **同步无端到端加密。**请使用私有存储桶并限制其凭据。
+- **删除会传播到所有设备。**应用在拉取删除前写入的持久化**恢复副本**可在设置面板中查看并恢复。
+- **请勿与其它文件系统同步工具混用。**启用云同步时，不要把同一仓库放进 Dropbox/iCloud/OneDrive、git 自动化或其它文件同步工具。
+- **改用其他存储**会丢弃本副本的快照与连接指纹，以便切换提供方或重建丢失的仓库。普通运行绝不会自行重建丢失的仓库。
 
 ---
 
@@ -206,7 +298,7 @@ memodump/
 ├── app_wails.go      # Wails App 结构体——启动、数据目录配置、切换文件夹对话框
 ├── server.go         # 共享：包级变量 + buildAPIMux()
 ├── api.go            # 笔记与文件夹 API 处理器
-├── auth.go           # 会话鉴权中间件与登录/登出处理器
+├── auth.go           # 会话认证中间件与登录/登出处理器
 ├── wails.json         # Wails 项目配置
 ├── frontend/         # Vue 3 + Milkdown 前端（通过 embed 内嵌进二进制文件）
 │   └── src/
@@ -220,11 +312,9 @@ memodump/
 
 ## CI / CD
 
-CI 运行在 **GitHub Actions**（`.github/workflows/build.yml`），在每次推送/PR 到 `public`/`main` 分支以及打 `v*` tag 时触发。Codeberg 上的 Forgejo Actions 工作流（`.forgejo/workflows/build.yml`）仅保留用于手动/参考运行，不再自动触发。
+CI 运行在 **GitHub Actions**（`.github/workflows/build.yml`），在每次推送/PR 到 `public` 分支以及打 `v*` tag 时触发。
 
 ### `build-cli` —— CLI 交叉编译
-
-每次推送/PR 都会运行（成本低，基于 Linux 的交叉编译）：
 
 | 目标平台 | 输出文件 |
 |----------|----------|
@@ -244,9 +334,9 @@ CI 运行在 **GitHub Actions**（`.github/workflows/build.yml`），在每次�
 
 同样仅在打 `v*` tag 或手动触发时运行。构建 `linux/amd64` + `linux/arm64`，推送到 `ghcr.io/carbonc39/memodump`，标签为 `latest`、`vX.Y.Z` 和 `vX.Y`。
 
-### `release` —— GitHub Release 并同步到 Codeberg
+### `release` —— GitHub Release
 
-仅在打 `v*` tag 时触发。将所有构建产物收集到一个 GitHub Release 中，然后通过 Forgejo API 将该 Release（及其附件）同步到 Codeberg。
+仅在打 `v*` tag 时触发。将所有构建产物收集到一个 GitHub Release 中。
 
 ---
 

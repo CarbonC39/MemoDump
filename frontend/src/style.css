@@ -17,6 +17,7 @@
   --danger: #C96E6E;
   --danger-light: #FEE2E2;
   --success: #22C55E;
+  --on-accent: #fff; /* text on a filled accent (primary/danger) background */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
@@ -37,6 +38,9 @@
 
   /* Waterfall card title */
   --waterfall-title: #625d98;
+  /* Folder-picker icon tones */
+  --folder-tone-teal: #3d9994;
+  --folder-tone-orange: #d68a5b;
 
   /* Font settings (overridden by JS when user customizes) */
   --app-zoom: 1;
@@ -438,6 +442,34 @@ h3 {
 .input-sm {
   padding: 6px 10px;
   font-size: 13px;
+}
+
+/* Compact form control shared by every settings panel (selects and short
+   inputs). Base sizing only; select.input-select additionally replaces the
+   native arrow with a theme-aware chevron and lets the dropdown popup follow
+   the theme via color-scheme. */
+.input-select {
+  width: 180px;
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
+select.input-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 30px;
+  cursor: pointer;
+  color-scheme: light;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748B' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 16px;
+}
+
+[data-theme="dark"] select.input-select {
+  color-scheme: dark;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23B5AEC8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
 }
 
 /* Tag chip */

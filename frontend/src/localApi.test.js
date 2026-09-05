@@ -1,6 +1,9 @@
 import 'fake-indexeddb/auto'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import localApi, { _clear, parseFrontMatter } from './localApi'
+import { allOf } from './storage/localVaultDb'
+import { _sanitizeName } from './localApi'
+import semantics from '../../testdata/contracts/note_semantics.json'
 
 beforeEach(async () => {
   await _clear()
@@ -12,7 +15,9 @@ afterEach(() => {
 
 describe('auth no-ops', () => {
   it('config reports no-auth', async () => {
-    expect((await localApi.config()).data).toEqual({ noAuth: true })
+    const data = (await localApi.config()).data
+    expect(data.noAuth).toBe(true)
+    expect(data.image.provider).toBe('off')
   })
   it('login/logout/ping resolve', async () => {
     expect((await localApi.login('a', 'b')).data.status).toBe('ok')
@@ -65,6 +70,18 @@ describe('note CRUD', () => {
     expect(upd.path).toBe('fresh.md')
     await expect(localApi.getNote('old.md')).rejects.toMatchObject({ response: { status: 404 } })
     expect((await localApi.getNote('fresh.md')).data.content).toBe('body')
+  })
+
+  it('refuses to overwrite an existing note during rename', async () => {
+    await localApi.createNote({ name: 'source', content: 'source body' })
+    await localApi.createNote({ name: 'target', content: 'target body' })
+    await expect(localApi.updateNote('source.md', {
+      content: 'changed',
+      tags: [],
+      rename: 'target',
+    })).rejects.toMatchObject({ response: { status: 409 } })
+    expect((await localApi.getNote('source.md')).data.content).toBe('source body')
+    expect((await localApi.getNote('target.md')).data.content).toBe('target body')
   })
 
   it('deletes a note', async () => {
@@ -122,6 +139,29 @@ describe('listNotes scoping & sort', () => {
     now.mockRestore()
     const list = (await localApi.listNotes('')).data
     expect(list.map(n => n.name)).toEqual(['second', 'first'])
+  })
+})
+
+describe('v2 lazy listings', () => {
+  it('paginates direct notes with opaque cursors', async () => {
+    await localApi.createNote({ name: 'one', folder: 'a', content: '1' })
+    await localApi.createNote({ name: 'two', folder: 'a', content: '2' })
+    await localApi.createNote({ name: 'deep', folder: 'a/deep', content: '3' })
+    const first = (await localApi.listNotesV2('a', { limit: 1 })).data
+    expect(first.items).toHaveLength(1)
+    expect(first.nextCursor).toBeTruthy()
+    const second = (await localApi.listNotesV2('a', { limit: 1, cursor: first.nextCursor })).data
+    expect(second.items).toHaveLength(1)
+    expect(second.items[0].id).not.toBe(first.items[0].id)
+    expect([...first.items, ...second.items].some(n => n.id.includes('/deep/'))).toBe(false)
+  })
+
+  it('lists direct child folders only', async () => {
+    await localApi.createFolder('a/deep')
+    await localApi.createFolder('a/other/nested')
+    const page = (await localApi.listFoldersV2('a')).data
+    expect(page.items.map(f => f.id)).toEqual(['a/deep', 'a/other'])
+    expect(page.items.find(f => f.id === 'a/other').hasChildren).toBe(true)
   })
 })
 
@@ -304,5 +344,187 @@ describe('parseFrontMatter', () => {
   })
   it('returns whole content when no front matter', () => {
     expect(parseFrontMatter('# just text')).toEqual({ tags: [], body: '# just text' })
+  })
+  it('preserves commas and quotes inside JSON-encoded tags', () => {
+    expect(parseFrontMatter('---\ntags: ["one,two", "say \\"hi\\""]\n---\nbody'))
+      .toEqual({ tags: ['one,two', 'say "hi"'], body: 'body' })
+  })
+})
+
+describe('shared note semantics contract', () => {
+  for (const c of semantics.nameCases) {
+    it(`normalizes ${JSON.stringify(c.input)}`, () => {
+      expect(_sanitizeName(c.input)).toBe(c.output)
+    })
+  }
+})
+
+describe('local revision contract (Phase 0)', () => {
+  it('exposes a stable revision on create and get', async () => {
+    const created = (await localApi.createNote({ name: 'r', content: 'body' })).data
+    expect(created.revision).toMatch(/^[a-f0-9]{64}$/)
+    expect((await localApi.getNote('r.md')).data.revision).toBe(created.revision)
+  })
+
+  it('changes the revision on a content change and keeps it on an identical rewrite', async () => {
+    const a = (await localApi.createNote({ name: 'c', content: 'v0' })).data
+    const b = (await localApi.updateNote('c.md', { content: 'v1', tags: [], baseRevision: a.revision })).data
+    expect(b.revision).not.toBe(a.revision)
+    const c = (await localApi.updateNote('c.md', { content: 'v1', tags: [], baseRevision: b.revision })).data
+    expect(c.revision).toBe(b.revision)
+  })
+
+  it('rejects a stale baseRevision on update without writing', async () => {
+    const created = (await localApi.createNote({ name: 'n', content: 'v0' })).data
+    await localApi.updateNote('n.md', { content: 'v1', tags: [], baseRevision: created.revision })
+    await expect(localApi.updateNote('n.md', { content: 'mine', tags: [], baseRevision: created.revision }))
+      .rejects.toMatchObject({ response: { status: 409, data: { error: { code: 'local_revision_conflict' } } } })
+    expect((await localApi.getNote('n.md')).data.content).toBe('v1')
+  })
+
+  it('rejects a stale baseRevision on delete', async () => {
+    const created = (await localApi.createNote({ name: 'd', content: 'x' })).data
+    await localApi.updateNote('d.md', { content: 'y', tags: [], baseRevision: created.revision })
+    await expect(localApi.deleteNote('d.md', created.revision)).rejects.toMatchObject({ response: { status: 409 } })
+    expect((await localApi.getNote('d.md')).data.content).toBe('y')
+  })
+
+  it('preserves unknown front matter keys across a tag edit', async () => {
+    const fd = new FormData()
+    fd.append('file', new File(['---\ncreated: 2024\n# note\ntags: [a]\n---\nbody'], 'u.md', { type: 'text/markdown' }))
+    const created = (await localApi.uploadNote(fd, '')).data
+    const upd = (await localApi.updateNote('u.md', { content: 'body', tags: ['b'], baseRevision: created.revision })).data
+    expect(upd.revision).not.toBe(created.revision)
+    const [rec] = (await allOf('notes')).filter(n => n.path === 'u.md')
+    expect(rec.markdown).toBe('---\ncreated: 2024\n# note\ntags: ["b"]\n---\nbody')
+  })
+
+  it('keeps the body projection in sync with the stored Markdown', async () => {
+    const created = (await localApi.createNote({ name: 'p', content: 'body', tags: ['x'] })).data
+    const [rec] = (await allOf('notes')).filter(n => n.path === 'p.md')
+    expect(rec.markdown).toBe('---\ntags: ["x"]\n---\nbody')
+    expect(rec.content).toBe('body')
+    expect(rec.revision).toBe(created.revision)
+  })
+})
+
+describe('atomic IndexedDB CAS (review fixes)', () => {
+  it('serializes concurrent updates with the same baseRevision', async () => {
+    const created = (await localApi.createNote({ name: 'c', content: 'v0' })).data
+    const [a, b] = await Promise.allSettled([
+      localApi.updateNote('c.md', { content: 'from-a', tags: [], baseRevision: created.revision }),
+      localApi.updateNote('c.md', { content: 'from-b', tags: [], baseRevision: created.revision }),
+    ])
+    expect(a.status === 'fulfilled' ? 1 : 0 + (b.status === 'fulfilled' ? 1 : 0)).toBe(1)
+    expect([a, b].filter(r => r.status === 'rejected')).toHaveLength(1)
+    expect([a, b].find(r => r.status === 'rejected').reason.response.status).toBe(409)
+    const final = (await localApi.getNote('c.md')).data
+    expect(['from-a', 'from-b']).toContain(final.content)
+  })
+
+  it('moveNote returns content and revision', async () => {
+    const created = (await localApi.createNote({ name: 'm', content: 'body', tags: ['x'] })).data
+    const moved = (await localApi.moveNote('m.md', 'box')).data
+    expect(moved.content).toBe('body')
+    expect(moved.revision).toBe(created.revision)
+  })
+
+  it('updateNote with destination renames and moves in one call', async () => {
+    const created = (await localApi.createNote({ name: 'a', content: 'v0' })).data
+    const upd = (await localApi.updateNote('a.md', {
+      content: 'v1', rename: 'b', destination: 'proj', baseRevision: created.revision,
+    })).data
+    expect(upd.path).toBe('proj/b.md')
+    expect(upd.content).toBe('v1')
+    await expect(localApi.getNote('a.md')).rejects.toMatchObject({ response: { status: 404 } })
+  })
+
+  it('an unchanged update keeps the revision', async () => {
+    const created = (await localApi.createNote({ name: 'n', content: 'body', tags: ['a'] })).data
+    const upd = (await localApi.updateNote('n.md', { content: 'body', tags: ['a'], baseRevision: created.revision })).data
+    expect(upd.revision).toBe(created.revision)
+  })
+
+  it('serializes concurrent creates of the same name to distinct paths', async () => {
+    const [a, b] = await Promise.all([
+      localApi.createNote({ name: 'dup', content: '1' }),
+      localApi.createNote({ name: 'dup', content: '2' }),
+    ])
+    expect(a.data.path).not.toBe(b.data.path)
+  })
+})
+
+describe('atomic folder ops (review fixes)', () => {
+  it('renameFolder preserves the current note content and revision', async () => {
+    const created = (await localApi.createNote({ name: 'n', folder: 'a', content: 'v0' })).data
+    const updated = (await localApi.updateNote('a/n.md', { content: 'v1', tags: [], baseRevision: created.revision })).data
+    await localApi.renameFolder('a', 'z')
+    const moved = (await localApi.getNote('z/n.md')).data
+    expect(moved.content).toBe('v1')
+    expect(moved.revision).toBe(updated.revision)
+  })
+
+  it('moveFolder rewrites descendant paths preserving content', async () => {
+    const created = (await localApi.createNote({ name: 'x', folder: 'a', content: 'body' })).data
+    await localApi.moveFolder('a', 'b')
+    const moved = (await localApi.getNote('b/a/x.md')).data
+    expect(moved.content).toBe('body')
+    expect(moved.revision).toBe(created.revision)
+  })
+})
+
+describe('concurrent folder op vs note update (review regression)', () => {
+  it('a folder rename racing a note update never loses the update', async () => {
+    const created = (await localApi.createNote({ name: 'n', folder: 'a', content: 'v0' })).data
+    // Fire the rename without awaiting so its transaction overlaps the update.
+    const renamePromise = localApi.renameFolder('a', 'z')
+    let updateResult
+    try {
+      await localApi.updateNote('a/n.md', { content: 'v1', tags: [], baseRevision: created.revision })
+      updateResult = { ok: true }
+    } catch (e) {
+      updateResult = { ok: false, status: e?.response?.status }
+    }
+    await renamePromise
+
+    if (updateResult.ok) {
+      // The update landed: the note at the new path must carry the NEW content,
+      // never a stale pre-update snapshot.
+      const final = (await localApi.getNote('z/n.md')).data
+      expect(final.content).toBe('v1')
+    } else {
+      // The rename committed first and the note moved out from under the update.
+      expect(updateResult.status).toBe(404)
+    }
+    // Exactly one location exists.
+    const inZ = await localApi.getNote('z/n.md').then(() => true, () => false)
+    const inA = await localApi.getNote('a/n.md').then(() => true, () => false)
+    expect(inZ || inA).toBe(true)
+    expect(inZ && inA).toBe(false)
+  })
+
+  it('a folder move racing a note update never loses the update', async () => {
+    const created = (await localApi.createNote({ name: 'm', folder: 'src', content: 'v0' })).data
+    const movePromise = localApi.moveFolder('src', 'dst')
+    let updateResult
+    try {
+      await localApi.updateNote('src/m.md', { content: 'v1', tags: [], baseRevision: created.revision })
+      updateResult = { ok: true }
+    } catch (e) {
+      updateResult = { ok: false, status: e?.response?.status }
+    }
+    await movePromise
+
+    const finalPath = 'dst/src/m.md' // moveFolder('src', 'dst') relocates src under dst
+    if (updateResult.ok) {
+      const final = (await localApi.getNote(finalPath)).data
+      expect(final.content).toBe('v1')
+    } else {
+      expect(updateResult.status).toBe(404)
+    }
+    const inDst = await localApi.getNote(finalPath).then(() => true, () => false)
+    const inSrc = await localApi.getNote('src/m.md').then(() => true, () => false)
+    expect(inDst || inSrc).toBe(true)
+    expect(inDst && inSrc).toBe(false)
   })
 })
