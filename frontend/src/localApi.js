@@ -57,6 +57,8 @@ function timestampName(d = new Date()) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
 }
 
+const timestampNameRe = /^\d{4}-\d{2}-\d{2}_\d{6}(?:-\d+)?$/
+
 function encodeCursor(value) {
   const bytes = new TextEncoder().encode(JSON.stringify(value))
   let binary = ''
@@ -277,7 +279,7 @@ const localApi = {
       // Untitled notes are timestamp-named; a duplicate is a brand-new
       // untitled note, named by the moment it was duplicated rather than an
       // unhelpful "(copy)" of a generated name.
-      const untitled = /^\d{4}-\d{2}-\d{2}_\d{6}/.test(base)
+      const untitled = timestampNameRe.test(base)
       let filename
       let i = 2
       if (untitled) {

@@ -283,6 +283,21 @@ func TestDuplicateUntitledUsesFreshTimestamp(t *testing.T) {
 	}
 }
 
+func TestDuplicateTimestampPrefixIsARegularName(t *testing.T) {
+	r := newTestRepo(t)
+	name := "2026-09-03_142530-design.md"
+	if err := os.WriteFile(filepath.Join(r.Root(), name), []byte("body\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dup, err := r.Duplicate(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dup.Path != "2026-09-03_142530-design (copy).md" {
+		t.Fatalf("duplicate path = %q", dup.Path)
+	}
+}
+
 func TestApply(t *testing.T) {
 	r := newTestRepo(t)
 	n, err := r.Apply("x.md", "# X\n", "")
@@ -468,6 +483,57 @@ func TestConcurrentDuplicatesPickDistinctNames(t *testing.T) {
 			t.Fatalf("duplicate path %q returned twice", paths[i])
 		}
 		seen[paths[i]] = true
+	}
+}
+
+func TestConcurrentUntitledDuplicatesInSameFolderPickDistinctNames(t *testing.T) {
+	r := newTestRepo(t)
+	for _, note := range []struct {
+		name string
+		body string
+	}{
+		{name: "2026-09-03_142530.md", body: "a"},
+		{name: "2026-09-03_142531.md", body: "b"},
+	} {
+		if err := os.WriteFile(filepath.Join(r.Root(), note.name), []byte(note.body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const n = 8
+	var wg sync.WaitGroup
+	paths := make([]string, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			source := "2026-09-03_142530.md"
+			if i%2 == 1 {
+				source = "2026-09-03_142531.md"
+			}
+			dup, err := r.Duplicate(source)
+			if err == nil {
+				paths[i] = dup.Path
+			}
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	seen := map[string]bool{}
+	for i, p := range paths {
+		if errs[i] != nil {
+			t.Fatalf("duplicate %d: %v", i, errs[i])
+		}
+		if seen[p] {
+			t.Fatalf("duplicate path %q returned twice", p)
+		}
+		seen[p] = true
+		body := readFile(t, r, p)
+		if body != "a" && body != "b" {
+			t.Fatalf("duplicate %q has unexpected body %q", p, body)
+		}
 	}
 }
 

@@ -326,8 +326,9 @@ func writeAtomic(target string, data []byte, perm os.FileMode) error {
 func timestampBase() string { return time.Now().Format("2006-01-02_150405") }
 
 // isTimestampBase reports whether a note's base name (without ".md") is the
-// auto-generated name MemoDump gives untitled notes (e.g. 2026-09-03_153012).
-var timestampNameRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}_\d{6}`)
+// auto-generated name MemoDump gives untitled notes (e.g. 2026-09-03_153012),
+// optionally followed by the numeric collision suffix used for duplicates.
+var timestampNameRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}_\d{6}(?:-\d+)?$`)
 
 func isTimestampBase(base string) bool { return timestampNameRe.MatchString(base) }
 
@@ -646,10 +647,11 @@ func (r *Repository) Duplicate(rel string) (*Note, error) {
 	base := strings.TrimSuffix(path.Base(rel), ".md")
 	untitled := isTimestampBase(base)
 	resultRel := ""
-	// Serialize duplicates of the same source under the source's lock, and pick
-	// the first free name inside that lock, so two concurrent duplicates never
-	// target the same path.
-	err = r.locks.withLock([]string{rel}, func() error {
+	// Serialize duplicates in the same directory while choosing and writing the
+	// destination. Locking only the source is insufficient for timestamp-named
+	// notes: duplicates of different sources can otherwise choose the same
+	// second-based destination and one atomic rename can overwrite the other.
+	err = r.locks.withLock([]string{rel, dir}, func() error {
 		for n := 1; ; n++ {
 			var name string
 			switch {

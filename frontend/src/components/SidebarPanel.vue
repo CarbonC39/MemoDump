@@ -19,14 +19,14 @@
         :aria-label="collapsed ? t('sidebar.expand') : t('sidebar.collapse')"
         @click="$emit('update:collapsed', !collapsed)"
       >
-        <span class="material-icons-outlined">{{ collapsed ? 'keyboard_double_arrow_right' : 'keyboard_double_arrow_left' }}</span>
+        <span class="material-icons-outlined">menu</span>
       </button>
     </div>
 
     <div class="sidebar-scroll">
       <button class="sidebar-action" :title="t('sidebar.newNote')" @click="$emit('new-note')">
         <span class="material-icons-outlined">edit_note</span>
-        <span class="nav-text">{{ t('sidebar.newNote') }}</span>
+        {{ t('sidebar.newNote') }}
       </button>
 
       <div class="sidebar-nav">
@@ -74,6 +74,7 @@
 
         <div v-show="storageExpanded" class="nav-children">
           <div
+            v-show="dragging"
             class="root-drop-zone"
             :class="{ 'drag-over': rootDropOver }"
             @dragover.prevent="$emit('update:root-drop-over', true)"
@@ -144,6 +145,7 @@ import InfoTooltip from './InfoTooltip.vue'
 const props = defineProps({
   mobileOpen: { type: Boolean, default: false },
   collapsed: { type: Boolean, default: false },
+  dragging: { type: Boolean, default: false },
   themeIcon: { type: String, required: true },
   allNotesActive: { type: Boolean, default: false },
   storageExpanded: { type: Boolean, default: false },
@@ -390,6 +392,7 @@ function onStorageClick() {
     width: calc(100% - 12px);
     margin: 0 6px 4px;
     padding: 8px 0;
+    font-size: 0;
   }
   .sidebar.collapsed .nav-item {
     justify-content: center;

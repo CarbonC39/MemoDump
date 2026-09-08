@@ -176,6 +176,19 @@ function replaceDocument() {
   } finally {
     _replacingDocument = false
   }
+  // The editor instance is reused between notes. Clear the old note's scroll
+  // position before exposing the new document, otherwise an empty new note can
+  // start with its first paragraph above the viewport.
+  const scrollContainer = _editorElRef?.closest('.content-area')
+  if (scrollContainer) {
+    const resetDocumentVersion = props.documentVersion
+    scrollContainer.scrollTop = 0
+    requestAnimationFrame(() => {
+      if (!_destroyed && props.documentVersion === resetDocumentVersion) {
+        scrollContainer.scrollTop = 0
+      }
+    })
+  }
   emit('document-ready', props.initialContent)
 }
 

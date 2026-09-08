@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import apiClient from '../api'
 import { useI18n } from '../i18n'
 
@@ -11,6 +11,30 @@ export function useFileImport({ editFolder, currentFolder, loadAll, openNote, ed
 
   // ===== DRAG AND DROP =====
   const rootDropOver = ref(false)
+  const isDragging = ref(false)
+
+  // Drag sources live in both the main waterfall and the recursive sidebar.
+  // Listen during capture so FolderNode's stop modifiers cannot hide the drag
+  // lifecycle from us. External file drags do not dispatch dragstart in this
+  // document, so this state represents MemoDump's own card/folder drags.
+  function onDragStart() {
+    isDragging.value = true
+  }
+
+  function onDragEnd() {
+    isDragging.value = false
+    rootDropOver.value = false
+  }
+
+  onMounted(() => {
+    document.addEventListener('dragstart', onDragStart, true)
+    document.addEventListener('dragend', onDragEnd, true)
+  })
+
+  onBeforeUnmount(() => {
+    document.removeEventListener('dragstart', onDragStart, true)
+    document.removeEventListener('dragend', onDragEnd, true)
+  })
 
   function onNoteDragStart(e, note) {
     e.dataTransfer.effectAllowed = 'move'
@@ -128,7 +152,7 @@ export function useFileImport({ editFolder, currentFolder, loadAll, openNote, ed
   }
 
   return {
-    rootDropOver, hoveredNotePath, onNoteDragStart, onDropNote, onDropFolder, onDropOnRoot,
+    rootDropOver, isDragging, hoveredNotePath, onNoteDragStart, onDropNote, onDropFolder, onDropOnRoot,
     uploadingFiles, isFileDragOver, onFileInputChange,
     onMainDragEnter, onMainDragLeave, onMainDragOver, onMainDrop, uploadFiles,
   }

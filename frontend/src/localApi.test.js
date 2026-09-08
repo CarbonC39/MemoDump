@@ -218,6 +218,12 @@ describe('duplicateNote', () => {
     expect(dup.path).not.toContain('(copy)')
     expect(dup.content).toBe('body')
   })
+
+  it('keeps a user-named timestamp prefix as a normal note name', async () => {
+    const src = (await localApi.createNote({ name: '2026-09-03_142530-design', content: 'body' })).data
+    const dup = (await localApi.duplicateNote(src.path)).data
+    expect(dup.path).toBe('2026-09-03_142530-design (copy).md')
+  })
 })
 
 describe('folder tree', () => {

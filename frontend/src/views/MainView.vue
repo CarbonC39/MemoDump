@@ -15,6 +15,7 @@
       :settings-active="showSettings"
       :is-local-build="isLocalBuild"
       :collapsed="sidebarCollapsed"
+      :dragging="isDragging"
       @update:collapsed="toggleSidebarCollapsed"
       @toggle-theme="toggleTheme"
       @new-note="newNote"
@@ -498,7 +499,7 @@ async function pickEditFolder() {
 
 const dnd = useFileImport({ editFolder, currentFolder, loadAll, openNote, editingNote, updateUrl })
 const {
-  rootDropOver, hoveredNotePath, onNoteDragStart, onDropNote, onDropFolder, onDropOnRoot,
+  rootDropOver, isDragging, hoveredNotePath, onNoteDragStart, onDropNote, onDropFolder, onDropOnRoot,
   uploadingFiles, isFileDragOver, onFileInputChange,
   onMainDragEnter, onMainDragLeave, onMainDragOver, onMainDrop,
 } = dnd

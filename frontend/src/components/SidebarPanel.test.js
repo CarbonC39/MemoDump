@@ -44,8 +44,17 @@ describe('SidebarPanel desktop collapse', () => {
   it('reflects the collapsed prop and switches the toggle affordance', () => {
     const wrapper = mountSidebar(false, { collapsed: true })
     expect(wrapper.find('.sidebar').classes()).toContain('collapsed')
-    expect(wrapper.find('.sidebar-collapse-toggle .material-icons-outlined').text()).toBe('keyboard_double_arrow_right')
+    expect(wrapper.find('.sidebar-collapse-toggle .material-icons-outlined').text()).toBe('menu')
     expect(wrapper.find('.sidebar-collapse-toggle').attributes('title')).toContain('Expand')
+  })
+
+  it('only shows the root drop zone while a card or folder is being dragged', async () => {
+    const wrapper = mountSidebar(false, { storageExpanded: true, dragging: false })
+    const dropZone = wrapper.find('.root-drop-zone')
+
+    expect(dropZone.element.style.display).toBe('none')
+    await wrapper.setProps({ dragging: true })
+    expect(dropZone.element.style.display).not.toBe('none')
   })
 
   it('expands the rail before opening the folder tree from the collapsed storage item', async () => {

@@ -31,4 +31,9 @@ describe('MilkdownEditor document-change wiring', () => {
     // The keydown listener is restricted to navigation keys.
     expect(source).toContain("if (NAV_SCROLL_KEYS.has(e.key)) requestAnimationFrame(doTypewriterScroll)")
   })
+
+  it('resets the shared content scroll when replacing the active document', () => {
+    const replaceBlock = source.slice(source.indexOf('function replaceDocument'), source.indexOf('watch(() => props.documentVersion'))
+    expect(replaceBlock).toContain('scrollContainer.scrollTop = 0')
+  })
 })
