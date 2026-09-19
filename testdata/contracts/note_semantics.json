@@ -1,0 +1,16 @@
+{
+  "nameCases": [
+    { "input": " hello ", "output": "hello" },
+    { "input": "a/b", "output": "b" },
+    { "input": "a\\\\b", "output": "b" },
+    { "input": "bad:name?", "output": "bad_name_" },
+    { "input": "CON", "output": "_CON" },
+    { "input": "trail. ", "output": "trail" },
+    { "input": "你好", "output": "你好" }
+  ],
+  "tagCases": [
+    ["plain", "two"],
+    ["one,two", "say \"hi\"", "a\\\\b"],
+    ["emoji 😀", " spaced tag "]
+  ]
+}

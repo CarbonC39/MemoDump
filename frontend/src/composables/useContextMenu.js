@@ -132,7 +132,7 @@ export function useContextMenu({ openNote, isDirty, loadAll, editingNote, _force
     if (!note) return
     const noteParts = note.path.split('/')
     const curFolder = noteParts.length > 1 ? noteParts.slice(0, -1).join('/') : ''
-    const dest = await showFolderPicker(curFolder)
+    const dest = await showFolderPicker(curFolder, { mode: 'move', currentFolder: curFolder })
     if (dest === null) return
     try {
       await apiClient.moveNote(note.path, dest)

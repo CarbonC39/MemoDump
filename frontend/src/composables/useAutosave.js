@@ -1,5 +1,5 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { outboxCount } from './outbox.js'
+import { outboxCount, outboxAll, outboxDelete, outboxPut, outboxHasConflict } from './outbox.js'
 
 const PING_INTERVAL_MS = 30000
 
@@ -7,12 +7,15 @@ const PING_INTERVAL_MS = 30000
 // The outbox is the safety net — writes that fail (network down / server
 // unreachable) are queued in IndexedDB and replayed on reconnect via the
 // periodic ping timer. beforeunload warns if there are unsaved changes.
-export function useAutosave({ editingNote, isDirty, saveNote, reload, ping }) {
+//
+// A replayed update/delete that hits a stale revision (409 local_revision
+// conflict) keeps its queue entry, stops retrying it automatically, and flags a
+// visible conflict instead of overwriting the note.
+export function useAutosave({ editingNote, isDirty, saveNote, reload, ping, saveError = ref(null), api = null, conflict = null }) {
   const showDraftRestoredBanner = ref(false)
   const online = ref(typeof navigator === 'undefined' ? true : navigator.onLine)
-  const saveError = ref(null)
-
   const saveStatus = computed(() => {
+    if (conflict?.value || outboxHasConflict.value) return 'conflict'
     if (outboxCount.value > 0 || !online.value) return 'offline'
     if (saveError.value) return 'error'
     if (isDirty.value) return 'dirty'
@@ -27,7 +30,6 @@ export function useAutosave({ editingNote, isDirty, saveNote, reload, ping }) {
     if (replaying) return
     if (typeof navigator !== 'undefined' && !navigator.onLine) return
 
-    const { outboxAll, outboxDelete } = await import('./outbox.js')
     let entries
     try { entries = await outboxAll() } catch (_) { return }
     if (!entries.length) return
@@ -35,10 +37,31 @@ export function useAutosave({ editingNote, isDirty, saveNote, reload, ping }) {
     replaying = true
     try {
       for (const entry of entries) {
+        if (entry.conflict) continue
+        // An update/delete that cannot prove its baseline (a legacy entry
+        // predating revisions) must never auto-apply: it would let old content
+        // overwrite the current server state. Keep it and surface a conflict.
+        if ((entry.op === 'update' || entry.op === 'delete') && !entry.baseRevision) {
+          try { await outboxPut({ ...entry, conflict: true }) } catch (_) {}
+          if (conflict) conflict.value = true
+          continue
+        }
         try {
-          await saveNote({ replay: entry, skipReload: true })
+          if (entry.op === 'delete') {
+            if (api?.deleteNote) await api.deleteNote(entry.path, entry.baseRevision)
+            else break
+          } else {
+            await saveNote({ replay: entry })
+          }
         } catch (e) {
           if (e?.response?.status === 401) return
+          if (e?.response?.status === 409) {
+            // Keep the queue data, stop auto-retrying this entry, and surface a
+            // visible conflict. Never delete or overwrite the offline change.
+            try { await outboxPut({ ...entry, conflict: true }) } catch (_) {}
+            if (conflict) conflict.value = true
+            continue
+          }
           break
         }
         try { await outboxDelete(entry.key) } catch (_) {}

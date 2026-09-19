@@ -1,0 +1,487 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"memodump/internal/appstate"
+	"memodump/internal/vaultfs"
+)
+
+type noteSemanticsFixture struct {
+	NameCases []struct {
+		Input  string `json:"input"`
+		Output string `json:"output"`
+	} `json:"nameCases"`
+	TagCases [][]string `json:"tagCases"`
+}
+
+func loadNoteSemanticsFixture(t *testing.T) noteSemanticsFixture {
+	t.Helper()
+	data, err := os.ReadFile("testdata/contracts/note_semantics.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture noteSemanticsFixture
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
+}
+
+func TestV2AscendingCursorPagination(t *testing.T) {
+	notes := []noteSummaryV2{
+		{ID: "new.md", ModifiedAt: 30},
+		{ID: "old.md", ModifiedAt: 10},
+		{ID: "middle.md", ModifiedAt: 20},
+	}
+	sortNotesV2(notes, "modified-asc")
+	first := pageNotesV2(notes, nil, 2, "modified-asc")
+	if len(first.Items) != 2 || first.Items[0].ID != "old.md" || first.NextCursor == nil {
+		t.Fatalf("first ascending page = %#v", first)
+	}
+	cursor, err := decodeV2Cursor(*first.NextCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := pageNotesV2(notes, cursor, 2, "modified-asc")
+	if len(second.Items) != 1 || second.Items[0].ID != "new.md" {
+		t.Fatalf("second ascending page = %#v", second)
+	}
+}
+
+func TestSearchExcludesSyncMetadataDir(t *testing.T) {
+	oldDataDir := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	t.Cleanup(func() { appstate.DataDir = oldDataDir })
+	appstate.InitRepo()
+
+	// A stray .md inside .memodump must never be searchable, even though a real
+	// note elsewhere with the same content is.
+	if err := os.MkdirAll(filepath.Join(appstate.DataDir, ".memodump"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appstate.DataDir, ".memodump", "stray.md"), []byte("needle"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appstate.DataDir, "visible.md"), []byte("needle"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/search?q=needle", nil)
+	rec := httptest.NewRecorder()
+	handleSearch(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var results []Note
+	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Path != "visible.md" {
+		t.Fatalf("search results = %+v, want only visible.md", results)
+	}
+
+	// The v2 search must behave identically.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v2/search?q=needle", nil)
+	rec2 := httptest.NewRecorder()
+	handleV2Search(rec2, req2)
+	var page notePageV2
+	if err := json.Unmarshal(rec2.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ID != "visible.md" {
+		t.Fatalf("v2 search results = %+v, want only visible.md", page.Items)
+	}
+}
+
+func TestApiCannotTouchSyncMetadataDir(t *testing.T) {
+	oldDataDir := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	t.Cleanup(func() { appstate.DataDir = oldDataDir })
+	appstate.InitRepo()
+
+	// Simulate a vault that has enabled sync.
+	index := filepath.Join(appstate.DataDir, ".memodump", "sync-index.json")
+	if err := os.MkdirAll(filepath.Dir(index), 0755); err != nil {
+		t.Fatal(err)
+	}
+	const doc = `{"schemaVersion":1,"vaultId":"00000000-0000-4000-8000-000000000000","entities":{}}`
+	if err := os.WriteFile(index, []byte(doc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(index)
+
+	// Note read/delete at a .memodump path must be refused, never served.
+	noteCases := []struct {
+		name   string
+		method string
+		run    func(http.ResponseWriter, *http.Request)
+	}{
+		{"v1 get", http.MethodGet, handleGetNote},
+		{"v1 delete", http.MethodDelete, handleDeleteNote},
+		{"v2 get", http.MethodGet, handleV2GetNote},
+	}
+	for _, tc := range noteCases {
+		req := httptest.NewRequest(tc.method, "/", nil)
+		req.SetPathValue("path", ".memodump/sync-index.json")
+		rec := httptest.NewRecorder()
+		tc.run(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s .memodump note = %d, want 400", tc.name, rec.Code)
+		}
+	}
+
+	// Folder delete/rename of .memodump must be refused.
+	del := httptest.NewRequest(http.MethodDelete, "/", nil)
+	del.SetPathValue("path", ".memodump")
+	rec := httptest.NewRecorder()
+	handleDeleteFolder(rec, del)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("delete folder .memodump = %d, want 400", rec.Code)
+	}
+	ren := httptest.NewRequest(http.MethodPut, "/", strings.NewReader(`{"newName":"x"}`))
+	ren.SetPathValue("path", ".memodump")
+	rec2 := httptest.NewRecorder()
+	handleRenameFolder(rec2, ren)
+	if rec2.Code != http.StatusBadRequest {
+		t.Errorf("rename folder .memodump = %d, want 400", rec2.Code)
+	}
+
+	// Listing with a .memodump parent must be refused in v1 and v2.
+	l1 := httptest.NewRequest(http.MethodGet, "/api/notes?folder=.memodump", nil)
+	rec3 := httptest.NewRecorder()
+	handleListNotes(rec3, l1)
+	if rec3.Code != http.StatusBadRequest {
+		t.Errorf("v1 list notes in .memodump = %d, want 400", rec3.Code)
+	}
+	listCases := []struct {
+		name string
+		run  func(http.ResponseWriter, *http.Request)
+	}{
+		{"v2 list notes", handleV2ListNotes},
+		{"v2 list folders", handleV2ListFolders},
+	}
+	for _, tc := range listCases {
+		req := httptest.NewRequest(http.MethodGet, "/api/v2/notes?parent=.memodump", nil)
+		rec := httptest.NewRecorder()
+		tc.run(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s parent=.memodump = %d, want 400", tc.name, rec.Code)
+		}
+	}
+
+	// None of the refused calls may have touched the identity file.
+	after, _ := os.ReadFile(index)
+	if !bytes.Equal(before, after) {
+		t.Fatal("sync index modified by refused API calls")
+	}
+}
+
+func TestSharedNameSemantics(t *testing.T) {
+	fixture := loadNoteSemanticsFixture(t)
+	for _, testCase := range fixture.NameCases {
+		if got := vaultfs.SanitizeName(testCase.Input); got != testCase.Output {
+			t.Errorf("SanitizeName(%q) = %q, want %q", testCase.Input, got, testCase.Output)
+		}
+	}
+}
+
+func TestSharedTagSemantics(t *testing.T) {
+	fixture := loadNoteSemanticsFixture(t)
+	for _, want := range fixture.TagCases {
+		md, err := (&vaultfs.Document{Body: "body"}).WithTags(want)
+		if err != nil {
+			t.Fatalf("WithTags(%#v) error: %v", want, err)
+		}
+		got := vaultfs.ParseDocument(md).Tags
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("tags = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestFrontMatterTagsRoundTrip(t *testing.T) {
+	want := []string{"one,two", `say "hi"`, `a\b`}
+	md, err := (&vaultfs.Document{Body: "body"}).WithTags(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed := vaultfs.ParseDocument(md)
+	if parsed.Body != "body" {
+		t.Fatalf("body = %q, want body", parsed.Body)
+	}
+	if !reflect.DeepEqual(parsed.Tags, want) {
+		t.Fatalf("tags = %#v, want %#v", parsed.Tags, want)
+	}
+}
+
+func TestUpdateNoteRenameDoesNotOverwrite(t *testing.T) {
+	oldDataDir := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	t.Cleanup(func() { appstate.DataDir = oldDataDir })
+	appstate.InitRepo()
+
+	if err := os.WriteFile(filepath.Join(appstate.DataDir, "source.md"), []byte("source"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appstate.DataDir, "target.md"), []byte("target"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/notes/source.md",
+		strings.NewReader(`{"content":"changed","tags":[],"rename":"target"}`))
+	req.SetPathValue("path", "source.md")
+	rec := httptest.NewRecorder()
+
+	handleUpdateNote(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	target, err := os.ReadFile(filepath.Join(appstate.DataDir, "target.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(target) != "target" {
+		t.Fatalf("target content = %q, want target", target)
+	}
+	source, err := os.ReadFile(filepath.Join(appstate.DataDir, "source.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(source) != "source" {
+		t.Fatalf("source content = %q, want source", source)
+	}
+}
+
+func TestV2ListingsAreDirectAndPaginated(t *testing.T) {
+	oldDataDir := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	t.Cleanup(func() { appstate.DataDir = oldDataDir })
+	appstate.InitRepo()
+
+	for _, dir := range []string{"a", "a/deep", "b"} {
+		if err := os.MkdirAll(filepath.Join(appstate.DataDir, dir), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{"a/one.md", "a/two.md", "a/deep/hidden.md"} {
+		if err := os.WriteFile(filepath.Join(appstate.DataDir, path), []byte(path), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	folderReq := httptest.NewRequest(http.MethodGet, "/api/v2/folders?parent=a", nil)
+	folderRec := httptest.NewRecorder()
+	handleV2ListFolders(folderRec, folderReq)
+	if folderRec.Code != http.StatusOK {
+		t.Fatalf("folder status = %d; body=%s", folderRec.Code, folderRec.Body.String())
+	}
+	var folders folderPageV2
+	if err := json.Unmarshal(folderRec.Body.Bytes(), &folders); err != nil {
+		t.Fatal(err)
+	}
+	if len(folders.Items) != 1 || folders.Items[0].ID != "a/deep" {
+		t.Fatalf("folders = %#v", folders.Items)
+	}
+
+	firstReq := httptest.NewRequest(http.MethodGet, "/api/v2/notes?parent=a&limit=1", nil)
+	firstRec := httptest.NewRecorder()
+	handleV2ListNotes(firstRec, firstReq)
+	var first notePageV2
+	if err := json.Unmarshal(firstRec.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 1 || first.NextCursor == nil {
+		t.Fatalf("first page = %#v", first)
+	}
+
+	secondReq := httptest.NewRequest(http.MethodGet,
+		"/api/v2/notes?parent=a&limit=1&cursor="+*first.NextCursor, nil)
+	secondRec := httptest.NewRecorder()
+	handleV2ListNotes(secondRec, secondReq)
+	var second notePageV2
+	if err := json.Unmarshal(secondRec.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 1 || second.Items[0].ID == first.Items[0].ID {
+		t.Fatalf("second page = %#v, first = %#v", second, first)
+	}
+}
+
+// --- Phase 0 revision CAS, HTTP level --------------------------------------
+
+func apiNoteRepo(t *testing.T) {
+	t.Helper()
+	oldDataDir := appstate.DataDir
+	appstate.DataDir = t.TempDir()
+	t.Cleanup(func() { appstate.DataDir = oldDataDir })
+	appstate.InitRepo()
+}
+
+func createNoteViaAPI(t *testing.T, name, content string) vaultfs.Note {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/notes",
+		strings.NewReader(fmt.Sprintf(`{"name":%q,"content":%q,"tags":[]}`, name, content)))
+	rec := httptest.NewRecorder()
+	handleCreateNote(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var note vaultfs.Note
+	if err := json.Unmarshal(rec.Body.Bytes(), &note); err != nil {
+		t.Fatal(err)
+	}
+	return note
+}
+
+func getNoteViaAPI(t *testing.T, path string) vaultfs.Note {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/notes/"+path, nil)
+	req.SetPathValue("path", path)
+	rec := httptest.NewRecorder()
+	handleGetNote(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var note vaultfs.Note
+	if err := json.Unmarshal(rec.Body.Bytes(), &note); err != nil {
+		t.Fatal(err)
+	}
+	return note
+}
+
+func updateNoteViaAPI(t *testing.T, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPut, "/api/notes/"+path, strings.NewReader(body))
+	req.SetPathValue("path", path)
+	rec := httptest.NewRecorder()
+	handleUpdateNote(rec, req)
+	return rec
+}
+
+func currentRevision(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(appstate.DataDir, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return vaultfs.RevisionOfBytes(data)
+}
+
+func TestLegacyUpdateStaleRevisionConflicts(t *testing.T) {
+	apiNoteRepo(t)
+	createNoteViaAPI(t, "a", "v0")
+	rev := currentRevision(t, "a.md")
+
+	rec := updateNoteViaAPI(t, "a.md",
+		fmt.Sprintf(`{"content":"v1","tags":[],"baseRevision":%q}`, "deadbeef"))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale update status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := getNoteViaAPI(t, "a.md").Content; got != "v0" {
+		t.Fatalf("file was written despite conflict: %q", got)
+	}
+
+	rec = updateNoteViaAPI(t, "a.md",
+		fmt.Sprintf(`{"content":"v1","tags":[],"baseRevision":%q}`, rev))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fresh update status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var updated vaultfs.Note
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Revision == rev {
+		t.Fatal("revision must change on a content change")
+	}
+	if got := getNoteViaAPI(t, "a.md").Content; got != "v1" {
+		t.Fatalf("content after fresh update = %q", got)
+	}
+}
+
+func TestTwoStaleClientsCannotOverwrite(t *testing.T) {
+	apiNoteRepo(t)
+	// Client A and B both read the same baseline.
+	createNoteViaAPI(t, "a", "v0")
+	base := currentRevision(t, "a.md")
+	_ = getNoteViaAPI(t, "a.md")
+
+	// B writes first, from the shared baseline.
+	if rec := updateNoteViaAPI(t, "a.md",
+		fmt.Sprintf(`{"content":"from-b","tags":[],"baseRevision":%q}`, base)); rec.Code != http.StatusOK {
+		t.Fatalf("client B update status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// A's write is now stale and must be rejected without touching the file.
+	rec := updateNoteViaAPI(t, "a.md",
+		fmt.Sprintf(`{"content":"from-a","tags":[],"baseRevision":%q}`, base))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("client A stale update status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := getNoteViaAPI(t, "a.md").Content; got != "from-b" {
+		t.Fatalf("content = %q, want from-b (client A overwrote)", got)
+	}
+}
+
+func TestExternalModificationDetectedBetweenReadAndUpdate(t *testing.T) {
+	apiNoteRepo(t)
+	createNoteViaAPI(t, "a", "v0")
+	base := currentRevision(t, "a.md")
+
+	// An external editor rewrites the file behind the server's back.
+	if err := os.WriteFile(filepath.Join(appstate.DataDir, "a.md"), []byte("external"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A write based on the stale revision is rejected.
+	if rec := updateNoteViaAPI(t, "a.md",
+		fmt.Sprintf(`{"content":"mine","tags":[],"baseRevision":%q}`, base)); rec.Code != http.StatusConflict {
+		t.Fatalf("stale update status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := getNoteViaAPI(t, "a.md").Content; got != "external" {
+		t.Fatalf("external content was clobbered: %q", got)
+	}
+
+	// Without a base revision (legacy lenient path) the write still goes through.
+	if rec := updateNoteViaAPI(t, "a.md", `{"content":"mine","tags":[]}`); rec.Code != http.StatusOK {
+		t.Fatalf("lenient update status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLegacyDeleteStaleRevisionConflicts(t *testing.T) {
+	apiNoteRepo(t)
+	createNoteViaAPI(t, "a", "v0")
+	base := currentRevision(t, "a.md")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/notes/a.md?baseRevision=deadbeef", nil)
+	req.SetPathValue("path", "a.md")
+	rec := httptest.NewRecorder()
+	handleDeleteNote(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale delete status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(appstate.DataDir, "a.md")); err != nil {
+		t.Fatal("note was deleted despite a stale base revision")
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/notes/a.md?baseRevision="+base, nil)
+	req.SetPathValue("path", "a.md")
+	rec = httptest.NewRecorder()
+	handleDeleteNote(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fresh delete status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(appstate.DataDir, "a.md")); !os.IsNotExist(err) {
+		t.Fatal("note still exists after delete")
+	}
+}

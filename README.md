@@ -18,12 +18,24 @@
 
 <p align="center">
   <a href="https://memodump.carbonc.cc/">Website</a> ·
-  <a href="https://memodump.vercel.app/">Live Demo</a>
+  <a href="https://memo.lomia.uk/">Online</a>
+  <a href="https://ko-fi.com/carbonc">Donate</a>
 </p>
 
-A lightweight, single-binary Markdown notes app. Run it as a self-hosted web server, a native desktop application (via [Wails](https://wails.io/)), or a Docker container.
+A simple, clean, easy-to-use, neurodiversity-friendly Markdown notes app. Run it as a self-hosted web server, a native desktop application (via [Wails](https://wails.io/)), or a Docker container. There's even a ready-to-use [online version](https://memo.lomia.uk/)!
 
-> The [live demo](https://memodump.vercel.app/) runs in no-auth mode against ephemeral storage for trying out the editor — don't store anything you care about there.
+> The [online version](https://memo.lomia.uk/) stores data in the browser when sync is not enabled. Clearing browser data may result in lost notes.
+
+---
+
+## Why MemoDump?
+
+Lost in formatting and organising, we end up focusing less on the content itself. MemoDump just wants you to start writing quickly and stay focused on your thoughts, so it keeps the design deliberately low-friction.
+
+- No need for complex databases or nested structures — you don't even have to name a note. Everything beyond the content is optional.
+- MemoDump works hard to make information stand out: waterfall card view for notes, and no secondary menus unless necessary — friendly to your working memory.
+
+---
 
 ## Features
 
@@ -31,12 +43,11 @@ A lightweight, single-binary Markdown notes app. Run it as a self-hosted web ser
 - **Markdown editor** — [Milkdown](https://milkdown.dev/) WYSIWYG editor with full Markdown support.
 - **Folder organisation** — Hierarchical folders with drag-and-drop and `.md` file import.
 - **Full-text search** — Fast in-memory AND-mode search across note bodies and tags.
+- **Image paste & upload** — Paste or drop image files to insert them; stored in the local vault by default, with optional S3-compatible hosting.
 - **Waterfall card view** — Visual masonry-style note browser alongside the folder tree.
-- **Autosave & offline outbox** — Calm autosave backed by IndexedDB; edits queued while offline replay automatically when connectivity returns.
-- **Font presets & typography** — Choose from system, serif, and sans font families; custom CSS font stacks; independent font sizes for app UI, WYSIWYG editor, and raw editor.
-- **Settings panel** — Full-page settings view with live preview card, numeric inputs, and typography controls.
+- **Autosave against data loss** — Silent autosave when offline; edits made offline replay automatically once connectivity returns.
+- **Custom fonts** — Built-in system, serif, and sans font family presets; custom CSS font stacks; independent font sizes for app UI, WYSIWYG editor, and raw editor.
 - **Custom CSS** — Inject a stylesheet via `--css` CLI flag, or edit custom CSS directly in the settings panel.
-- **Flexible auth** — Username/password session auth, or no-auth mode for personal/trusted-network use.
 - **Config layering** — Flags → environment variables → `.env` file (any combination works).
 - **Desktop app** — Native window via Wails — same codebase, no browser required.
 - **Mobile/PWA friendly** — Responsive design, installable as a PWA with back-navigation support.
@@ -95,6 +106,10 @@ PORT=9090
 CSS=./custom.css
 ```
 
+Cloud sync has no CLI surface: the CLI Web server does not sync (see
+[Cloud sync](#cloud-sync-experimental)); the Wails desktop build reads its sync
+state from the OS application-data directory.
+
 Lines starting with `#` and blank lines are ignored. Values are not quote-stripped.
 
 ### No-auth mode
@@ -110,7 +125,7 @@ memodump --data ./notes
 
 ## Desktop App (Wails)
 
-The Wails build wraps the same backend in a native window — no browser or open port needed.
+The Wails build wraps the same backend in a native window.
 
 - On first launch the data directory is resolved automatically (no dialog):
   1. `DATA=` key in a `.env` file next to the binary / in the working directory
@@ -131,7 +146,7 @@ The Wails build wraps the same backend in a native window — no browser or open
 
 ## Docker
 
-Pre-built images are published to GitHub Container Registry on every tagged release: `ghcr.io/carbonc39/memodump`. The image runs the headless CLI server only (the Wails desktop build doesn't apply in a container).
+Pre-built images are published to GitHub Container Registry on every tagged release: `ghcr.io/carbonc39/memodump`. The image runs the headless CLI server only.
 
 ```sh
 # No authentication
@@ -143,7 +158,7 @@ docker run -d -p 9090:9090 -v ./notes:/data \
   ghcr.io/carbonc39/memodump:latest
 ```
 
-The data volume mounts to `/data` (set via `MEMODUMP_DATA=/data` inside the image). Available tags: `latest`, `vX.Y.Z`, `vX.Y`. All [CLI environment variables](#configuration-sources) work the same way inside the container.
+The data volume mounts to `/data` (set via `MEMODUMP_DATA=/data` inside the image). Available tags: `latest`, `vX.Y.Z`, `vX.Y`. All [CLI environment variables](#configuration-sources) work the same way inside the container. Cloud sync does not run in the container: the image is the headless CLI server, whose browser clients share one server vault (see [Cloud sync](#cloud-sync-experimental)).
 
 Build the image locally with `docker build -t memodump .` (see `Dockerfile`).
 
@@ -155,6 +170,8 @@ Build the image locally with `docker build -t memodump .` (see `Dockerfile`).
 
 - Go 1.25+
 - Node 20+ with npm
+
+Before preparing a release, complete the [manual testing checklist](docs/manual-testing.md).
 
 ### CLI server
 
@@ -186,6 +203,44 @@ Output is placed in `build/bin/`.
 
 > **Note:** `wails dev` opens a terminal window for its hot-reload proxy — this is expected. Production builds (`wails build`) use `-H windowsgui` on Windows and produce a GUI-only binary with no console.
 
+**Linux system dependencies.** Wails links against GTK 3 and WebKitGTK. On Debian
+12 / Ubuntu ≤ 23.10 install `libgtk-3-dev libwebkit2gtk-4.0-dev` (plus
+`libayatana-appindicator3-dev` and `librsvg2-bin` for the tray/icon tooling). On
+Debian 13 / Ubuntu ≥ 24.04, `webkit2gtk-4.0` no longer exists — only
+`webkit2gtk-4.1` — so install `libgtk-3-dev libwebkit2gtk-4.1-dev` and build
+with the `webkit2_41` tag:
+
+```sh
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-bin
+wails build -tags "webkit2_41"
+```
+
+Without the tag, `wails build` fails at bindings generation with
+`webkit2gtk-4.0 was not found`.
+
+### Pure frontend / PWA
+
+A browser-only build with no Go server: notes live in IndexedDB and cloud sync
+runs in the browser (see [Cloud sync](#cloud-sync-experimental)). Build it with
+`VITE_LOCAL=1` and serve the static `dist` directory, or run the local dev
+server with `npm run dev:local` (Vite serves it directly and proxies `/api` to
+a local server for non-sync features):
+
+```sh
+cd frontend && npm run build:local           # production build (verified local mode)
+cd frontend && npm run dev:local            # hot-reload dev server
+```
+
+`frontend/vercel.json` makes Vercel use this local build and serves `dist` as
+a Vite SPA. After deployment, `/build-mode.json` must return `{"mode":"local"}`;
+if it does not, the Vercel project's Root Directory is not `frontend` or a
+dashboard build-command override is taking precedence over the repository.
+
+The browser build must run in a **secure context**: serve it over HTTPS (or
+`http://localhost` during development). Web Locks, `crypto.subtle`, and secure
+IndexedDB rely on it, and a second device must not be pointed at a plain LAN
+HTTP address.
+
 ### Build tags reference
 
 | Tag | Used by | Entry point |
@@ -194,6 +249,122 @@ Output is placed in `build/bin/`.
 | `production` | `wails build` | `main_wails.go` |
 | `dev` | `wails dev` | `main_wails.go` |
 | `bindings` | Wails JS-binding generation (internal) | `main_wails.go` |
+
+---
+
+## Image support
+
+Image storage across the three builds:
+
+| Build | Default | Configurable |
+|-------|---------|--------------|
+| Web server | Local vault (`<dataDir>/.images/`) | S3-compatible (settings panel or environment) |
+| Wails desktop | Local vault (`<dataDir>/.images/`) | S3-compatible (settings panel) |
+| Pure frontend / PWA | Off (image links only) | S3-compatible (settings panel, browser-direct) |
+
+- Paste or drop image files in the editor to insert them. The local vault stores
+  images under the data dir and the markdown keeps a relative URL
+  (`/api/images/<key>`) that resolves only inside the app origin — the
+  portability tradeoff of self-hosted images.
+- **S3 mode requires the bucket to be publicly readable** (otherwise images
+  show 403). The pure-frontend build additionally needs bucket CORS configured
+  (allow the app origin, `PUT/POST/GET/HEAD`, `Content-Type` and `x-amz-*`
+  headers, and expose `ETag` for multipart uploads).
+- **Privacy notice**: in S3 mode images are publicly readable by anyone with
+  the link; the content hash is not access control, and identical files
+  produce identical links. Do not upload images that must stay private.
+- Images pasted offline are kept in browser IndexedDB and upload automatically
+  once connectivity returns; an entry is removed only after the image is
+  uploaded and verified readable (a few orphan objects may remain, which is
+  accepted).
+- **Optional periodic cleanup** (settings → Images): when enabled, the server
+  periodically deletes images no note references (local vault and S3, with a
+  7-day grace period; in S3 mode deletion is remote and permanent), and the
+  web/Wails build additionally removes permanently-failed pending entries after
+  30 days. Use a dedicated bucket/prefix for MemoDump so other files are never
+  affected. Cleanup is off by default.
+- Security: image keys are `sha256(content) + canonical extension` (JPEG is
+  always `.jpg`); the server validates the content hash, magic bytes and the
+  extension match. Only png/jpg/gif/webp/avif are accepted — **no SVG**
+  (same-origin stored-XSS risk).
+
+The web server can also be configured via environment:
+`MEMODUMP_IMAGE_S3_ENDPOINT`, `_REGION`, `_BUCKET`, `_PREFIX`, `_PUBLIC_URL`,
+`_ACCESS_KEY`, `_SECRET_KEY`, `_FORCE_PATH_STYLE` (higher priority than the
+settings panel, which becomes read-only).
+
+---
+
+## Cloud sync (experimental)
+
+Cloud sync keeps two or more MemoDump installations' Markdown notes in sync
+through an S3-compatible bucket; enable it from settings in the online version
+and the Wails desktop app. It is eventual, not real-time, synchronization: a
+change on device A is uploaded on A's next run and downloaded on B's next run,
+so normal latency is about two intervals.
+
+Configure note sync from **Settings → Cloud sync** — the panel persists endpoint,
+region, bucket, prefix, access/secret key, and path style in the OS user-config
+directory (`<user-config>/memodump/sync-config.json`). The secretKey is stored
+server-side and never returned to the UI; leaving it blank when reconnecting
+keeps the current secret. The panel refuses to change the provider while sync is
+connected (Disconnect first, then edit). The panel combines saving and the
+provider capability check into one **Connect** action.
+
+- The PWA keeps its own S3 configuration in browser localStorage. The bucket
+  must allow signed traffic from the app origin. Sync runs only while the page
+  or PWA is open — closing it stops sync, and no background work happens
+  afterwards. The PWA vault, sync identity, snapshot, and recovery copies live
+  in IndexedDB: clearing site data, or using a private browsing window, discards
+  or isolates them, so local unsynced changes and recovery copies are lost.
+- The Wails desktop keeps its sync device state — the Device ID and path→Replica
+  registry, the connection record, one disposable snapshot, and the recovery
+  copies — in the OS application-data directory, outside the vault. Do not
+  delete it while a vault is connected or the replica will re-onboard
+  conservatively.
+
+The provider can also be supplied entirely with environment variables — they
+take precedence over the saved file and make the panel read-only:
+
+| Variable | Meaning |
+|----------|---------|
+| `MEMODUMP_SYNC_ENDPOINT` | S3-compatible endpoint URL (e.g. `https://s3.region.amazonaws.com`). Plain HTTP is allowed only for `localhost`/loopback development. The endpoint must not carry a path. |
+| `MEMODUMP_SYNC_BUCKET` | A **private** bucket. |
+| `MEMODUMP_SYNC_PREFIX` | Optional object prefix (e.g. `memo/vault-a`). |
+| `MEMODUMP_SYNC_REGION` | Region (default `us-east-1`). |
+| `MEMODUMP_SYNC_ACCESS_KEY` / `MEMODUMP_SYNC_SECRET_KEY` | Credentials. |
+| `MEMODUMP_SYNC_FORCE_PATH_STYLE` | `1` for path-style addressing (MinIO, R2, LocalStack). |
+
+A connected replica (you clicked **Connect** once) runs automatically while its
+runtime is open: once after a **10-second startup delay**, then every **five
+minutes**, plus immediately after a successful connection. **Sync now** in the
+settings panel still forces an immediate run. The schedule is identical for the
+Wails desktop (while the app is open) and the PWA (while the page is open), and
+no sync runs after a runtime closes. A transient provider failure retries with
+in-memory backoff (`1m, 2m, 5m, 10m, 30m`, honoring a larger provider
+`Retry-After`, reset by success; restart forgets it). An
+auth/permission/quota/mismatch failure **pauses automatic sync** for the rest of
+the runtime — the status shows the paused reason — while **Sync now** still works;
+a successful manual run or reconnect clears the pause.
+
+The settings panel shows connection state, the last successful sync, actionable
+errors, and recovery copies. **Disconnect** stops automatic runs and keeps your
+identity and provider configuration, so **Reconnect** resumes cleanly.
+
+Notes:
+
+- **Sync is not end-to-end encrypted.** Use a private bucket and restrict its
+  credentials.
+- **Deletes propagate to every device.** The durable **recovery copies** the app
+  writes before a pulled deletion can be inspected and restored from the
+  settings panel.
+- **Do not combine with another filesystem sync tool.** Do not place the same
+  vault under Dropbox/iCloud/OneDrive, git automation, or another file-sync tool
+  while cloud sync is enabled — the two tools would race on the same Markdown
+  files.
+- **Connect different storage** discards this replica's snapshot and connection
+  pin so you can deliberately switch providers or recreate a lost repository. A
+  normal run never re-creates a lost repository on its own.
 
 ---
 
@@ -220,11 +391,9 @@ memodump/
 
 ## CI / CD
 
-CI runs on **GitHub Actions** (`.github/workflows/build.yml`), triggered on every push/PR to `public`/`main` and on `v*` tags. A Forgejo Actions workflow (`.forgejo/workflows/build.yml`) is kept on Codeberg for manual/reference runs only and no longer triggers automatically.
+CI runs on **GitHub Actions** (`.github/workflows/build.yml`), triggered on every push/PR to `public` and on `v*` tags.
 
 ### `build-cli` — CLI cross-compilation
-
-Runs on every push/PR (cheap, Linux-hosted cross-compilation):
 
 | Target | Output |
 |--------|--------|
@@ -244,9 +413,9 @@ Gated to `v*` tags / manual dispatch (native macOS/Windows/Linux runners bill mo
 
 Also gated to `v*` tags / manual dispatch. Builds `linux/amd64` + `linux/arm64` and pushes to `ghcr.io/carbonc39/memodump`, tagged `latest`, `vX.Y.Z`, and `vX.Y`.
 
-### `release` — GitHub Release + Codeberg sync
+### `release` — GitHub Release
 
-Triggered only on `v*` tags. Collects every build artifact onto a GitHub Release, then mirrors the release (and its assets) to Codeberg via the Forgejo API.
+Triggered only on `v*` tags. Collects every build artifact onto a GitHub Release.
 
 ---
 

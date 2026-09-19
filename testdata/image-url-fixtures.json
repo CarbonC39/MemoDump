@@ -1,0 +1,20 @@
+{
+  "normalize": [
+    { "base": "https://x.test/", "prefix": "/a/", "key": "abc.png", "want": "https://x.test/a/abc.png" },
+    { "base": "https://x.test", "prefix": "", "key": "abc.png", "want": "https://x.test/abc.png" },
+    { "base": "https://x.test/images/", "prefix": "memodump/", "key": "abc.png", "want": "https://x.test/images/memodump/abc.png" },
+    { "base": " https://x.test//", "prefix": " /a/b/ ", "key": "abc.png", "want": "https://x.test/a/b/abc.png" },
+    { "base": "https://cdn.example.com/images", "prefix": "", "key": "a2b.png", "want": "https://cdn.example.com/images/a2b.png" }
+  ],
+  "publicBaseUrl": [
+    { "value": "https://cdn.example.com/images", "allowInsecure": false, "valid": true },
+    { "value": "https://cdn.example.com/", "allowInsecure": true, "valid": true },
+    { "value": "http://cdn.example.com", "allowInsecure": false, "valid": false },
+    { "value": "http://cdn.example.com", "allowInsecure": true, "valid": true },
+    { "value": "https://u:p@cdn.example.com", "allowInsecure": true, "valid": false },
+    { "value": "https://cdn.example.com?token=x", "allowInsecure": true, "valid": false },
+    { "value": "https://cdn.example.com#frag", "allowInsecure": true, "valid": false },
+    { "value": "/relative/path", "allowInsecure": true, "valid": false },
+    { "value": "ftp://cdn.example.com", "allowInsecure": true, "valid": false }
+  ]
+}

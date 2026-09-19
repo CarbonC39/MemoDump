@@ -23,6 +23,10 @@ api.interceptors.response.use(
     }
 )
 
+// Normalize a v2 note document to the shape the rest of the UI reads: `id`
+// becomes `path`, and the optimistic-concurrency `revision` is carried through.
+const toLegacyNote = (doc) => ({ ...doc, path: doc.id })
+
 const remoteApi = {
     login(username, password) {
         return api.post('/login', { username, password })
@@ -35,28 +39,52 @@ const remoteApi = {
         return api.get('/notes', { params })
     },
     getNote(path) {
-        return api.get(`/notes/${path}`)
+        return api.get(`/v2/notes/${path}`).then(res => ({ ...res, data: toLegacyNote(res.data) }))
     },
     createNote(data) {
-        return api.post('/notes', data)
+        return api.post('/v2/notes', data).then(res => ({ ...res, data: toLegacyNote(res.data) }))
     },
     updateNote(path, data) {
-        return api.put(`/notes/${path}`, data)
+        // v2 requires baseRevision; callers pass it via data.baseRevision.
+        return api.put(`/v2/notes/${path}`, data).then(res => ({ ...res, data: toLegacyNote(res.data) }))
     },
-    deleteNote(path) {
-        return api.delete(`/notes/${path}`)
+    deleteNote(path, baseRevision) {
+        if (baseRevision) {
+            return api.delete(`/v2/notes/${path}`, { params: { baseRevision } })
+        }
+        // Fetch the current revision so every delete is CAS-protected. A note
+        // that is already gone counts as deleted.
+        return this.getNote(path)
+            .then(doc => api.delete(`/v2/notes/${path}`, { params: { baseRevision: doc.data.revision } }))
+            .catch(err => {
+                if (err?.response?.status === 404) return { data: { status: 'ok' } }
+                throw err
+            })
     },
     moveNote(path, destination) {
-        return api.put(`/move/${path}`, { destination })
+        return api.put(`/v2/move/${path}`, { destination }).then(res => ({ ...res, data: toLegacyNote(res.data) }))
     },
     duplicateNote(path) {
-        return api.post(`/duplicate/${path}`)
+        return api.post(`/v2/duplicate/${path}`).then(res => ({ ...res, data: toLegacyNote(res.data) }))
     },
     moveFolder(path, destination) {
         return api.put(`/move/folder/${path}`, { destination })
     },
     listFolders() {
         return api.get('/folders')
+    },
+    listNotesV2(parent = '', { cursor = '', limit = 50, sort = 'modified-desc' } = {}) {
+        const params = { parent, limit, sort }
+        if (cursor) params.cursor = cursor
+        return api.get('/v2/notes', { params })
+    },
+    listFoldersV2(parent = '') {
+        return api.get('/v2/folders', { params: { parent } })
+    },
+    searchV2(q, tag, { cursor = '', limit = 50, sort = 'modified-desc' } = {}) {
+        const params = { q, tag, limit, sort }
+        if (cursor) params.cursor = cursor
+        return api.get('/v2/search', { params })
     },
     createFolder(path) {
         return api.post('/folders', { path })
@@ -84,6 +112,56 @@ const remoteApi = {
         return api.post('/upload', formData, {
             headers: { 'Content-Type': 'multipart/form-data' },
         })
+    },
+    imageUpload(key, blob, contentType, targetId) {
+        return api.put(`/images/${key}`, blob, {
+            headers: {
+                'Content-Type': contentType || 'application/octet-stream',
+                ...(targetId ? { 'X-MemoDump-Image-Target': targetId } : {}),
+            },
+        })
+    },
+    imageConfigGet() {
+        return api.get('/config/image')
+    },
+    imageConfigSave(config) {
+        return api.put('/config/image', config)
+    },
+    imageConfigTest(config) {
+        return api.post('/config/image/test', config)
+    },
+    syncStatus() {
+        return api.get('/sync/status')
+    },
+    syncEnable() {
+        return api.post('/sync/enable')
+    },
+    syncRun() {
+        return api.post('/sync/run')
+    },
+    syncDisable() {
+        return api.post('/sync/disable')
+    },
+    syncReset() {
+        return api.post('/sync/reset')
+    },
+    syncTest() {
+        return api.post('/sync/test')
+    },
+    syncConfigGet() {
+        return api.get('/sync/config')
+    },
+    syncConfigSave(cfg) {
+        return api.put('/sync/config', cfg)
+    },
+    syncConfigTest(cfg) {
+        return api.post('/sync/config/test', cfg)
+    },
+    syncRecovery() {
+        return api.get('/sync/recovery')
+    },
+    syncRecoveryRestore(body) {
+        return api.post('/sync/recovery/restore', body)
     },
 }
 
