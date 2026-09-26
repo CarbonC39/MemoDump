@@ -1,0 +1,1015 @@
+{
+  "cases": [
+    {
+      "name": "no-baseline local-only",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "missing",
+        "path": "Projects/idea.md"
+      },
+      "baseline": null,
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "push_live",
+        "reason": "local-only; create remote if-absent",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "deleted": false,
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "version": "",
+        "localRevision": "local-rev",
+        "conflict": null
+      }
+    },
+    {
+      "name": "no-baseline remote-only",
+      "local": {
+        "state": "absent"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "v1"
+      },
+      "baseline": null,
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "pull_live",
+        "reason": "remote changed",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "deleted": false,
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "version": "v1",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "no-baseline identical",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "v1"
+      },
+      "baseline": null,
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "establish_baseline",
+        "reason": "local and remote known equal",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "deleted": false,
+        "path": "",
+        "markdown": "",
+        "version": "v1",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "no-baseline divergent",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "v1"
+      },
+      "baseline": null,
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "preserve_local_then_pull",
+        "reason": "divergent edits; preserve local as conflict, accept remote at original",
+        "contentHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "deleted": false,
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "version": "v1",
+        "localRevision": "local-rev",
+        "conflict": {
+          "sourceSyncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+          "conflictSyncId": "393497eb-5d7a-5d94-a0aa-b35ec2f54403",
+          "conflictPath": "Projects/idea (conflict 393497eb5d7a).md",
+          "conflictMarkdown": "body\n",
+          "localStateHash": "0e6ee0e4aa9b3a896ec8e3c324bf2fd41ec316852dbaab13da1cf5d996c6e08e",
+          "remoteStateHash": "9fd56fd02eb9430da0a02a6a07f88c44a67fb7728326a57c95bafa2b48b5e15b",
+          "originalTombstone": false,
+          "originalVersion": ""
+        }
+      }
+    },
+    {
+      "name": "no-baseline live vs tombstone",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "tombstone",
+        "path": "Projects/idea.md",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "version": "v1"
+      },
+      "baseline": null,
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "preserve_local_then_delete",
+        "reason": "local edit versus remote tombstone; preserve local as conflict, accept deletion",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "deleted": true,
+        "path": "Projects/idea.md",
+        "markdown": "",
+        "version": "v1",
+        "localRevision": "local-rev",
+        "conflict": {
+          "sourceSyncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+          "conflictSyncId": "ead47101-8a68-5aeb-8079-61b4f03fbc17",
+          "conflictPath": "Projects/idea (conflict ead471018a68).md",
+          "conflictMarkdown": "body\n",
+          "localStateHash": "0e6ee0e4aa9b3a896ec8e3c324bf2fd41ec316852dbaab13da1cf5d996c6e08e",
+          "remoteStateHash": "00d98feb427208b2c63d1575a11dbca8f3729d34462adbfac9d5cd28a58393b3",
+          "originalTombstone": true,
+          "originalVersion": ""
+        }
+      }
+    },
+    {
+      "name": "no-baseline absent + tombstone",
+      "local": {
+        "state": "absent"
+      },
+      "remote": {
+        "state": "tombstone",
+        "path": "Projects/idea.md",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "version": "v1"
+      },
+      "baseline": null,
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "establish_baseline",
+        "reason": "local and remote known equal",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "deleted": true,
+        "path": "",
+        "markdown": "",
+        "version": "v1",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "no-baseline absent + missing",
+      "local": {
+        "state": "absent"
+      },
+      "remote": {
+        "state": "missing",
+        "path": "Projects/idea.md"
+      },
+      "baseline": null,
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "block",
+        "reason": "indexed local absence plus physically absent remote object is ambiguous",
+        "contentHash": "",
+        "deleted": false,
+        "path": "",
+        "markdown": "",
+        "version": "",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "no-baseline invalid remote",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "invalid",
+        "path": "Projects/idea.md"
+      },
+      "baseline": null,
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "block",
+        "reason": "invalid remote record",
+        "contentHash": "",
+        "deleted": false,
+        "path": "",
+        "markdown": "",
+        "version": "",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "no-baseline invalid remote retryable",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "invalid",
+        "path": "Projects/idea.md",
+        "retryable": true
+      },
+      "baseline": null,
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "retry",
+        "reason": "invalid remote record, retryable",
+        "contentHash": "",
+        "deleted": false,
+        "path": "",
+        "markdown": "",
+        "version": "",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "L==R baseline matches",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "v0"
+      },
+      "baseline": {
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "remoteVersion": "v0"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "noop",
+        "reason": "local and remote unchanged",
+        "contentHash": "",
+        "deleted": false,
+        "path": "",
+        "markdown": "",
+        "version": "",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "L==R baseline version stale",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "v1"
+      },
+      "baseline": {
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "remoteVersion": "v0"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "establish_baseline",
+        "reason": "local and remote known equal",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "path": "",
+        "markdown": "",
+        "version": "v1",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "remote changed only",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "v2"
+      },
+      "baseline": {
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "remoteVersion": "v0"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "pull_live",
+        "reason": "remote changed",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "deleted": false,
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "version": "v2",
+        "localRevision": "local-rev",
+        "conflict": null
+      }
+    },
+    {
+      "name": "local changed only",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "v1"
+      },
+      "baseline": {
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "remoteVersion": "v0"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "push_live",
+        "reason": "local changed",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "deleted": false,
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "version": "v1",
+        "localRevision": "local-rev",
+        "conflict": null
+      }
+    },
+    {
+      "name": "both changed differently",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "v2"
+      },
+      "baseline": {
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "remoteVersion": "v0"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "preserve_local_then_pull",
+        "reason": "divergent edits; preserve local as conflict, accept remote at original",
+        "contentHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "deleted": false,
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "version": "v2",
+        "localRevision": "local-rev",
+        "conflict": {
+          "sourceSyncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+          "conflictSyncId": "393497eb-5d7a-5d94-a0aa-b35ec2f54403",
+          "conflictPath": "Projects/idea (conflict 393497eb5d7a).md",
+          "conflictMarkdown": "body\n",
+          "localStateHash": "0e6ee0e4aa9b3a896ec8e3c324bf2fd41ec316852dbaab13da1cf5d996c6e08e",
+          "remoteStateHash": "9fd56fd02eb9430da0a02a6a07f88c44a67fb7728326a57c95bafa2b48b5e15b",
+          "originalTombstone": false,
+          "originalVersion": ""
+        }
+      }
+    },
+    {
+      "name": "local absent remote unchanged",
+      "local": {
+        "state": "absent"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "v1"
+      },
+      "baseline": {
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "remoteVersion": "v0"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "push_tombstone",
+        "reason": "locally deleted; replace remote with tombstone",
+        "contentHash": "e0e8e1d0b3d3293715fcd6f37e2d4d0c115b33879d5abca958d510344c23b0ff",
+        "deleted": true,
+        "path": "Projects/idea.md",
+        "markdown": "",
+        "version": "v1",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "local absent remote edited",
+      "local": {
+        "state": "absent"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "v2"
+      },
+      "baseline": {
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "remoteVersion": "v0"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "preserve_remote_then_tombstone",
+        "reason": "local absent versus remote edit; preserve remote as conflict, tombstone original",
+        "contentHash": "e0e8e1d0b3d3293715fcd6f37e2d4d0c115b33879d5abca958d510344c23b0ff",
+        "deleted": true,
+        "path": "Projects/idea.md",
+        "markdown": "",
+        "version": "v2",
+        "localRevision": "",
+        "conflict": {
+          "sourceSyncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+          "conflictSyncId": "c86d1168-11f1-5255-b765-84b6ccb8a923",
+          "conflictPath": "Projects/idea (conflict c86d116811f1).md",
+          "conflictMarkdown": "body\n",
+          "localStateHash": "32fae22dba15bc6b6330a09ecae1d14aead6cd212aadaac9e35287aaf493f074",
+          "remoteStateHash": "0e6ee0e4aa9b3a896ec8e3c324bf2fd41ec316852dbaab13da1cf5d996c6e08e",
+          "originalTombstone": true,
+          "originalVersion": "v2"
+        }
+      }
+    },
+    {
+      "name": "local absent remote recreated",
+      "local": {
+        "state": "absent"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "v2"
+      },
+      "baseline": {
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "deleted": true,
+        "remoteVersion": "v1"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "pull_live",
+        "reason": "remote changed",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "deleted": false,
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "version": "v2",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "local unchanged remote tombstone",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "tombstone",
+        "path": "Projects/idea.md",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "version": "v2"
+      },
+      "baseline": {
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "remoteVersion": "v0"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "apply_tombstone",
+        "reason": "remote tombstone; write recovery and delete locally",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "deleted": true,
+        "path": "Projects/idea.md",
+        "markdown": "",
+        "version": "v2",
+        "localRevision": "local-rev",
+        "conflict": null
+      }
+    },
+    {
+      "name": "local edited vs remote tombstone",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "tombstone",
+        "path": "Projects/idea.md",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "version": "v2"
+      },
+      "baseline": {
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "remoteVersion": "v0"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "preserve_local_then_delete",
+        "reason": "local edit versus remote tombstone; preserve local as conflict, accept deletion",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "deleted": true,
+        "path": "Projects/idea.md",
+        "markdown": "",
+        "version": "v2",
+        "localRevision": "local-rev",
+        "conflict": {
+          "sourceSyncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+          "conflictSyncId": "ead47101-8a68-5aeb-8079-61b4f03fbc17",
+          "conflictPath": "Projects/idea (conflict ead471018a68).md",
+          "conflictMarkdown": "body\n",
+          "localStateHash": "0e6ee0e4aa9b3a896ec8e3c324bf2fd41ec316852dbaab13da1cf5d996c6e08e",
+          "remoteStateHash": "00d98feb427208b2c63d1575a11dbca8f3729d34462adbfac9d5cd28a58393b3",
+          "originalTombstone": true,
+          "originalVersion": ""
+        }
+      }
+    },
+    {
+      "name": "converged deletion",
+      "local": {
+        "state": "absent"
+      },
+      "remote": {
+        "state": "tombstone",
+        "path": "Projects/idea.md",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "version": "v1"
+      },
+      "baseline": {
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "deleted": true,
+        "remoteVersion": "v1"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "noop",
+        "reason": "converged deletion",
+        "contentHash": "",
+        "deleted": false,
+        "path": "",
+        "markdown": "",
+        "version": "",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "converged deletion version stale",
+      "local": {
+        "state": "absent"
+      },
+      "remote": {
+        "state": "tombstone",
+        "path": "Projects/idea.md",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "version": "v2"
+      },
+      "baseline": {
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "deleted": true,
+        "remoteVersion": "v1"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "establish_baseline",
+        "reason": "local and remote known equal",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "deleted": true,
+        "path": "",
+        "markdown": "",
+        "version": "v2",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "absent + divergent tombstone baseline",
+      "local": {
+        "state": "absent"
+      },
+      "remote": {
+        "state": "tombstone",
+        "path": "Projects/idea.md",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "version": "v2"
+      },
+      "baseline": {
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "remoteVersion": "v0"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "establish_baseline",
+        "reason": "local and remote known equal",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "deleted": true,
+        "path": "",
+        "markdown": "",
+        "version": "v2",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "recreated identical over deleted baseline",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "v2"
+      },
+      "baseline": {
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "deleted": true,
+        "remoteVersion": "v1"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "establish_baseline",
+        "reason": "local and remote known equal",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "deleted": false,
+        "path": "",
+        "markdown": "",
+        "version": "v2",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "recreated divergent over deleted baseline",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "v2"
+      },
+      "baseline": {
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "deleted": true,
+        "remoteVersion": "v1"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "preserve_local_then_pull",
+        "reason": "divergent edits; preserve local as conflict, accept remote at original",
+        "contentHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "deleted": false,
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "version": "v2",
+        "localRevision": "local-rev",
+        "conflict": {
+          "sourceSyncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+          "conflictSyncId": "393497eb-5d7a-5d94-a0aa-b35ec2f54403",
+          "conflictPath": "Projects/idea (conflict 393497eb5d7a).md",
+          "conflictMarkdown": "body\n",
+          "localStateHash": "0e6ee0e4aa9b3a896ec8e3c324bf2fd41ec316852dbaab13da1cf5d996c6e08e",
+          "remoteStateHash": "9fd56fd02eb9430da0a02a6a07f88c44a67fb7728326a57c95bafa2b48b5e15b",
+          "originalTombstone": false,
+          "originalVersion": ""
+        }
+      }
+    },
+    {
+      "name": "recreated over matching tombstone",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "tombstone",
+        "path": "Projects/idea.md",
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "version": "v1"
+      },
+      "baseline": {
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "deleted": true,
+        "remoteVersion": "v1"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "push_live",
+        "reason": "local changed",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "deleted": false,
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "version": "v1",
+        "localRevision": "local-rev",
+        "conflict": null
+      }
+    },
+    {
+      "name": "recreated over divergent tombstone",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "tombstone",
+        "path": "Projects/idea.md",
+        "contentHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "version": "v2"
+      },
+      "baseline": {
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "deleted": true,
+        "remoteVersion": "v1"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "preserve_local_then_delete",
+        "reason": "local edit versus remote tombstone; preserve local as conflict, accept deletion",
+        "contentHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "deleted": true,
+        "path": "Projects/idea.md",
+        "markdown": "",
+        "version": "v2",
+        "localRevision": "local-rev",
+        "conflict": {
+          "sourceSyncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+          "conflictSyncId": "5fe67f41-a530-5cc1-8d80-0701eee06db3",
+          "conflictPath": "Projects/idea (conflict 5fe67f41a530).md",
+          "conflictMarkdown": "body\n",
+          "localStateHash": "0e6ee0e4aa9b3a896ec8e3c324bf2fd41ec316852dbaab13da1cf5d996c6e08e",
+          "remoteStateHash": "f00086f5b3f71a453e9e537e89073219b4de509964bfa62bb8219124718566eb",
+          "originalTombstone": true,
+          "originalVersion": ""
+        }
+      }
+    },
+    {
+      "name": "remote missing with baseline",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "missing",
+        "path": "Projects/idea.md"
+      },
+      "baseline": {
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "deleted": false,
+        "remoteVersion": "v1"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "block",
+        "reason": "remote record physically missing though a baseline expected it",
+        "contentHash": "",
+        "deleted": false,
+        "path": "",
+        "markdown": "",
+        "version": "",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "path conflict",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "v1"
+      },
+      "baseline": {
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "remoteVersion": "v0"
+      },
+      "pathConflict": true,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "block",
+        "reason": "path conflict",
+        "contentHash": "",
+        "deleted": false,
+        "path": "",
+        "markdown": "",
+        "version": "",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "local unknown",
+      "local": {
+        "state": "unknown"
+      },
+      "remote": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "v1"
+      },
+      "baseline": {
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "remoteVersion": "v0"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "block",
+        "reason": "local unknown (blocked/unstable/unreadable)",
+        "contentHash": "",
+        "deleted": false,
+        "path": "",
+        "markdown": "",
+        "version": "",
+        "localRevision": "",
+        "conflict": null
+      }
+    },
+    {
+      "name": "invalid remote with baseline",
+      "local": {
+        "state": "live",
+        "path": "Projects/idea.md",
+        "markdown": "body\n",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "revision": "local-rev"
+      },
+      "remote": {
+        "state": "invalid",
+        "path": "Projects/idea.md"
+      },
+      "baseline": {
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleted": false,
+        "remoteVersion": "v0"
+      },
+      "pathConflict": false,
+      "expected": {
+        "syncId": "5d5d8b2c-94f7-4a38-8318-8cd4cb53dfa8",
+        "kind": "block",
+        "reason": "invalid remote record",
+        "contentHash": "",
+        "deleted": false,
+        "path": "",
+        "markdown": "",
+        "version": "",
+        "localRevision": "",
+        "conflict": null
+      }
+    }
+  ]
+}

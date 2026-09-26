@@ -1,0 +1,46 @@
+{
+  "cases": [
+    {
+      "backoffSeconds": 5,
+      "kind": "rate-limit",
+      "name": "rate-limit",
+      "retryAfterSeconds": 5,
+      "retryable": true
+    },
+    {
+      "backoffSeconds": 1,
+      "kind": "retryable-transport",
+      "name": "retryable-transport",
+      "retryAfterSeconds": 0,
+      "retryable": true
+    },
+    {
+      "backoffSeconds": 0,
+      "kind": "auth",
+      "name": "auth",
+      "retryAfterSeconds": 0,
+      "retryable": false
+    },
+    {
+      "backoffSeconds": 0,
+      "kind": "permission",
+      "name": "permission",
+      "retryAfterSeconds": 0,
+      "retryable": false
+    },
+    {
+      "backoffSeconds": 0,
+      "kind": "quota",
+      "name": "quota",
+      "retryAfterSeconds": 0,
+      "retryable": false
+    },
+    {
+      "backoffSeconds": 0,
+      "kind": "precondition-failed",
+      "name": "precondition-failed",
+      "retryAfterSeconds": 0,
+      "retryable": false
+    }
+  ]
+}

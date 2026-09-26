@@ -1,0 +1,54 @@
+{
+  "cases": [
+    {
+      "key": "projects/hello.md",
+      "name": "ascii casefold",
+      "path": "Projects/Hello.md"
+    },
+    {
+      "key": "a/b/c.md",
+      "name": "nested",
+      "path": "A/B/C.md"
+    },
+    {
+      "key": "café/note.md",
+      "name": "nfc composed",
+      "path": "café/note.md"
+    },
+    {
+      "key": "strasse.md",
+      "name": "sharp s folds to ss",
+      "path": "Straße.md"
+    },
+    {
+      "key": "strasse.md",
+      "name": "uppercase sharp s folds to ss",
+      "path": "STRASSE.md"
+    },
+    {
+      "key": "file.md",
+      "name": "ligature folds to two letters",
+      "path": "ﬁle.md"
+    },
+    {
+      "key": "οσ.md",
+      "name": "greek final sigma folds to sigma",
+      "path": "ος.md"
+    },
+    {
+      "key": "οσ.md",
+      "name": "greek capitals collide with final sigma",
+      "path": "ΟΣ.md"
+    },
+    {
+      "key": "ꭰ.md",
+      "name": "cherokee uppercase and small letters collide",
+      "path": "Ꭰ.md"
+    },
+    {
+      "key": "ꭰ.md",
+      "name": "cherokee small letter matches its uppercase fold",
+      "path": "ꭰ.md"
+    }
+  ]
+}
