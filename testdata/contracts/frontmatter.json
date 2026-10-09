@@ -1,0 +1,133 @@
+{
+  "tagEditCases": [
+    {
+      "name": "preserve unknown keys, order and comments",
+      "markdown": "---\ncreated: 2024-01-01\n# a comment\ntags: [\"old\"]\n---\nbody",
+      "newTags": ["project", "note"],
+      "expected": "---\ncreated: 2024-01-01\n# a comment\ntags: [\"project\", \"note\"]\n---\nbody"
+    },
+    {
+      "name": "add tags when front matter has no tags key",
+      "markdown": "---\ncreated: 2024-01-01\n---\nbody",
+      "newTags": ["a"],
+      "expected": "---\ntags: [\"a\"]\ncreated: 2024-01-01\n---\nbody"
+    },
+    {
+      "name": "add front matter when absent",
+      "markdown": "plain body",
+      "newTags": ["a"],
+      "expected": "---\ntags: [\"a\"]\n---\nplain body"
+    },
+    {
+      "name": "clear tags keeps other keys",
+      "markdown": "---\ncreated: 2024\ntags: [\"a\"]\n---\nbody",
+      "newTags": [],
+      "expected": "---\ncreated: 2024\n---\nbody"
+    },
+    {
+      "name": "clear tags drops an otherwise empty front matter",
+      "markdown": "---\ntags: [\"a\"]\n---\nbody",
+      "newTags": [],
+      "expected": "body"
+    },
+    {
+      "name": "escaped tag values round-trip",
+      "markdown": "---\ntags: [\"one,two\", \"say \\\"hi\\\"\", \"a\\\\b\"]\n---\nbody",
+      "newTags": ["one,two", "say \"hi\"", "a\\b"],
+      "expected": "---\ntags: [\"one,two\", \"say \\\"hi\\\"\", \"a\\\\b\"]\n---\nbody"
+    },
+    {
+      "name": "sequential edits keep unrelated keys",
+      "markdown": "---\ncreated: x\n# keep me\ntags: [\"a\"]\n---\nbody",
+      "newTags": ["b", "c"],
+      "expected": "---\ncreated: x\n# keep me\ntags: [\"b\", \"c\"]\n---\nbody"
+    },
+    {
+      "name": "replaces a multi-line flow sequence in place",
+      "markdown": "---\ncreated: 2024\ntags: [\n  \"a\",\n  \"b\"\n]\n---\nbody",
+      "newTags": ["x"],
+      "expected": "---\ncreated: 2024\ntags: [\"x\"]\n---\nbody"
+    },
+    {
+      "name": "preserves a trailing comment on the tags line",
+      "markdown": "---\ntags: [\"a\"] # keep me\n---\nbody",
+      "newTags": ["b"],
+      "expected": "---\ntags: [\"b\"] # keep me\n---\nbody"
+    },
+    {
+      "name": "reuses the prefix verbatim when tags are unchanged",
+      "markdown": "---\ncreated: 2024\n# c\ntags: [\"a\"] # trailing\n---\nbody",
+      "newTags": ["a"],
+      "expected": "---\ncreated: 2024\n# c\ntags: [\"a\"] # trailing\n---\nbody"
+    },
+    {
+      "name": "preserves CRLF when tags are unchanged",
+      "markdown": "---\r\ncreated: 2024\r\ntags: [\"a\"]\r\n---\r\nbody",
+      "newTags": ["a"],
+      "expected": "---\r\ncreated: 2024\r\ntags: [\"a\"]\r\n---\r\nbody"
+    },
+    {
+      "name": "edits only the tags value, keeping CRLF around it",
+      "markdown": "---\r\ncreated: 2024\r\ntags: [\"a\"] # c\r\n---\r\nbody",
+      "newTags": ["b"],
+      "expected": "---\r\ncreated: 2024\r\ntags: [\"b\"] # c\r\n---\r\nbody"
+    },
+    {
+      "name": "keeps an unchanged prefix byte-for-byte on a body edit",
+      "markdown": "---\ncreated: x\n# keep me\ntags: [\"a\"] # c\n---\nbody",
+      "newTags": ["a"],
+      "expected": "---\ncreated: x\n# keep me\ntags: [\"a\"] # c\n---\nbody"
+    },
+    {
+      "name": "clears a multi-line flow sequence entirely",
+      "markdown": "---\ncreated: 2024\ntags: [\"a\",\n  \"b\"]\n---\nbody",
+      "newTags": [],
+      "expected": "---\ncreated: 2024\n---\nbody"
+    },
+    {
+      "name": "sets tags before a comment on an empty-value line",
+      "markdown": "---\ntags: # keep me\n---\nbody",
+      "newTags": ["x"],
+      "expected": "---\ntags: [\"x\"] # keep me\n---\nbody"
+    }
+  ],
+  "parseCases": [
+    {
+      "name": "trailing comment is not part of the tags",
+      "markdown": "---\ntags: [\"a\"] # comment\n---\nbody",
+      "tags": ["a"]
+    },
+    {
+      "name": "multi-line flow sequence parses completely",
+      "markdown": "---\ntags: [\"a\",\n  \"b\"]\n---\nbody",
+      "tags": ["a", "b"]
+    },
+    {
+      "name": "hash inside a quoted tag is not a comment",
+      "markdown": "---\ntags: [\"a#b\", \"c # d\"]\n---\nbody",
+      "tags": ["a#b", "c # d"]
+    },
+    {
+      "name": "scalar value with trailing comment",
+      "markdown": "---\ntags: foo # comment\n---\nbody",
+      "tags": ["foo"]
+    }
+  ],
+  "errorCases": [
+    {
+      "name": "block-style tags",
+      "markdown": "---\ntags:\n  - a\n---\nbody",
+      "newTags": ["x"]
+    },
+    {
+      "name": "duplicate tags keys",
+      "markdown": "---\ntags: [\"a\"]\ntags: [\"b\"]\n---\nbody",
+      "newTags": ["x"]
+    },
+    {
+      "name": "block scalar tags",
+      "markdown": "---\ntags: |\n  a\n---\nbody",
+      "newTags": ["x"]
+    }
+  ]
+}

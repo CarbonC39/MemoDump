@@ -1,0 +1,24 @@
+{
+  "cases": [
+    {
+      "input": "a\r\nb\r\n",
+      "name": "crlf to lf",
+      "normalized": "a\nb\n"
+    },
+    {
+      "input": "a\rb",
+      "name": "bare cr to lf",
+      "normalized": "a\nb"
+    },
+    {
+      "input": "a\r\nb\rc\n",
+      "name": "mixed",
+      "normalized": "a\nb\nc\n"
+    },
+    {
+      "input": "a\nb",
+      "name": "already lf",
+      "normalized": "a\nb"
+    }
+  ]
+}

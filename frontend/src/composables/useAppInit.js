@@ -1,14 +1,11 @@
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import apiClient from '../api'
+import { isWailsApp, isLocalBuild } from './runtime'
 
 export function useAppInit() {
   const router = useRouter()
 
-  // Wails desktop detection — window.go is injected by the Wails runtime.
-  const isWailsApp = typeof window !== 'undefined' && typeof window.go !== 'undefined'
-  // Browser-local build (VITE_LOCAL=1): notes live in IndexedDB, not on a server.
-  const isLocalBuild = import.meta.env.VITE_LOCAL === '1'
   const wailsDataDir = ref('')
   const serverNoAuth = ref(false)
 

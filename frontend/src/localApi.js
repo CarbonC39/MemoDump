@@ -4,76 +4,25 @@
 // resolves to an axios-shaped `{ data }` and rejects with `{ response: { status,
 // data: { error } } }`), but stores notes/folders in IndexedDB instead of
 // talking to the Go server. This powers the no-server public/demo build
-// (VITE_LOCAL=1). It deliberately mirrors the semantics of api.go: notes are
-// addressed by a slash-relative path, the name is the basename without `.md`,
-// tags live alongside the body, folders are tracked explicitly so empty ones
-// survive, and moves/renames rewrite path prefixes.
+// (VITE_LOCAL=1). It deliberately mirrors the semantics of api.go / vaultfs:
+// notes are addressed by a slash-relative path, the name is the basename
+// without `.md`, tags live alongside the body, folders are tracked explicitly
+// so empty ones survive, and moves/renames rewrite path prefixes.
+//
+// Since DB version 2 each note record also stores its canonical full Markdown
+// and a `revision` digest. updateNote/deleteNote accept an optional
+// `baseRevision`; a stale one is rejected with `409 local_revision_conflict`
+// without touching the record. Every note mutation runs inside ONE readwrite
+// IndexedDB transaction (read current -> compare revision -> check destination
+// -> put/delete), so two tabs cannot pass the same CAS check.
 
-const DB_NAME = 'memodump'
-const DB_VERSION = 1
+import { atomicNoteWrite, atomicFolderWrite, getNoteRec, write, allOf } from './storage/localVaultDb'
+import { frontMatterPartWithTags, parseDocument, serializeTags } from './storage/frontmatter'
+import { sha256Hex } from './storage/sha256'
+import * as syncService from './sync/browserService'
+
 const PREVIEW_LIMIT = 1000
 const UPLOAD_LIMIT = 1 << 20 // 1 MB
-
-let dbPromise = null
-
-function idb() {
-  return globalThis.indexedDB
-}
-
-function openDB() {
-  if (dbPromise) return dbPromise
-  dbPromise = new Promise((resolve, reject) => {
-    const req = idb().open(DB_NAME, DB_VERSION)
-    req.onupgradeneeded = () => {
-      const db = req.result
-      if (!db.objectStoreNames.contains('notes')) db.createObjectStore('notes', { keyPath: 'path' })
-      if (!db.objectStoreNames.contains('folders')) db.createObjectStore('folders', { keyPath: 'path' })
-    }
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
-  })
-  return dbPromise
-}
-
-function reqP(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
-}
-
-async function allOf(store) {
-  const db = await openDB()
-  return reqP(db.transaction(store).objectStore(store).getAll())
-}
-
-async function getNoteRec(path) {
-  const db = await openDB()
-  return reqP(db.transaction('notes').objectStore('notes').get(path))
-}
-
-// Run a readwrite transaction over both stores. `fn(notes, folders)` issues
-// put/delete requests; the returned promise resolves when the txn commits.
-async function write(fn) {
-  const db = await openDB()
-  return new Promise((resolve, reject) => {
-    const t = db.transaction(['notes', 'folders'], 'readwrite')
-    try {
-      fn(t.objectStore('notes'), t.objectStore('folders'))
-    } catch (e) {
-      try { t.abort() } catch (_) {}
-      reject(e)
-      return
-    }
-    t.oncomplete = () => resolve()
-    t.onerror = () => reject(t.error)
-    t.onabort = () => reject(t.error)
-  })
-}
-
-function apiError(status, error) {
-  return Promise.reject({ response: { status, data: { error } } })
-}
 
 // ---- path helpers ----
 function dirname(p) {
@@ -108,41 +57,50 @@ function timestampName(d = new Date()) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
 }
 
-// ---- front matter (mirrors api.go parseFrontMatter / buildFrontMatter) ----
-const FM_RE = /^---\n([\s\S]*?)\n---\n?/
-const TAG_RE = /^tags:\s*\[([^\]]*)\]/m
-
-export function parseFrontMatter(content) {
-  const m = FM_RE.exec(content)
-  if (!m) return { tags: [], body: content }
-  const body = content.slice(m[0].length)
-  const tags = []
-  const tm = TAG_RE.exec(m[1])
-  if (tm) {
-    for (const raw of tm[1].split(',')) {
-      const t = raw.trim()
-      if (t) tags.push(t)
-    }
-  }
-  return { tags, body }
+function encodeCursor(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value))
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
 }
 
+function decodeCursor(value) {
+  const padded = value.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - value.length % 4) % 4)
+  const binary = atob(padded)
+  const bytes = Uint8Array.from(binary, ch => ch.charCodeAt(0))
+  return JSON.parse(new TextDecoder().decode(bytes))
+}
+
+export { parseFrontMatter } from './storage/frontmatter'
+
 function sanitizeName(name) {
+  const portableBase = basename(String(name).replaceAll('\\', '/'))
   let out = ''
-  for (const ch of basename(name)) {
+  for (const ch of portableBase) {
     const c = ch.codePointAt(0)
     if (c < 0x20 || c === 0x7f || '/\\:*?"<>|'.includes(ch)) out += '_'
     else out += ch
   }
   out = out.replace(/^[ .]+|[ .]+$/g, '')
-  return out.length > 200 ? out.slice(0, 200) : out
+  out = Array.from(out).slice(0, 200).join('')
+  if (!out) return ''
+  const dot = out.lastIndexOf('.')
+  const stem = (dot > 0 ? out.slice(0, dot) : out).toUpperCase()
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(stem)) out = '_' + out
+  return out
 }
+
+export const _sanitizeName = sanitizeName
 
 // Strip reactivity: callers (Vue) pass reactive Proxy arrays, which IndexedDB's
 // structured-clone cannot serialise ("Proxy object could not be cloned"). Map to
 // a fresh plain array of strings so every record we put() is clone-safe.
 function plainTags(tags) {
   return Array.isArray(tags) ? tags.map(t => String(t)) : []
+}
+
+function apiError(status, error) {
+  return Promise.reject({ response: { status, data: { error } } })
 }
 
 // ---- shaping ----
@@ -153,7 +111,14 @@ function toMeta(rec) {
   return { path: rec.path, name: noteName(rec.path), tags: rec.tags || [], modTime: rec.modTime || 0, preview }
 }
 function toFull(rec) {
-  return { path: rec.path, name: noteName(rec.path), tags: rec.tags || [], modTime: rec.modTime || 0, content: rec.content || '' }
+  return {
+    path: rec.path,
+    name: noteName(rec.path),
+    tags: rec.tags || [],
+    modTime: rec.modTime || 0,
+    content: rec.content || '',
+    revision: rec.revision || '',
+  }
 }
 function byModDesc(a, b) {
   return (b.modTime || 0) - (a.modTime || 0)
@@ -164,28 +129,40 @@ function ensureFolders(foldersStore, dir) {
   for (const a of ancestors(dir)) foldersStore.put({ path: a })
 }
 
-// Persist a brand-new note, avoiding clobbering an existing path. Returns the rec.
-async function createNoteRec({ name, folder, content, tags }) {
-  let filename = (name || '').trim() || timestampName()
+// Build the canonical document from body + tags (the create path).
+function buildMarkdown(content, tags) {
+  const t = plainTags(tags)
+  return (t.length ? `---\n${serializeTags(t)}\n---\n` : '') + (content || '')
+}
+
+function buildPath(name, folder) {
+  let filename = sanitizeName(name || '')
+  if (!filename) filename = timestampName()
   if (!filename.endsWith('.md')) filename += '.md'
-  let path = folder ? folder + '/' + filename : filename
-  if (await getNoteRec(path)) {
-    filename = timestampName() + '_' + filename
-    path = folder ? folder + '/' + filename : filename
-  }
-  const now = Date.now()
-  const rec = { path, content: content || '', tags: plainTags(tags), modTime: now, created: now }
-  await write((notes, folders) => {
-    notes.put(rec)
-    ensureFolders(folders, folder)
-  })
-  return rec
+  return folder ? folder + '/' + filename : filename
 }
 
 const localApi = {
   // No server, no sessions: auth is a no-op in local mode.
   config() {
-    return Promise.resolve({ data: { noAuth: true } })
+    let image = { provider: 'off', configured: false, editable: true }
+    try {
+      const raw = localStorage.getItem('memodump_image_config')
+      if (raw) {
+        const cfg = JSON.parse(raw)
+        if (cfg.provider === 's3') {
+          image = {
+            provider: 's3',
+            bucket: cfg.bucket || '',
+            publicBaseUrl: cfg.publicBaseUrl || '',
+            prefix: cfg.prefix || '',
+            configured: true,
+            editable: true,
+          }
+        }
+      }
+    } catch (_) {}
+    return Promise.resolve({ data: { noAuth: true, image } })
   },
   login() {
     return Promise.resolve({ data: { status: 'ok' } })
@@ -213,86 +190,122 @@ const localApi = {
   },
 
   async createNote(data) {
-    const rec = await createNoteRec({
-      name: data.name,
-      folder: data.folder || '',
-      content: data.content || '',
-      tags: data.tags || [],
-    })
+    const markdown = buildMarkdown(data.content || '', data.tags || [])
+    const rec = await createMarkdownRec({ name: data.name, folder: data.folder || '', markdown })
     return { data: toFull(rec) }
   },
 
   async updateNote(path, data) {
-    const rec = await getNoteRec(path)
-    if (!rec) return apiError(404, 'File not found')
+    if (!path) return apiError(400, 'Path is illegal')
+    return atomicNoteWrite(path, async (rec, notes, folders, reqP) => {
+      if (!rec) {
+        return { type: 'error', status: 404, code: 'note_not_found', message: 'File not found' }
+      }
+      if (data.baseRevision && rec.revision !== data.baseRevision) {
+        return { type: 'error', status: 409, code: 'local_revision_conflict', message: 'the note changed since it was read' }
+      }
 
-    if (data.content != null) rec.content = data.content
-    rec.tags = plainTags(data.tags)
-    rec.modTime = Date.now()
+      const newTags = Array.isArray(data.tags) ? plainTags(data.tags) : rec.tags
+      const newBody = data.content != null ? data.content : rec.content
+      let newMarkdown
+      try {
+        const doc = parseDocument(rec.markdown || buildMarkdown(rec.content, rec.tags))
+        newMarkdown = frontMatterPartWithTags(doc, newTags) + newBody
+      } catch (e) {
+        if (e && e.name === 'FrontMatterNotEditable') {
+          return { type: 'error', status: 400, code: 'front_matter_not_editable', message: 'front matter cannot be edited safely' }
+        }
+        throw e
+      }
 
-    let targetPath = path
-    if (data.rename != null) {
-      let newName = (data.rename || '').trim() || timestampName()
-      if (!newName.endsWith('.md')) newName += '.md'
-      const dir = dirname(path)
-      targetPath = dir ? dir + '/' + newName : newName
-    }
+      let targetPath = path
+      if (data.rename != null) {
+        let newName = sanitizeName((data.rename || '').trim()) || timestampName()
+        if (!newName.endsWith('.md')) newName += '.md'
+        targetPath = dirname(path) ? dirname(path) + '/' + newName : newName
+      }
+      if (data.destination != null) {
+        targetPath = (data.destination ? data.destination + '/' : '') + basename(targetPath)
+      }
 
-    if (targetPath !== path) {
-      const moved = { ...rec, path: targetPath }
-      await write((notes) => {
-        notes.delete(path)
-        notes.put(moved)
-      })
-      return { data: toFull(moved) }
-    }
-    await write((notes) => notes.put(rec))
-    return { data: toFull(rec) }
+      const moving = targetPath !== path
+      if (!moving && newMarkdown === rec.markdown) {
+        // No semantic change and no rename/move: leave the record untouched.
+        return { type: 'noop', rec }
+      }
+      if (moving) {
+        const target = await reqP(notes.get(targetPath))
+        if (target) {
+          return { type: 'error', status: 409, code: 'note_name_conflict', message: 'A note with that name already exists' }
+        }
+      }
+      const now = Date.now()
+      const updated = {
+        ...rec,
+        path: targetPath,
+        markdown: newMarkdown,
+        content: newBody,
+        tags: newTags,
+        revision: sha256Hex(newMarkdown),
+        modTime: now,
+      }
+      return { type: 'put', rec: updated, deleteOld: moving }
+    }).then((outcome) => ({ data: toFull(outcome.rec) }))
   },
 
-  async deleteNote(path) {
-    await write((notes) => notes.delete(path))
-    return { data: { status: 'ok' } }
+  async deleteNote(path, baseRevision) {
+    if (!path) return apiError(400, 'Path is illegal')
+    return atomicNoteWrite(path, (rec) => {
+      if (!rec) {
+        return { type: 'error', status: 404, code: 'note_not_found', message: 'File not found' }
+      }
+      if (baseRevision && rec.revision !== baseRevision) {
+        return { type: 'error', status: 409, code: 'local_revision_conflict', message: 'the note changed since it was read' }
+      }
+      return { type: 'delete' }
+    }).then(() => ({ data: { status: 'ok' } }))
   },
 
   async duplicateNote(path) {
     if (!path) return apiError(400, 'Path is illegal')
-    const src = await getNoteRec(path)
-    if (!src) return apiError(404, 'File not found')
-    const dir = dirname(path)
-    const base = noteName(path)
-    let filename = `${base} (copy).md`
-    let i = 2
-    while (await getNoteRec(dir ? dir + '/' + filename : filename)) {
-      filename = `${base} (copy ${i}).md`
-      i++
-    }
-    const newPath = dir ? dir + '/' + filename : filename
-    const now = Date.now()
-    const rec = { path: newPath, content: src.content || '', tags: plainTags(src.tags), modTime: now, created: now }
-    await write((notes, folders) => {
-      notes.put(rec)
-      ensureFolders(folders, dir)
-    })
-    return { data: toFull(rec) }
+    return atomicNoteWrite(path, async (src, notes, folders, reqP) => {
+      if (!src) {
+        return { type: 'error', status: 404, code: 'note_not_found', message: 'File not found' }
+      }
+      const dir = dirname(path)
+      const base = noteName(path)
+      let filename = `${base} (copy).md`
+      let i = 2
+      while (await reqP(notes.get(dir ? dir + '/' + filename : filename))) {
+        filename = `${base} (copy ${i}).md`
+        i++
+      }
+      const newPath = dir ? dir + '/' + filename : filename
+      const now = Date.now()
+      // A duplicate is a NEW local note: strip the source's syncId so the next
+      // sync cycle assigns it a fresh identity instead of mirroring the source.
+      const rec = { ...src, path: newPath, modTime: now, created: now }
+      delete rec.syncId
+      return { type: 'put', rec, deleteOld: false }
+    }).then((outcome) => ({ data: toFull(outcome.rec) }))
   },
 
   async moveNote(path, destination) {
-    const rec = await getNoteRec(path)
-    if (!rec) return apiError(404, 'File not found')
-    const dest = destination || ''
-    const newPath = dest ? dest + '/' + basename(path) : basename(path)
-    if (newPath === path) return { data: toMeta(rec) }
-    if (await getNoteRec(newPath)) {
-      return apiError(409, 'A note with that name already exists in the destination')
-    }
-    const moved = { ...rec, path: newPath }
-    await write((notes, folders) => {
-      notes.delete(path)
-      notes.put(moved)
+    if (!path) return apiError(400, 'Path is illegal')
+    return atomicNoteWrite(path, async (rec, notes, folders, reqP) => {
+      if (!rec) {
+        return { type: 'error', status: 404, code: 'note_not_found', message: 'File not found' }
+      }
+      const dest = destination || ''
+      const newPath = dest ? dest + '/' + basename(path) : basename(path)
+      if (newPath === path) return { type: 'noop', rec }
+      const target = await reqP(notes.get(newPath))
+      if (target) {
+        return { type: 'error', status: 409, code: 'note_name_conflict', message: 'A note with that name already exists in the destination' }
+      }
       ensureFolders(folders, dest)
-    })
-    return { data: toMeta(moved) }
+      return { type: 'put', rec: { ...rec, path: newPath }, deleteOld: true }
+    }).then((outcome) => ({ data: toFull(outcome.rec) }))
   },
 
   async listFolders() {
@@ -323,6 +336,91 @@ const localApi = {
     return { data: roots }
   },
 
+  async listNotesV2(parent = '', { cursor = '', limit = 50, sort = 'modified-desc' } = {}) {
+    if (sort !== 'modified-desc' && sort !== 'modified-asc') {
+      return apiError(400, { code: 'invalid_sort', message: 'sort must be modified-desc or modified-asc' })
+    }
+    const notes = (await this.listNotes(parent)).data.map(n => ({
+      id: n.path,
+      name: n.name,
+      parentId: parent,
+      tags: n.tags || [],
+      modifiedAt: n.modTime || 0,
+      preview: n.preview || '',
+    }))
+    if (sort === 'modified-asc') {
+      notes.sort((a, b) => a.modifiedAt - b.modifiedAt || a.id.localeCompare(b.id))
+    }
+    let start = 0
+    if (cursor) {
+      const decoded = decodeCursor(cursor)
+      start = notes.findIndex(n =>
+        (sort === 'modified-desc' && n.modifiedAt < decoded.modifiedAt) ||
+        (sort === 'modified-asc' && n.modifiedAt > decoded.modifiedAt) ||
+        (n.modifiedAt === decoded.modifiedAt && n.id > decoded.id))
+      if (start < 0) start = notes.length
+    }
+    const size = Math.min(200, Math.max(1, Number(limit) || 50))
+    const items = notes.slice(start, start + size)
+    const last = items.at(-1)
+    const next = start + size < notes.length && last
+      ? encodeCursor({ modifiedAt: last.modifiedAt, id: last.id })
+      : null
+    return { data: { items, nextCursor: next } }
+  },
+
+  async listFoldersV2(parent = '') {
+    const folders = await allOf('folders')
+    const notes = await allOf('notes')
+    const ids = new Set()
+    for (const folder of folders) for (const ancestor of ancestors(folder.path)) ids.add(ancestor)
+    for (const note of notes) for (const ancestor of ancestors(dirname(note.path))) ids.add(ancestor)
+    const items = [...ids]
+      .filter(id => dirname(id) === parent)
+      .sort((a, b) => basename(a).localeCompare(basename(b)))
+      .map(id => ({
+        id,
+        name: basename(id),
+        parentId: parent,
+        hasChildren: [...ids].some(candidate => dirname(candidate) === id),
+      }))
+    return { data: { items } }
+  },
+
+  async searchV2(q, tag, { cursor = '', limit = 50, sort = 'modified-desc' } = {}) {
+    if (sort !== 'modified-desc' && sort !== 'modified-asc') {
+      return apiError(400, { code: 'invalid_sort', message: 'sort must be modified-desc or modified-asc' })
+    }
+    const legacy = (await this.search(q, tag)).data
+    const notes = legacy.map(n => ({
+      id: n.path,
+      name: n.name,
+      parentId: dirname(n.path),
+      tags: n.tags || [],
+      modifiedAt: n.modTime || 0,
+      preview: n.preview || '',
+    }))
+    if (sort === 'modified-asc') {
+      notes.sort((a, b) => a.modifiedAt - b.modifiedAt || a.id.localeCompare(b.id))
+    }
+    let start = 0
+    if (cursor) {
+      const decoded = decodeCursor(cursor)
+      start = notes.findIndex(n =>
+        (sort === 'modified-desc' && n.modifiedAt < decoded.modifiedAt) ||
+        (sort === 'modified-asc' && n.modifiedAt > decoded.modifiedAt) ||
+        (n.modifiedAt === decoded.modifiedAt && n.id > decoded.id))
+      if (start < 0) start = notes.length
+    }
+    const size = Math.min(200, Math.max(1, Number(limit) || 50))
+    const items = notes.slice(start, start + size)
+    const last = items.at(-1)
+    const nextCursor = start + size < notes.length && last
+      ? encodeCursor({ modifiedAt: last.modifiedAt, id: last.id })
+      : null
+    return { data: { items, nextCursor } }
+  },
+
   async createFolder(path) {
     if (!path) return apiError(400, 'Path is illegal')
     await write((notes, folders) => ensureFolders(folders, path))
@@ -333,36 +431,27 @@ const localApi = {
     const parent = dirname(path)
     const newPath = parent ? parent + '/' + newName : newName
     if (newPath === path) return { data: { status: 'ok' } }
-
-    const [notes, folders] = [await allOf('notes'), await allOf('folders')]
-    if (folders.some(f => f.path === newPath)) {
-      return apiError(409, 'A folder with that name already exists')
-    }
-    const rewrite = (p) => newPath + p.slice(path.length)
-    await write((notesStore, foldersStore) => {
-      for (const f of folders) {
-        if (isUnder(f.path, path)) {
-          foldersStore.delete(f.path)
-          foldersStore.put({ path: rewrite(f.path) })
-        }
+    // Read + collision check + path rewrite + write share one transaction, so a
+    // concurrent update in another tab is never overwritten by a stale snapshot.
+    return atomicFolderWrite(async (notes, folders) => {
+      if (folders.some(f => f.path === newPath)) {
+        return { type: 'error', status: 409, code: 'folder_name_conflict', message: 'A folder with that name already exists' }
       }
-      for (const n of notes) {
-        if (isUnder(n.path, path)) {
-          notesStore.delete(n.path)
-          notesStore.put({ ...n, path: rewrite(n.path) })
-        }
-      }
-    })
-    return { data: { status: 'ok' } }
+      const rewrite = (p) => newPath + p.slice(path.length)
+      const writes = []
+      for (const f of folders) if (isUnder(f.path, path)) writes.push({ store: 'folders', delete: f.path, put: { path: rewrite(f.path) } })
+      for (const n of notes) if (isUnder(n.path, path)) writes.push({ store: 'notes', delete: n.path, put: { ...n, path: rewrite(n.path) } })
+      return { type: 'apply', writes }
+    }).then(() => ({ data: { status: 'ok' } }))
   },
 
   async deleteFolder(path) {
-    const [notes, folders] = [await allOf('notes'), await allOf('folders')]
-    await write((notesStore, foldersStore) => {
-      for (const f of folders) if (isUnder(f.path, path)) foldersStore.delete(f.path)
-      for (const n of notes) if (isUnder(n.path, path)) notesStore.delete(n.path)
-    })
-    return { data: { status: 'ok' } }
+    return atomicFolderWrite(async (notes, folders) => {
+      const writes = []
+      for (const f of folders) if (isUnder(f.path, path)) writes.push({ store: 'folders', delete: f.path })
+      for (const n of notes) if (isUnder(n.path, path)) writes.push({ store: 'notes', delete: n.path })
+      return { type: 'apply', writes }
+    }).then(() => ({ data: { status: 'ok' } }))
   },
 
   async moveFolder(path, destination) {
@@ -371,28 +460,17 @@ const localApi = {
     const newPath = dest ? dest + '/' + name : name
     if (newPath === path) return { data: { status: 'ok' } }
     if (isUnder(newPath, path)) return apiError(400, 'Cannot move folder into itself')
-
-    const [notes, folders] = [await allOf('notes'), await allOf('folders')]
-    if (folders.some(f => f.path === newPath)) {
-      return apiError(409, 'A folder with that name already exists in the destination')
-    }
-    const rewrite = (p) => newPath + p.slice(path.length)
-    await write((notesStore, foldersStore) => {
-      ensureFolders(foldersStore, dest)
-      for (const f of folders) {
-        if (isUnder(f.path, path)) {
-          foldersStore.delete(f.path)
-          foldersStore.put({ path: rewrite(f.path) })
-        }
+    return atomicFolderWrite(async (notes, folders) => {
+      if (folders.some(f => f.path === newPath)) {
+        return { type: 'error', status: 409, code: 'folder_name_conflict', message: 'A folder with that name already exists in the destination' }
       }
-      for (const n of notes) {
-        if (isUnder(n.path, path)) {
-          notesStore.delete(n.path)
-          notesStore.put({ ...n, path: rewrite(n.path) })
-        }
-      }
-    })
-    return { data: { status: 'ok' } }
+      const rewrite = (p) => newPath + p.slice(path.length)
+      const writes = []
+      for (const a of ancestors(dest)) writes.push({ store: 'folders', put: { path: a } })
+      for (const f of folders) if (isUnder(f.path, path)) writes.push({ store: 'folders', delete: f.path, put: { path: rewrite(f.path) } })
+      for (const n of notes) if (isUnder(n.path, path)) writes.push({ store: 'notes', delete: n.path, put: { ...n, path: rewrite(n.path) } })
+      return { type: 'apply', writes }
+    }).then(() => ({ data: { status: 'ok' } }))
   },
 
   async search(q, tag) {
@@ -424,11 +502,48 @@ const localApi = {
     }
     const text = await file.text()
     if (/\x00/.test(text)) return apiError(400, "File contains binary data")
-    const { tags, body } = parseFrontMatter(text)
     const base = sanitizeName(dot >= 0 ? fname.slice(0, dot) : fname)
-    const rec = await createNoteRec({ name: base, folder: folder || '', content: body, tags })
+    const rec = await createMarkdownRec({ name: base, folder: folder || '', markdown: text })
     return { data: toFull(rec) }
   },
+  // Cloud sync is provided by the in-page R6.5 browser service (the Pure
+  // frontend/PWA build owns its own sync engine); every call resolves to the
+  // IndexedDB state and the S3 adapter, never to /api/sync/* on a server.
+  syncStatus() { return syncService.syncStatus() },
+  syncEnable() { return syncService.syncEnable() },
+  syncRun() { return syncService.syncRun() },
+  syncDisable() { return syncService.syncDisable() },
+  syncReset() { return syncService.syncReset() },
+  syncTest() { return syncService.syncTest() },
+  syncRecovery() { return syncService.syncRecovery() },
+  syncRecoveryRestore(body) { return syncService.syncRecoveryRestore(body) },
+}
+
+// Persist a brand-new note, avoiding clobbering an existing path. The full
+// Markdown document is stored verbatim; content/tags are its projection. The
+// existence check and the write share one transaction, so two tabs creating the
+// same name cannot pick the same de-collided path.
+async function createMarkdownRec({ name, folder, markdown }) {
+  const doc = parseDocument(markdown)
+  const now = Date.now()
+  const initial = buildPath(name, folder)
+  return atomicNoteWrite(initial, async (existing, notes, folders, reqP) => {
+    let path = initial
+    while (await reqP(notes.get(path))) {
+      path = buildPath(timestampName() + '_' + basename(path), folder)
+    }
+    ensureFolders(folders, folder)
+    const rec = {
+      path,
+      markdown,
+      content: doc.body,
+      tags: doc.tags,
+      revision: sha256Hex(markdown),
+      modTime: now,
+      created: now,
+    }
+    return { type: 'put', rec, deleteOld: false }
+  }).then((outcome) => outcome.rec)
 }
 
 // Test-only: wipe all data so suites start clean.

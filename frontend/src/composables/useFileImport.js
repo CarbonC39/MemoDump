@@ -65,11 +65,6 @@ export function useFileImport({ editFolder, currentFolder, loadAll, openNote, ed
   const uploadingFiles = ref(false)
   const isFileDragOver = ref(false)
   let fileDragCounter = 0
-  const fileInputRef = ref(null)
-
-  function triggerFileInput() {
-    if (fileInputRef.value) fileInputRef.value.click()
-  }
 
   function onFileInputChange(e) {
     const files = Array.from(e.target.files || [])
@@ -134,7 +129,7 @@ export function useFileImport({ editFolder, currentFolder, loadAll, openNote, ed
 
   return {
     rootDropOver, hoveredNotePath, onNoteDragStart, onDropNote, onDropFolder, onDropOnRoot,
-    uploadingFiles, isFileDragOver, fileInputRef, triggerFileInput, onFileInputChange,
+    uploadingFiles, isFileDragOver, onFileInputChange,
     onMainDragEnter, onMainDragLeave, onMainDragOver, onMainDrop, uploadFiles,
   }
 }
